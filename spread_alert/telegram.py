@@ -7,7 +7,7 @@ import logging
 
 import aiohttp
 
-from spread_alert.logic import EXCHANGE_NAMES, Opportunity, transfer_lines
+from spread_alert.logic import EXCHANGE_NAMES, Opportunity, chain_label, transfer_lines
 
 log = logging.getLogger(__name__)
 
@@ -71,7 +71,11 @@ def _paint_notes(notes: list[str]) -> list[str]:
 
     for note in notes:
         safe = html.escape(note)
-        if note.startswith(("Rút ", "Nạp ")) and "đang mở" in note:
+        if note.startswith("Chain DEX:") and "Cùng chain" in note:
+            chunk.append(f"+ {safe}")
+        elif note.startswith("Chain DEX:") and ("Khác chain" in note or "đang khóa" in note):
+            chunk.append(f"- {safe}")
+        elif note.startswith(("Rút ", "Nạp ")) and "đang mở" in note:
             chunk.append(f"+ {safe}")
         elif note.startswith(("Rút ", "Nạp ")) and "đang khóa" in note:
             chunk.append(f"- {safe}")
@@ -87,11 +91,12 @@ def _paint_notes(notes: list[str]) -> list[str]:
 def format_opportunity(opp: Opportunity) -> str:
     venue = EXCHANGE_NAMES.get(opp.exchange, opp.exchange)
     dex = opp.dex.replace("_", " ").title()
+    pool = chain_label(opp.chain)
     if opp.direction == "buy_cex":
-        route = f"Mua {venue} → bán {dex} ({opp.chain})"
+        route = f"Mua {venue} → bán {dex} ({pool})"
         note = "CEX đang rẻ hơn"
     else:
-        route = f"Mua {dex} ({opp.chain}) → bán {venue}"
+        route = f"Mua {dex} ({pool}) → bán {venue}"
         note = "DEX đang rẻ hơn"
     lines = [
         f"<b>⚡ {html.escape(opp.base)}</b>  {opp.edge_pct:.2f}%",

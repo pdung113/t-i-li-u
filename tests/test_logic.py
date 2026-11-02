@@ -261,6 +261,7 @@ class LogicTest(unittest.TestCase):
             "ethereum",
             (ChainGate("ethereum", "ETH", True, True),),
         )
+        self.assertTrue(any(line.startswith("Chain DEX: Ethereum") and "Cùng chain" in line for line in same))
         self.assertTrue(any(line.startswith("Rút ") and "đang mở trên Ethereum" in line for line in same))
         self.assertTrue(any(line.startswith("Nạp ") and "đang mở trên Ethereum" in line for line in same))
         self.assertTrue(any("không cần cầu" in line for line in same))
@@ -275,6 +276,7 @@ class LogicTest(unittest.TestCase):
                 ChainGate("bsc", "BSC", True, False),
             ),
         )
+        self.assertTrue(any("Chain DEX: Ethereum" in line and "đang khóa" in line and "BSC" in line for line in shifted))
         self.assertTrue(any(line.startswith("Rút ") and "đang mở trên BSC" in line for line in shifted))
         self.assertTrue(any(line.startswith("Rút ") and "đang khóa trên Ethereum" in line for line in shifted))
         self.assertTrue(any(line.startswith("Nạp ") and "đang mở trên Ethereum" in line for line in shifted))
@@ -304,10 +306,12 @@ class LogicTest(unittest.TestCase):
         self.assertIsNotNone(kept)
         colored = format_opportunity(kept)
         self.assertIn('class="language-diff"', colored)
+        self.assertIn("- Chain DEX: Ethereum", colored)
         self.assertIn("+ Rút Gate", colored)
         self.assertIn("- Nạp Gate", colored)
 
         missing = transfer_lines("bybit", "ENJ", "buy_cex", "ethereum", ())
+        self.assertTrue(any(line.startswith("Chain DEX: Ethereum") and "không ghi chain" in line for line in missing))
         self.assertTrue(any("Rút " in line and "không có dữ liệu công khai" in line for line in missing))
         self.assertTrue(any("Nạp " in line and "không có dữ liệu công khai" in line for line in missing))
         self.assertTrue(any("bybit.com" in line and "ENJ" in line for line in missing))
