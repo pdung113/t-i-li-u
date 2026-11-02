@@ -1,7 +1,7 @@
 """Token buy, sell, and transfer tax from the public GoPlus security API.
 
-DexScreener does not publish a tax. This lookup runs only for an alert, and a
-missing or zero tax stays off the message.
+DexScreener does not publish a tax. This lookup runs only for an alert. When
+the numbers are known, the message states them, including zero.
 """
 
 from __future__ import annotations
@@ -26,9 +26,6 @@ _CHAIN_IDS = {
     "mantle": "5000",
     "tron": "tron",
 }
-
-_MIN_SHOWN_PCT = 0.05
-
 
 @dataclass(frozen=True, slots=True)
 class TokenTax:
@@ -74,12 +71,13 @@ def tax_from_payload(payload: object, address: str, chain: str) -> TokenTax | No
 
 
 def tax_line(buy: float | None, sell: float | None, transfer: float | None) -> str | None:
+    """State every known tax percent. Unknown sides are left off the line."""
     parts: list[str] = []
-    if _shown(buy):
+    if buy is not None:
         parts.append(f"mua {_pct(buy)}")
-    if _shown(sell):
+    if sell is not None:
         parts.append(f"bán {_pct(sell)}")
-    if _shown(transfer):
+    if transfer is not None:
         parts.append(f"chuyển {_pct(transfer)}")
     if not parts:
         return None
@@ -136,10 +134,6 @@ def _float(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def _shown(value: float | None) -> bool:
-    return value is not None and value >= _MIN_SHOWN_PCT
 
 
 def _pct(value: float | None) -> str:

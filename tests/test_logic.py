@@ -258,7 +258,7 @@ class LogicTest(unittest.TestCase):
         self.assertIn("Liquidity DEX:", text)
         self.assertNotIn("Tax DEX", text)
         taxed = replace(opportunity, buy_tax=5, sell_tax=10.5, transfer_tax=0)
-        self.assertIn("Tax DEX: mua 5% · bán 10.5%", format_opportunity(taxed))
+        self.assertIn("Tax DEX: mua 5% · bán 10.5% · chuyển 0%", format_opportunity(taxed))
         self.assertIn("1.50M PEPE", text)
         self.assertIn("45.0K WETH", text)
         self.assertIn("Vol DEX 24h:", text)
@@ -351,14 +351,15 @@ class LogicTest(unittest.TestCase):
         self.assertAlmostEqual(evm.buy, 5)
         self.assertAlmostEqual(evm.sell, 0)
         self.assertIsNone(evm.transfer)
-        self.assertEqual(tax_line(evm.buy, evm.sell, evm.transfer), "Tax DEX: mua 5%")
+        self.assertEqual(tax_line(evm.buy, evm.sell, evm.transfer), "Tax DEX: mua 5% · bán 0%")
         sol = tax_from_payload(
             {"code": 1, "result": {"mint": {"transfer_fee": {"current_fee_rate": {"fee_rate": "200"}}}}},
             "mint",
             "solana",
         )
         self.assertEqual(tax_line(sol.buy, sol.sell, sol.transfer), "Tax DEX: chuyển 2%")
-        self.assertIsNone(tax_line(0, 0, 0))
+        self.assertEqual(tax_line(0, 0, 0), "Tax DEX: mua 0% · bán 0% · chuyển 0%")
+        self.assertIsNone(tax_line(None, None, None))
         self.assertIsNone(tax_from_payload({"code": 0}, "0xabc", "ethereum"))
 
 
