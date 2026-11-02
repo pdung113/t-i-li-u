@@ -428,6 +428,22 @@ def pick_pool(pairs: list[dict], address: str, listings: list[Listing], min_liqu
     return best
 
 
+def movement_blocked(direction: str, gates: tuple[ChainGate, ...]) -> bool:
+    """True when the exchange publishes that the needed transfer is closed.
+
+    Buying the CEX needs a withdrawal. Buying the pool needs a deposit.
+    Missing data stays visible, because Bybit, MEXC, and OKX do not publish it.
+    """
+    usable = [gate for gate in gates if gate.chain or gate.raw_name]
+    if not usable:
+        return False
+    need_withdraw = direction == "buy_cex"
+    flags = [gate.withdraw_open if need_withdraw else gate.deposit_open for gate in usable]
+    if any(flag is True or flag is None for flag in flags):
+        return False
+    return any(flag is False for flag in flags)
+
+
 def best_opportunity(
     listings: list[Listing],
     pool: Pool,
@@ -449,6 +465,8 @@ def best_opportunity(
             min_top_notional=min_top_notional,
         )
         if opportunity is None or opportunity.edge_pct > max_spread:
+            continue
+        if movement_blocked(opportunity.direction, opportunity.gates):
             continue
         if best is None or opportunity.edge_pct > best.edge_pct:
             best = opportunity

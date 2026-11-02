@@ -12,6 +12,7 @@ from spread_alert.logic import (
     is_ignored_asset,
     pick_pool,
     symbols_match,
+    movement_blocked,
     transfer_lines,
 )
 from spread_alert.telegram import format_opportunity, format_price
@@ -291,6 +292,22 @@ class LogicTest(unittest.TestCase):
         )
         self.assertTrue(any(line.startswith("Nạp ") and "đang khóa" in line for line in deposit_closed))
         self.assertTrue(any("Không nạp được" in line for line in deposit_closed))
+
+        blocked = _listing("gate", "PEPE", 1, bid=0.99, ask=1.01)
+        blocked.gates = (ChainGate("ethereum", "ETH", True, False),)
+        self.assertIsNone(
+            best_opportunity(
+                [blocked],
+                _pool(price_usd=0.8),
+                token_address="0xabc",
+                chain="ethereum",
+                min_volume=0,
+                min_top_notional=0,
+                max_spread=80,
+            )
+        )
+        self.assertFalse(movement_blocked("buy_cex", blocked.gates))
+        self.assertTrue(movement_blocked("buy_dex", blocked.gates))
 
         missing = transfer_lines("bybit", "ENJ", "buy_cex", "ethereum", ())
         self.assertTrue(any("Rút " in line and "không có dữ liệu công khai" in line for line in missing))
