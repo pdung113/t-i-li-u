@@ -2,9 +2,11 @@ import unittest
 from dataclasses import replace
 
 from spread_alert.cex import ListedCoin, PriceQuote, _prices_binance, _prices_gate
+from spread_alert.config import Config
 from spread_alert.logic import (
     ChainGate,
     Listing,
+    Opportunity,
     Pool,
     anchor_indexes,
     best_opportunity,
@@ -15,6 +17,7 @@ from spread_alert.logic import (
     symbols_match,
     transfer_lines,
 )
+from spread_alert.scanner import Scanner
 from spread_alert.tax import percent_from_fee_rate, percent_from_fraction, tax_from_payload, tax_line
 from spread_alert.telegram import format_opportunity, format_price
 from spread_alert.universe import assemble_markets
@@ -36,6 +39,28 @@ def _listing(exchange: str, base: str, last: float, bid=None, ask=None, volume=1
         quote_volume=volume,
         top_notional=top,
     )
+
+
+def _opportunity(**overrides) -> Opportunity:
+    data = dict(
+        exchange="binance",
+        base="ENJ",
+        pair="ENJ/USDT",
+        chain="ethereum",
+        address="0xabc",
+        dex="uniswap",
+        url="",
+        direction="buy_cex",
+        edge_pct=6,
+        cex_price=1,
+        dex_price=1.06,
+        liquidity_usd=100_000,
+        quote_volume=100_000,
+        dex_symbol="ENJ",
+        quote_symbol="USDT",
+    )
+    data.update(overrides)
+    return Opportunity(**data)
 
 
 def _pool(**overrides) -> Pool:
@@ -361,6 +386,18 @@ class LogicTest(unittest.TestCase):
         self.assertEqual(tax_line(0, 0, 0), "Tax DEX: mua 0% · bán 0% · chuyển 0%")
         self.assertIsNone(tax_line(None, None, None))
         self.assertIsNone(tax_from_payload({"code": 0}, "0xabc", "ethereum"))
+
+    def test_repeat_scan_alerts_only_new_coins_or_a_larger_jump(self):
+        scanner = Scanner(Config(telegram_bot_token="", telegram_chat_id="", spread_threshold_pct=5), None)
+        first = _opportunity(edge_pct=6)
+        self.assertTrue(scanner._due(first))
+        scanner._mark(first)
+        self.assertFalse(scanner._due(_opportunity(edge_pct=6)))
+        self.assertFalse(scanner._due(_opportunity(edge_pct=11, exchange="gate")))
+        self.assertTrue(scanner._due(_opportunity(edge_pct=11.1)))
+        scanner._mark(_opportunity(edge_pct=11.1))
+        self.assertFalse(scanner._due(_opportunity(edge_pct=16)))
+        self.assertTrue(scanner._due(_opportunity(base="NEW", address="0xdef", edge_pct=6)))
 
 
 if __name__ == "__main__":

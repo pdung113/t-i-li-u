@@ -157,7 +157,7 @@ python -m spread_alert
 
 Đây là chế độ nhanh nhất: quét hết một vòng là bắt đầu vòng sau ngay. Một vòng toàn bộ coin thường khoảng 45 giây đến 1 phút.
 
-Telegram nhận tin `Đã bật theo dõi chênh lệch DEX / CEX`. Sau đó, mỗi coin lệch từ 5% là một tin. Cùng một coin không bị nhắn lại trong 15 phút, trừ khi lệch tăng thêm 2%.
+Telegram nhận tin `Đã bật theo dõi chênh lệch DEX / CEX`. Vòng đầu, mỗi coin lệch từ 5% là một tin. Từ vòng sau, coin đã báo không được nhắn lại. Chỉ coin mới, hoặc coin cũ khi lệch tăng thêm hơn 5% so với lần báo trước, mới có tin.
 
 Muốn dừng: bấm vào cửa sổ dòng lệnh rồi nhấn `Ctrl + C`.
 

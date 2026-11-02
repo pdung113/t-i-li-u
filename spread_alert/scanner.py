@@ -65,6 +65,7 @@ class Scanner:
 
         alerts: list[Opportunity] = []
         hidden = 0
+        repeated = 0
         lock = asyncio.Lock()
         pending: asyncio.Queue[Opportunity | None] = asyncio.Queue()
 
@@ -94,7 +95,7 @@ class Scanner:
                     await on_alert(item)
 
         async def on_chunk(chunk: dict) -> None:
-            nonlocal hidden
+            nonlocal hidden, repeated
             for (chain, address), pool in chunk.items():
                 market = self.markets.get((chain, address))
                 if market is None:
@@ -112,6 +113,7 @@ class Scanner:
                     continue
                 async with lock:
                     if not self._due(opportunity):
+                        repeated += 1
                         continue
                     extra_room = len(alerts) < self.config.max_alerts_per_scan
                     bigger = alerts and opportunity.edge_pct > min(item.edge_pct for item in alerts)
@@ -159,6 +161,12 @@ class Scanner:
                 found.append(opportunity)
         found.sort(key=lambda item: item.edge_pct, reverse=True)
         alerts.sort(key=lambda item: item.edge_pct, reverse=True)
+        if repeated:
+            log.info(
+                "Bỏ %s coin cũ vì lệch chưa tăng thêm hơn %.2f%%",
+                repeated,
+                self.config.spread_threshold_pct,
+            )
         self._prune_cooldown()
         chain_counts = Counter(chain for chain, _address in self.markets)
         return ScanResult(
@@ -234,25 +242,26 @@ class Scanner:
                     listing.quote_volume = quote.quote_volume
                     listing.top_notional = quote.top_notional
 
+    def _alert_key(self, opportunity: Opportunity) -> tuple:
+        return (opportunity.base, opportunity.chain, opportunity.address, opportunity.direction)
+
     def _due(self, opportunity: Opportunity) -> bool:
-        key = (opportunity.exchange, opportunity.base, opportunity.chain, opportunity.address, opportunity.direction)
-        previous = self.cooldown.get(key)
+        """A coin already sent stays quiet until its spread rises by more than the threshold."""
+        previous = self.cooldown.get(self._alert_key(opportunity))
         if previous is None:
             return True
-        sent_at, edge = previous
-        if opportunity.edge_pct >= edge + self.config.realert_step_pct:
-            return True
-        return time.monotonic() - sent_at >= self.config.alert_cooldown_sec
+        _sent_at, edge = previous
+        return opportunity.edge_pct > edge + self.config.spread_threshold_pct
 
     def _mark(self, opportunity: Opportunity) -> None:
-        key = (opportunity.exchange, opportunity.base, opportunity.chain, opportunity.address, opportunity.direction)
-        self.cooldown[key] = (time.monotonic(), opportunity.edge_pct)
+        self.cooldown[self._alert_key(opportunity)] = (time.monotonic(), opportunity.edge_pct)
 
     def _prune_cooldown(self) -> None:
-        if len(self.cooldown) < 5000:
+        if len(self.cooldown) < 20000:
             return
-        cutoff = time.monotonic() - max(self.config.alert_cooldown_sec * 4, 3600)
-        self.cooldown = {key: value for key, value in self.cooldown.items() if value[0] >= cutoff}
+        oldest = sorted(self.cooldown, key=lambda key: self.cooldown[key][0])[:5000]
+        for key in oldest:
+            del self.cooldown[key]
 
 
 def sanity_lines(markets: dict, pools: dict) -> list[str]:
