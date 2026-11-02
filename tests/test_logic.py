@@ -429,11 +429,8 @@ class LogicTest(unittest.TestCase):
         first = _opportunity(edge_pct=6)
         self.assertTrue(scanner._due(first))
         scanner._mark(first)
-        self.assertFalse(scanner._due(_opportunity(edge_pct=6)))
-        self.assertFalse(scanner._due(_opportunity(edge_pct=11, exchange="gate")))
-        self.assertTrue(scanner._due(_opportunity(edge_pct=11.1)))
-        scanner._mark(_opportunity(edge_pct=11.1))
-        self.assertFalse(scanner._due(_opportunity(edge_pct=16)))
+        self.assertFalse(scanner._due(_opportunity(edge_pct=80, chain="bsc", direction="buy_dex", exchange="gate")))
+        self.assertFalse(scanner._due(_opportunity(base="1000ENJ", edge_pct=20, direction="cex_cex")))
         self.assertTrue(scanner._due(_opportunity(base="NEW", address="0xdef", edge_pct=6)))
 
     def test_cex_spread_requires_the_same_open_network(self):

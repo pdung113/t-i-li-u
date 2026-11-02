@@ -13,7 +13,15 @@ import aiohttp
 from spread_alert.cex import known_exchanges, load_coins, load_prices
 from spread_alert.config import Config
 from spread_alert.dex import DexClient
-from spread_alert.logic import EXCHANGE_NAMES, Opportunity, best_opportunity, cex_spreads, raw_spread_pct
+from spread_alert.logic import (
+    EXCHANGE_NAMES,
+    Opportunity,
+    best_opportunity,
+    cex_spreads,
+    normalize_symbol,
+    raw_spread_pct,
+    stripped_base,
+)
 from spread_alert.tax import lookup_tax, tax_line
 from spread_alert.universe import assemble_markets
 
@@ -49,7 +57,7 @@ class Scanner:
         self.markets = {}
         self.price_index = {}
         self.universe_at = 0.0
-        self.cooldown: dict[tuple, tuple[float, float]] = {}
+        self.seen_coins: set[str] = set()
 
     async def scan(self, on_alert=None) -> ScanResult:
         started = time.monotonic()
@@ -200,12 +208,7 @@ class Scanner:
         found.sort(key=lambda item: item.edge_pct, reverse=True)
         alerts.sort(key=lambda item: item.edge_pct, reverse=True)
         if repeated:
-            log.info(
-                "Bỏ %s coin cũ vì lệch chưa tăng thêm hơn %.2f%%",
-                repeated,
-                self.config.spread_threshold_pct,
-            )
-        self._prune_cooldown()
+            log.info("Bỏ %s lần lặp, chỉ giữ coin mới", repeated)
         chain_counts = Counter(chain for chain, _address in self.markets)
         return ScanResult(
             markets=len(self.markets),
@@ -280,35 +283,16 @@ class Scanner:
                     listing.quote_volume = quote.quote_volume
                     listing.top_notional = quote.top_notional
 
-    def _alert_key(self, opportunity: Opportunity) -> tuple:
-        if opportunity.direction == "cex_cex":
-            return (
-                opportunity.base,
-                opportunity.chain,
-                opportunity.address,
-                opportunity.direction,
-                opportunity.exchange,
-                opportunity.sell_exchange,
-            )
-        return (opportunity.base, opportunity.chain, opportunity.address, opportunity.direction)
+    def _coin_key(self, opportunity: Opportunity) -> str:
+        base = normalize_symbol(opportunity.base)
+        return stripped_base(base) or base
 
     def _due(self, opportunity: Opportunity) -> bool:
-        """A coin already sent stays quiet until its spread rises by more than the threshold."""
-        previous = self.cooldown.get(self._alert_key(opportunity))
-        if previous is None:
-            return True
-        _sent_at, edge = previous
-        return opportunity.edge_pct > edge + self.config.spread_threshold_pct
+        """Each coin is sent once. A later scan does not send it again."""
+        return self._coin_key(opportunity) not in self.seen_coins
 
     def _mark(self, opportunity: Opportunity) -> None:
-        self.cooldown[self._alert_key(opportunity)] = (time.monotonic(), opportunity.edge_pct)
-
-    def _prune_cooldown(self) -> None:
-        if len(self.cooldown) < 20000:
-            return
-        oldest = sorted(self.cooldown, key=lambda key: self.cooldown[key][0])[:5000]
-        for key in oldest:
-            del self.cooldown[key]
+        self.seen_coins.add(self._coin_key(opportunity))
 
 
 def sanity_lines(markets: dict, pools: dict) -> list[str]:
