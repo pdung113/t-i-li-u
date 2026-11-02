@@ -7,6 +7,7 @@ import logging
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 import aiohttp
 
@@ -18,6 +19,7 @@ from spread_alert.logic import (
     Opportunity,
     best_opportunity,
     cex_spreads,
+    normalize_address,
     normalize_symbol,
     raw_spread_pct,
     stripped_base,
@@ -45,7 +47,7 @@ class ScanResult:
 
 
 class Scanner:
-    def __init__(self, config: Config, session: aiohttp.ClientSession) -> None:
+    def __init__(self, config: Config, session: aiohttp.ClientSession, seen_path: Path | None = None) -> None:
         self.config = config
         self.session = session
         self.dex = DexClient(
@@ -57,7 +59,11 @@ class Scanner:
         self.markets = {}
         self.price_index = {}
         self.universe_at = 0.0
-        self.seen_coins: set[str] = set()
+        self.seen_path = seen_path or Path.cwd() / ".alerted-coins.txt"
+        self.seen_coins = self._load_seen()
+        remembered = sum(1 for key in self.seen_coins if ":" not in key)
+        if remembered:
+            log.info("Đã nhớ %s coin đã báo. Vòng sau bỏ qua những coin này.", remembered)
 
     async def scan(self, on_alert=None) -> ScanResult:
         started = time.monotonic()
@@ -208,7 +214,7 @@ class Scanner:
         found.sort(key=lambda item: item.edge_pct, reverse=True)
         alerts.sort(key=lambda item: item.edge_pct, reverse=True)
         if repeated:
-            log.info("Bỏ %s lần lặp, chỉ giữ coin mới", repeated)
+            log.info("Bỏ %s coin đã báo ở vòng trước", repeated)
         chain_counts = Counter(chain for chain, _address in self.markets)
         return ScanResult(
             markets=len(self.markets),
@@ -283,16 +289,41 @@ class Scanner:
                     listing.quote_volume = quote.quote_volume
                     listing.top_notional = quote.top_notional
 
-    def _coin_key(self, opportunity: Opportunity) -> str:
-        base = normalize_symbol(opportunity.base)
-        return stripped_base(base) or base
+    def _coin_keys(self, opportunity: Opportunity) -> set[str]:
+        symbol = normalize_symbol(opportunity.base)
+        keys = {stripped_base(symbol) or symbol} if symbol else set()
+        if opportunity.address:
+            keys.add(f"{opportunity.chain}:{normalize_address(opportunity.address)}")
+        return keys
 
     def _due(self, opportunity: Opportunity) -> bool:
-        """Each coin is sent once. A later scan does not send it again."""
-        return self._coin_key(opportunity) not in self.seen_coins
+        """A coin sent on an earlier scan, even after a restart, stays quiet."""
+        keys = self._coin_keys(opportunity)
+        return not keys or keys.isdisjoint(self.seen_coins)
 
     def _mark(self, opportunity: Opportunity) -> None:
-        self.seen_coins.add(self._coin_key(opportunity))
+        fresh = [key for key in self._coin_keys(opportunity) if key not in self.seen_coins]
+        if not fresh:
+            return
+        self.seen_coins.update(fresh)
+        try:
+            self.seen_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.seen_path.open("a", encoding="utf-8") as handle:
+                for key in fresh:
+                    handle.write(key + "\n")
+                handle.flush()
+        except OSError as exc:
+            log.warning("Không lưu được danh sách coin đã báo: %s", exc)
+
+    def _load_seen(self) -> set[str]:
+        if not self.seen_path.is_file():
+            return set()
+        try:
+            text = self.seen_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            log.warning("Không đọc được danh sách coin đã báo: %s", exc)
+            return set()
+        return {line.strip() for line in text.splitlines() if line.strip()}
 
 
 def sanity_lines(markets: dict, pools: dict) -> list[str]:

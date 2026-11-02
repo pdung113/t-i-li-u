@@ -1,5 +1,7 @@
+import tempfile
 import unittest
 from dataclasses import replace
+from pathlib import Path
 
 from spread_alert.cex import ListedCoin, PriceQuote, _prices_binance, _prices_gate
 from spread_alert.config import Config
@@ -306,6 +308,7 @@ class LogicTest(unittest.TestCase):
         self.assertIn("Vol DEX 24h:", text)
         self.assertIn("DexScreener", text)
         self.assertIn("Cùng chain", text)
+        self.assertIn("+ CEX cho rút cùng chain", text)
         self.assertIn("không có dữ liệu công khai", format_opportunity(_opportunity()))
         self.assertTrue(format_price(0.000004898).startswith("$0.000004898"))
 
@@ -425,13 +428,19 @@ class LogicTest(unittest.TestCase):
         self.assertIsNone(tax_from_payload({"code": 0}, "0xabc", "ethereum"))
 
     def test_repeat_scan_alerts_only_new_coins_or_a_larger_jump(self):
-        scanner = Scanner(Config(telegram_bot_token="", telegram_chat_id="", spread_threshold_pct=5), None)
-        first = _opportunity(edge_pct=6)
-        self.assertTrue(scanner._due(first))
-        scanner._mark(first)
-        self.assertFalse(scanner._due(_opportunity(edge_pct=80, chain="bsc", direction="buy_dex", exchange="gate")))
-        self.assertFalse(scanner._due(_opportunity(base="1000ENJ", edge_pct=20, direction="cex_cex")))
-        self.assertTrue(scanner._due(_opportunity(base="NEW", address="0xdef", edge_pct=6)))
+        with tempfile.TemporaryDirectory() as folder:
+            seen = Path(folder) / ".alerted-coins.txt"
+            scanner = Scanner(Config(telegram_bot_token="", telegram_chat_id="", spread_threshold_pct=5), None, seen)
+            first = _opportunity(edge_pct=6, address="0xabc")
+            self.assertTrue(scanner._due(first))
+            scanner._mark(first)
+            self.assertFalse(scanner._due(_opportunity(edge_pct=80, chain="bsc", direction="buy_dex", exchange="gate")))
+            self.assertFalse(scanner._due(_opportunity(base="1000ENJ", edge_pct=20, direction="cex_cex")))
+            self.assertFalse(scanner._due(_opportunity(base="OTHER", address="0xabc", chain="ethereum", edge_pct=30)))
+            self.assertTrue(scanner._due(_opportunity(base="NEW", address="0xdef", edge_pct=6)))
+            restarted = Scanner(Config(telegram_bot_token="", telegram_chat_id=""), None, seen)
+            self.assertFalse(restarted._due(first))
+            self.assertTrue(restarted._due(_opportunity(base="NEW", address="0xdef", edge_pct=6)))
 
     def test_cex_spread_requires_the_same_open_network(self):
         cheap = _tradable(_listing("binance", "ENJ", 1, bid=0.99, ask=1.0))

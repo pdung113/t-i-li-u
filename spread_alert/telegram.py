@@ -85,7 +85,9 @@ def _paint_notes(notes: list[str]) -> list[str]:
 
     for note in notes:
         safe = html.escape(note)
-        if note.startswith("Chain:") and "Cùng mạng" in note:
+        if note in {"CEX cho rút cùng chain", "CEX cho nạp cùng chain"}:
+            chunk.append(f"+ {safe}")
+        elif note.startswith("Chain:") and "Cùng mạng" in note:
             chunk.append(f"+ {safe}")
         elif note.startswith("Chain DEX:") and "Cùng chain" in note:
             chunk.append(f"+ {safe}")

@@ -157,7 +157,7 @@ python -m spread_alert
 
 Đây là chế độ nhanh nhất: quét hết một vòng là bắt đầu vòng sau ngay. Một vòng toàn bộ coin thường khoảng 45 giây đến 1 phút.
 
-Telegram nhận tin `Đã bật theo dõi chênh lệch DEX / CEX`. Chỉ báo khi đường đi dùng được: pool DEX và sàn CEX cùng một mạng, và lệnh đó rút được hoặc nạp được trên đúng mạng đó. Hai sàn CEX cũng được so với nhau khi cùng mạng, sàn rẻ rút được và sàn đắt nạp được. Khác mạng, bị khóa, hoặc sàn không công bố trạng thái thì bỏ qua. Mỗi coin chỉ được nhắn một lần trong lúc tool đang chạy. Vòng sau chỉ nhắn coin mới, coin cũ không nhắn lại dù lệch vẫn còn hoặc tăng thêm. Tắt tool rồi chạy lại thì danh sách coin đã báo được xóa, vòng đầu báo lại từ đầu.
+Telegram nhận tin `Đã bật theo dõi chênh lệch DEX / CEX`. Chỉ báo khi đường đi dùng được: pool DEX và sàn CEX cùng một mạng, và lệnh đó rút được hoặc nạp được trên đúng mạng đó. Hai sàn CEX cũng được so với nhau khi cùng mạng, sàn rẻ rút được và sàn đắt nạp được. Khác mạng, bị khóa, hoặc sàn không công bố trạng thái thì bỏ qua. Mua trên DEX rồi bán lên CEX chỉ được báo khi sàn đang cho nạp đúng chain của pool. Mua trên CEX rồi bán ra DEX chỉ được báo khi sàn đang cho rút đúng chain đó, và dòng `CEX cho rút cùng chain` hiện chữ xanh. Không rút hoặc không nạp được thì không báo. Mỗi coin chỉ báo một lần. Tên coin được ghi vào file `.alerted-coins.txt`, nên tắt tool rồi chạy lại vẫn không báo lại coin cũ. Muốn xóa bộ nhớ thì tắt tool, xóa file đó, rồi chạy lại.
 
 Muốn dừng: bấm vào cửa sổ dòng lệnh rồi nhấn `Ctrl + C`.
 

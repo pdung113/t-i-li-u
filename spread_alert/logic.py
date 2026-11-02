@@ -472,6 +472,15 @@ def route_open(gates: tuple[ChainGate, ...] | list[ChainGate], pool_chain: str, 
     return transfer_open(gates, pool_chain, withdraw=direction == "buy_cex")
 
 
+def route_headline(direction: str, pool_chain: str, gates: tuple[ChainGate, ...] | list[ChainGate]) -> str | None:
+    """Green status line. A closed same-chain transfer is not alerted, so there is no red line."""
+    if direction == "buy_cex" and transfer_open(gates, pool_chain, withdraw=True):
+        return "CEX cho rút cùng chain"
+    if direction == "buy_dex" and transfer_open(gates, pool_chain, withdraw=False):
+        return "CEX cho nạp cùng chain"
+    return None
+
+
 def best_opportunity(
     listings: list[Listing],
     pool: Pool,
@@ -831,8 +840,10 @@ def transfer_lines(exchange: str, base: str, direction: str, pool_chain: str, ga
     venue = EXCHANGE_NAMES.get(exchange, exchange)
     usable = [gate for gate in gates if gate.chain or gate.raw_name]
     compare = chain_compare_line(direction, pool_chain, usable)
+    headline = route_headline(direction, pool_chain, usable)
     if not usable:
         lines = [
+            *([headline] if headline else []),
             compare,
             f"Rút {venue}: không có dữ liệu công khai về khóa hay mở",
             f"Nạp {venue}: không có dữ liệu công khai về khóa hay mở",
@@ -843,6 +854,7 @@ def transfer_lines(exchange: str, base: str, direction: str, pool_chain: str, ga
         return lines
 
     lines = [
+        *([headline] if headline else []),
         compare,
         *_status_line("Rút", venue, usable, pool_chain, withdraw=True),
         *_status_line("Nạp", venue, usable, pool_chain, withdraw=False),
