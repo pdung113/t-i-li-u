@@ -329,6 +329,16 @@ def stripped_base(base: str) -> str | None:
     return matched.group(2)
 
 
+@dataclass(frozen=True, slots=True)
+class ChainGate:
+    """Deposit and withdrawal status for one network on a CEX."""
+
+    chain: str
+    raw_name: str
+    withdraw_open: bool | None
+    deposit_open: bool | None
+
+
 @dataclass(slots=True)
 class Listing:
     exchange: str
@@ -341,6 +351,7 @@ class Listing:
     quote_volume: float | None = None
     top_notional: float | None = None
     name: str = ""
+    gates: tuple[ChainGate, ...] = ()
 
 
 @dataclass(slots=True)
@@ -378,6 +389,7 @@ class Opportunity:
     quote_volume: float | None
     dex_symbol: str
     quote_symbol: str
+    gates: tuple[ChainGate, ...] = ()
 
 
 def pick_pool(pairs: list[dict], address: str, listings: list[Listing], min_liquidity: float) -> Pool | None:
@@ -502,4 +514,159 @@ def _opportunity_for(
         quote_volume=listing.quote_volume,
         dex_symbol=pool.base_symbol,
         quote_symbol=pool.quote_symbol,
+        gates=tuple(listing.gates),
     )
+
+
+_CHAIN_LABELS = {
+    "ethereum": "Ethereum",
+    "bsc": "BSC",
+    "solana": "Solana",
+    "arbitrum": "Arbitrum",
+    "optimism": "Optimism",
+    "base": "Base",
+    "polygon": "Polygon",
+    "avalanche": "Avalanche",
+    "tron": "Tron",
+    "ton": "TON",
+    "sui": "Sui",
+    "aptos": "Aptos",
+    "linea": "Linea",
+    "scroll": "Scroll",
+    "zksync": "zkSync",
+    "blast": "Blast",
+    "mantle": "Mantle",
+}
+
+# Well-known routes only. A bridge still has to list that exact token.
+_BRIDGES: dict[frozenset[str], tuple[tuple[str, str], ...]] = {
+    frozenset({"ethereum", "arbitrum"}): (("Arbitrum Bridge", "https://bridge.arbitrum.io"),),
+    frozenset({"ethereum", "optimism"}): (("Optimism Bridge", "https://app.optimism.io/bridge"),),
+    frozenset({"ethereum", "base"}): (
+        ("Superbridge", "https://superbridge.app"),
+        ("Across", "https://app.across.to"),
+    ),
+    frozenset({"ethereum", "polygon"}): (("Polygon Portal", "https://portal.polygon.technology/bridge"),),
+    frozenset({"ethereum", "bsc"}): (
+        ("deBridge", "https://app.debridge.finance"),
+        ("Stargate", "https://stargate.finance/bridge"),
+    ),
+    frozenset({"ethereum", "avalanche"}): (
+        ("Core", "https://core.app/bridge"),
+        ("Stargate", "https://stargate.finance/bridge"),
+    ),
+    frozenset({"ethereum", "linea"}): (("Linea Bridge", "https://bridge.linea.build"),),
+    frozenset({"ethereum", "scroll"}): (("Scroll Bridge", "https://scroll.io/bridge"),),
+    frozenset({"ethereum", "zksync"}): (("zkSync Bridge", "https://portal.zksync.io/bridge"),),
+    frozenset({"ethereum", "blast"}): (("Blast Bridge", "https://blast.io/bridge"),),
+    frozenset({"ethereum", "mantle"}): (("Mantle Bridge", "https://app.mantle.xyz/bridge"),),
+    frozenset({"ethereum", "solana"}): (
+        ("deBridge", "https://app.debridge.finance"),
+        ("Mayan", "https://mayan.finance"),
+    ),
+    frozenset({"ethereum", "tron"}): (("deBridge", "https://app.debridge.finance"),),
+    frozenset({"arbitrum", "base"}): (("Across", "https://app.across.to"),),
+    frozenset({"arbitrum", "optimism"}): (("Across", "https://app.across.to"), ("Stargate", "https://stargate.finance/bridge")),
+    frozenset({"arbitrum", "polygon"}): (("Across", "https://app.across.to"),),
+    frozenset({"base", "optimism"}): (("Superbridge", "https://superbridge.app"), ("Across", "https://app.across.to")),
+    frozenset({"bsc", "arbitrum"}): (("deBridge", "https://app.debridge.finance"), ("Stargate", "https://stargate.finance/bridge")),
+    frozenset({"bsc", "solana"}): (("deBridge", "https://app.debridge.finance"),),
+}
+
+_WITHDRAW_PAGE = {
+    "binance": "https://www.binance.com/en/my/wallet/account/main/withdrawal/crypto/{coin}",
+    "gate": "https://www.gate.io/myaccount/withdraw/{coin}",
+    "kucoin": "https://www.kucoin.com/assets/withdraw/{coin}",
+    "bitget": "https://www.bitget.com/asset/withdraw?coinId=2&coin={coin}",
+    "htx": "https://www.htx.com/finance/withdraw/",
+    "mexc": "https://www.mexc.com/assets/withdraw/{coin}",
+    "okx": "https://www.okx.com/balance/withdrawal/{coin}",
+    "bybit": "https://www.bybit.com/user/assets/withdraw?coin={coin}",
+}
+
+
+def chain_label(chain: str) -> str:
+    return _CHAIN_LABELS.get(chain, chain or "?")
+
+
+def flag_open(value: object) -> bool | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "allowed", "normal"}:
+        return True
+    if text in {"0", "false", "no", "prohibited", "suspended", "delisted"}:
+        return False
+    return None
+
+
+def make_gate(raw_name: str, withdraw: object, deposit: object) -> ChainGate:
+    return ChainGate(
+        chain=chain_id(raw_name) or "",
+        raw_name=raw_name,
+        withdraw_open=flag_open(withdraw),
+        deposit_open=flag_open(deposit),
+    )
+
+
+def transfer_lines(exchange: str, base: str, direction: str, pool_chain: str, gates: tuple[ChainGate, ...]) -> list[str]:
+    """Plain-text lines about whether the CEX leg of the trade can move on-chain."""
+    venue = EXCHANGE_NAMES.get(exchange, exchange)
+    withdraw = direction == "buy_cex"
+    action = "Rút" if withdraw else "Nạp"
+    usable = [gate for gate in gates if gate.chain or gate.raw_name]
+    if not usable:
+        lines = [f"{action} {venue}: không có dữ liệu công khai về khóa hay mở"]
+        page = _WITHDRAW_PAGE.get(exchange)
+        if page:
+            lines.append(f"Xem trên sàn: {page.format(coin=base)}")
+        return lines
+
+    def opened(gate: ChainGate) -> bool:
+        return (gate.withdraw_open if withdraw else gate.deposit_open) is True
+
+    def closed(gate: ChainGate) -> bool:
+        return (gate.withdraw_open if withdraw else gate.deposit_open) is False
+
+    open_chains: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for gate in usable:
+        if not opened(gate):
+            continue
+        label = chain_label(gate.chain) if gate.chain else gate.raw_name
+        if label in seen:
+            continue
+        seen.add(label)
+        open_chains.append((gate.chain, label))
+
+    pool_label = chain_label(pool_chain)
+    on_pool = [gate for gate in usable if gate.chain == pool_chain]
+    if any(opened(gate) for gate in on_pool):
+        return [
+            f"{action} {venue}: đang mở trên {pool_label}",
+            "Trùng chain với pool, đi thẳng, không cần cầu",
+        ]
+    if open_chains:
+        shown = ", ".join(label for _chain, label in open_chains[:4])
+        locked = f" Đang khóa trên {pool_label}." if on_pool and all(closed(gate) for gate in on_pool) else ""
+        lines = [
+            f"{action} {venue}: đang mở trên {shown}.{locked}",
+            f"Pool ở {pool_label}, lệch chain",
+        ]
+        named = False
+        for chain, label in open_chains[:3]:
+            routes = _BRIDGES.get(frozenset({chain, pool_chain}), ()) if chain and pool_chain else ()
+            if not routes:
+                continue
+            joined = ", ".join(f"{name} {url}" for name, url in routes[:2])
+            lines.append(f"Cầu {label} → {pool_label}: {joined}")
+            named = True
+        if not named:
+            lines.append("Chưa có cầu riêng cho cặp chain này. Thử https://app.debridge.finance hoặc https://app.across.to")
+        lines.append("Cầu chỉ đi được khi đúng token có trong danh sách. Bản bọc của sàn thường không sang được pool.")
+        return lines
+    if any(closed(gate) for gate in usable):
+        return [f"{action} {venue}: đang khóa"]
+    return [f"{action} {venue}: sàn không ghi rõ trạng thái"]

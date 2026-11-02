@@ -7,7 +7,7 @@ import logging
 
 import aiohttp
 
-from spread_alert.logic import EXCHANGE_NAMES, Opportunity
+from spread_alert.logic import EXCHANGE_NAMES, Opportunity, transfer_lines
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +77,8 @@ def format_opportunity(opp: Opportunity) -> str:
     ]
     if opp.quote_volume:
         lines.append(f"Vol CEX 24h: {format_usd(opp.quote_volume)}")
+    for note in transfer_lines(opp.exchange, opp.base, opp.direction, opp.chain, opp.gates):
+        lines.append(html.escape(note))
     lines.append(f"Hợp đồng: <code>{html.escape(short_address(opp.address))}</code>")
     links = []
     if opp.url:

@@ -2,6 +2,7 @@ import unittest
 
 from spread_alert.cex import ListedCoin, PriceQuote, _prices_binance, _prices_gate
 from spread_alert.logic import (
+    ChainGate,
     Listing,
     Pool,
     anchor_indexes,
@@ -11,6 +12,7 @@ from spread_alert.logic import (
     is_ignored_asset,
     pick_pool,
     symbols_match,
+    transfer_lines,
 )
 from spread_alert.telegram import format_opportunity, format_price
 from spread_alert.universe import assemble_markets
@@ -248,7 +250,38 @@ class LogicTest(unittest.TestCase):
         text = format_opportunity(opportunity)
         self.assertIn("PEPE", text)
         self.assertIn("DexScreener", text)
+        self.assertIn("không có dữ liệu công khai", text)
         self.assertTrue(format_price(0.000004898).startswith("$0.000004898"))
+
+    def test_transfer_lines_same_chain_and_bridge(self):
+        same = transfer_lines(
+            "binance",
+            "ENJ",
+            "buy_cex",
+            "ethereum",
+            (ChainGate("ethereum", "ETH", True, True),),
+        )
+        self.assertIn("đang mở trên Ethereum", same[0])
+        self.assertIn("không cần cầu", same[1])
+
+        shifted = transfer_lines(
+            "gate",
+            "ENJ",
+            "buy_cex",
+            "ethereum",
+            (
+                ChainGate("ethereum", "ETH", False, True),
+                ChainGate("bsc", "BSC", True, True),
+            ),
+        )
+        self.assertIn("đang mở trên BSC", shifted[0])
+        self.assertIn("Đang khóa trên Ethereum", shifted[0])
+        self.assertTrue(any("deBridge" in line for line in shifted))
+
+        missing = transfer_lines("bybit", "ENJ", "buy_cex", "ethereum", ())
+        self.assertIn("không có dữ liệu công khai", missing[0])
+        self.assertIn("bybit.com", missing[1])
+        self.assertIn("ENJ", missing[1])
 
 
 if __name__ == "__main__":

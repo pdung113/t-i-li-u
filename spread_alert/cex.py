@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import aiohttp
 
-from spread_alert.logic import Listing, clean_address, is_ignored_asset
+from spread_alert.logic import ChainGate, Listing, clean_address, is_ignored_asset, make_gate
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ class ListedCoin:
     # Raw network name and raw contract text. Empty address means native on that network.
     contracts: list[tuple[str, str]]
     has_own_contracts: bool
+    gates: list[ChainGate] = field(default_factory=list)
 
 
 def listing_from(coin: ListedCoin, quote: PriceQuote) -> Listing:
@@ -50,6 +51,7 @@ def listing_from(coin: ListedCoin, quote: PriceQuote) -> Listing:
         quote_volume=quote.quote_volume,
         top_notional=quote.top_notional,
         name=coin.name,
+        gates=tuple(coin.gates),
     )
 
 
@@ -312,7 +314,15 @@ def _prices_bybit(payload: dict, quotes: tuple[str, ...]) -> dict[str, PriceQuot
     return _prefer(found, quotes)
 
 
-def _coin(exchange: str, base: str, name: str, prices: dict[str, PriceQuote], contracts: list[tuple[str, str]], owned: bool) -> ListedCoin | None:
+def _coin(
+    exchange: str,
+    base: str,
+    name: str,
+    prices: dict[str, PriceQuote],
+    contracts: list[tuple[str, str]],
+    owned: bool,
+    gates: list[ChainGate] | None = None,
+) -> ListedCoin | None:
     if is_ignored_asset(base, name):
         return None
     return ListedCoin(
@@ -322,6 +332,7 @@ def _coin(exchange: str, base: str, name: str, prices: dict[str, PriceQuote], co
         quote=prices.get(base.upper()),
         contracts=contracts,
         has_own_contracts=owned,
+        gates=gates or [],
     )
 
 
@@ -390,9 +401,12 @@ async def _coins_binance(session: aiohttp.ClientSession, prices: dict[str, Price
             continue
         base = str(row.get("coin") or "")
         contracts = []
+        gates = []
         for net in row.get("networkList") or []:
-            contracts.append((str(net.get("network") or ""), str(net.get("contractAddress") or "")))
-        coin = _coin("binance", base, str(row.get("name") or ""), prices, contracts, True)
+            raw = str(net.get("network") or "")
+            contracts.append((raw, str(net.get("contractAddress") or "")))
+            gates.append(make_gate(raw, net.get("withdrawEnable"), net.get("depositEnable")))
+        coin = _coin("binance", base, str(row.get("name") or ""), prices, contracts, True, gates)
         if coin and (coin.quote or contracts):
             coins.append(coin)
     return coins
@@ -405,8 +419,15 @@ async def _coins_gate(session: aiohttp.ClientSession, prices: dict[str, PriceQuo
         if row.get("delisted") or row.get("trade_disabled"):
             continue
         base = str(row.get("currency") or "")
-        contracts = [(str(item.get("name") or ""), str(item.get("addr") or "")) for item in row.get("chains") or []]
-        coin = _coin("gate", base, str(row.get("name") or ""), prices, contracts, True)
+        contracts = []
+        gates = []
+        for item in row.get("chains") or []:
+            raw = str(item.get("name") or "")
+            contracts.append((raw, str(item.get("addr") or "")))
+            withdraw = None if "withdraw_disabled" not in item else not bool(item.get("withdraw_disabled"))
+            deposit = None if "deposit_disabled" not in item else not bool(item.get("deposit_disabled"))
+            gates.append(make_gate(raw, withdraw, deposit))
+        coin = _coin("gate", base, str(row.get("name") or ""), prices, contracts, True, gates)
         if coin and (coin.quote or contracts):
             coins.append(coin)
     return coins
@@ -418,11 +439,13 @@ async def _coins_kucoin(session: aiohttp.ClientSession, prices: dict[str, PriceQ
     for row in payload.get("data") or []:
         base = str(row.get("currency") or "")
         contracts = []
+        gates = []
         for item in row.get("chains") or []:
             chain = str(item.get("chainId") or item.get("chainName") or "")
             contracts.append((chain, str(item.get("contractAddress") or "")))
+            gates.append(make_gate(chain, item.get("isWithdrawEnabled"), item.get("isDepositEnabled")))
         name = str(row.get("fullName") or row.get("name") or "")
-        coin = _coin("kucoin", base, name, prices, contracts, True)
+        coin = _coin("kucoin", base, name, prices, contracts, True, gates)
         if coin and (coin.quote or contracts):
             coins.append(coin)
     return coins
@@ -434,9 +457,12 @@ async def _coins_bitget(session: aiohttp.ClientSession, prices: dict[str, PriceQ
     for row in payload.get("data") or []:
         base = str(row.get("coin") or "")
         contracts = []
+        gates = []
         for item in row.get("chains") or []:
-            contracts.append((str(item.get("chain") or ""), str(item.get("contractAddress") or "")))
-        coin = _coin("bitget", base, base, prices, contracts, True)
+            raw = str(item.get("chain") or "")
+            contracts.append((raw, str(item.get("contractAddress") or "")))
+            gates.append(make_gate(raw, item.get("withdrawable"), item.get("rechargeable")))
+        coin = _coin("bitget", base, base, prices, contracts, True, gates)
         if coin and (coin.quote or contracts):
             coins.append(coin)
     return coins
@@ -448,10 +474,12 @@ async def _coins_htx(session: aiohttp.ClientSession, prices: dict[str, PriceQuot
     for row in payload.get("data") or []:
         base = str(row.get("currency") or "").upper()
         contracts = []
+        gates = []
         for item in row.get("chains") or []:
             chain = str(item.get("baseChain") or item.get("displayName") or "")
             contracts.append((chain, str(item.get("contractAddress") or "")))
-        coin = _coin("htx", base, str(row.get("currency") or ""), prices, contracts, True)
+            gates.append(make_gate(chain, item.get("withdrawStatus"), item.get("depositStatus")))
+        coin = _coin("htx", base, str(row.get("currency") or ""), prices, contracts, True, gates)
         if coin and (coin.quote or contracts):
             coins.append(coin)
     return coins
