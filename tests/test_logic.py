@@ -114,7 +114,8 @@ class LogicTest(unittest.TestCase):
                 "baseToken": {"address": address, "symbol": "PEPE"},
                 "quoteToken": {"symbol": "USDC"},
                 "priceUsd": "1.2",
-                "liquidity": {"usd": 90_000},
+                "liquidity": {"usd": 90_000, "base": 1_500_000, "quote": 45_000},
+                "volume": {"h24": 12_300},
             },
             {
                 "chainId": "ethereum",
@@ -130,6 +131,9 @@ class LogicTest(unittest.TestCase):
         self.assertIsNotNone(pool)
         self.assertEqual(pool.dex, "sushiswap")
         self.assertAlmostEqual(pool.price_usd, 1.2)
+        self.assertAlmostEqual(pool.liquidity_base, 1_500_000)
+        self.assertAlmostEqual(pool.liquidity_quote, 45_000)
+        self.assertAlmostEqual(pool.volume_h24, 12_300)
 
     def test_edges_use_bid_ask(self):
         pool = _pool(price_usd=100)
@@ -240,7 +244,7 @@ class LogicTest(unittest.TestCase):
         self.assertAlmostEqual(book["BTC"].top_notional, 204)
         opportunity = best_opportunity(
             [_listing("binance", "PEPE", 1, bid=0.99, ask=1.01)],
-            _pool(price_usd=1.2),
+            _pool(price_usd=1.2, liquidity_base=1_500_000, liquidity_quote=45_000, volume_h24=12_300),
             token_address="0x6982508145454ce325ddbe47a25d4ec3d2311933",
             chain="ethereum",
             min_volume=0,
@@ -249,6 +253,10 @@ class LogicTest(unittest.TestCase):
         )
         text = format_opportunity(opportunity)
         self.assertIn("PEPE", text)
+        self.assertIn("Liquidity DEX:", text)
+        self.assertIn("1.50M PEPE", text)
+        self.assertIn("45.0K WETH", text)
+        self.assertIn("Vol DEX 24h:", text)
         self.assertIn("DexScreener", text)
         self.assertIn("không có dữ liệu công khai", text)
         self.assertTrue(format_price(0.000004898).startswith("$0.000004898"))

@@ -370,6 +370,9 @@ class Pool:
     quote_symbol: str
     price_usd: float
     liquidity_usd: float
+    liquidity_base: float | None = None
+    liquidity_quote: float | None = None
+    volume_h24: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -390,6 +393,21 @@ class Opportunity:
     dex_symbol: str
     quote_symbol: str
     gates: tuple[ChainGate, ...] = ()
+    liquidity_base: float | None = None
+    liquidity_quote: float | None = None
+    dex_volume_h24: float | None = None
+
+
+def _optional_amount(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number <= 0:
+        return None
+    return number
 
 
 def pick_pool(pairs: list[dict], address: str, listings: list[Listing], min_liquidity: float) -> Pool | None:
@@ -407,9 +425,10 @@ def pick_pool(pairs: list[dict], address: str, listings: list[Listing], min_liqu
         base_symbol = str(base.get("symbol") or "")
         if not any(symbols_match(item.base, base_symbol)[0] for item in listings):
             continue
+        book = pair.get("liquidity") or {}
         try:
             price = float(pair["priceUsd"])
-            liquidity = float((pair.get("liquidity") or {}).get("usd") or 0)
+            liquidity = float(book.get("usd") or 0)
         except (TypeError, ValueError, KeyError):
             continue
         if price <= 0 or liquidity < min_liquidity:
@@ -422,6 +441,9 @@ def pick_pool(pairs: list[dict], address: str, listings: list[Listing], min_liqu
             quote_symbol=str(quote.get("symbol") or ""),
             price_usd=price,
             liquidity_usd=liquidity,
+            liquidity_base=_optional_amount(book.get("base")),
+            liquidity_quote=_optional_amount(book.get("quote")),
+            volume_h24=_optional_amount((pair.get("volume") or {}).get("h24")),
         )
         if best is None or pool.liquidity_usd > best.liquidity_usd:
             best = pool
@@ -512,6 +534,9 @@ def _opportunity_for(
         dex_price=pool.price_usd,
         liquidity_usd=pool.liquidity_usd,
         quote_volume=listing.quote_volume,
+        liquidity_base=pool.liquidity_base,
+        liquidity_quote=pool.liquidity_quote,
+        dex_volume_h24=pool.volume_h24,
         dex_symbol=pool.base_symbol,
         quote_symbol=pool.quote_symbol,
         gates=tuple(listing.gates),

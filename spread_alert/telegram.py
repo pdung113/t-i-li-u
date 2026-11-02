@@ -26,6 +26,19 @@ def format_price(price: float) -> str:
     return f"${text}"
 
 
+def format_amount(amount: float) -> str:
+    if amount >= 1_000_000_000:
+        return f"{amount / 1_000_000_000:.2f}B"
+    if amount >= 1_000_000:
+        return f"{amount / 1_000_000:.2f}M"
+    if amount >= 1_000:
+        return f"{amount / 1_000:.1f}K"
+    if amount >= 1:
+        return f"{amount:.2f}".rstrip("0").rstrip(".")
+    text = f"{amount:.6f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
 def format_usd(amount: float) -> str:
     if amount >= 1_000_000_000:
         return f"${amount / 1_000_000_000:.2f}B"
@@ -105,8 +118,17 @@ def format_opportunity(opp: Opportunity) -> str:
         "",
         f"CEX: <b>{format_price(opp.cex_price)}</b>",
         f"DEX: <b>{format_price(opp.dex_price)}</b> ({html.escape(opp.dex_symbol)}/{html.escape(opp.quote_symbol)})",
-        f"Thanh khoản DEX: {format_usd(opp.liquidity_usd)}",
+        f"Liquidity DEX: {format_usd(opp.liquidity_usd)}",
     ]
+    if opp.liquidity_base is not None or opp.liquidity_quote is not None:
+        parts = []
+        if opp.liquidity_base is not None:
+            parts.append(f"{format_amount(opp.liquidity_base)} {html.escape(opp.dex_symbol)}")
+        if opp.liquidity_quote is not None:
+            parts.append(f"{format_amount(opp.liquidity_quote)} {html.escape(opp.quote_symbol)}")
+        lines.append("Trong pool: " + " · ".join(parts))
+    if opp.dex_volume_h24:
+        lines.append(f"Vol DEX 24h: {format_usd(opp.dex_volume_h24)}")
     if opp.quote_volume:
         lines.append(f"Vol CEX 24h: {format_usd(opp.quote_volume)}")
     lines.extend(_paint_notes(transfer_lines(opp.exchange, opp.base, opp.direction, opp.chain, opp.gates)))
