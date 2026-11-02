@@ -399,6 +399,9 @@ class Opportunity:
     buy_tax: float | None = None
     sell_tax: float | None = None
     transfer_tax: float | None = None
+    sell_exchange: str = ""
+    sell_gates: tuple[ChainGate, ...] = ()
+    sell_volume: float | None = None
 
 
 def _optional_amount(value: object) -> float | None:
@@ -453,6 +456,22 @@ def pick_pool(pairs: list[dict], address: str, listings: list[Listing], min_liqu
     return best
 
 
+def transfer_open(gates: tuple[ChainGate, ...] | list[ChainGate], chain: str, *, withdraw: bool) -> bool:
+    """True only when this venue can move the coin on that exact chain."""
+    for gate in gates:
+        if gate.chain != chain:
+            continue
+        flag = gate.withdraw_open if withdraw else gate.deposit_open
+        if flag is True:
+            return True
+    return False
+
+
+def route_open(gates: tuple[ChainGate, ...] | list[ChainGate], pool_chain: str, direction: str) -> bool:
+    """DEX/CEX arb needs the pool chain, and the transfer that trade uses, to be open."""
+    return transfer_open(gates, pool_chain, withdraw=direction == "buy_cex")
+
+
 def best_opportunity(
     listings: list[Listing],
     pool: Pool,
@@ -475,9 +494,108 @@ def best_opportunity(
         )
         if opportunity is None or opportunity.edge_pct > max_spread:
             continue
+        if not route_open(opportunity.gates, opportunity.chain, opportunity.direction):
+            continue
         if best is None or opportunity.edge_pct > best.edge_pct:
             best = opportunity
     return best
+
+
+def cex_spreads(
+    markets: dict,
+    *,
+    min_volume: float,
+    min_top_notional: float,
+    max_spread: float,
+) -> list[Opportunity]:
+    """CEX versus CEX on one contract, only when withdraw and deposit share that chain."""
+    found: list[Opportunity] = []
+    seen: set[tuple] = set()
+    for market in markets.values():
+        listings = list(market.listings)
+        for buy in listings:
+            for sell in listings:
+                if buy.exchange == sell.exchange:
+                    continue
+                opportunity = _cex_pair(
+                    buy,
+                    sell,
+                    chain=market.chain,
+                    address=market.address,
+                    min_volume=min_volume,
+                    min_top_notional=min_top_notional,
+                )
+                if opportunity is None or opportunity.edge_pct > max_spread:
+                    continue
+                key = (opportunity.exchange, opportunity.sell_exchange, opportunity.chain, opportunity.address)
+                if key in seen:
+                    continue
+                seen.add(key)
+                found.append(opportunity)
+    return found
+
+
+def _listing_tradable(listing: Listing, min_volume: float, min_top_notional: float) -> bool:
+    if listing.last <= 0:
+        return False
+    if listing.quote_volume is not None and listing.quote_volume < min_volume:
+        return False
+    if listing.top_notional is not None and listing.top_notional < min_top_notional:
+        return False
+    return True
+
+
+def _cex_pair(
+    buy: Listing,
+    sell: Listing,
+    *,
+    chain: str,
+    address: str,
+    min_volume: float,
+    min_top_notional: float,
+) -> Opportunity | None:
+    if not _listing_tradable(buy, min_volume, min_top_notional):
+        return None
+    if not _listing_tradable(sell, min_volume, min_top_notional):
+        return None
+    if not transfer_open(buy.gates, chain, withdraw=True):
+        return None
+    if not transfer_open(sell.gates, chain, withdraw=False):
+        return None
+    matched, divisor = symbols_match(buy.base, sell.base)
+    if not matched or divisor <= 0:
+        return None
+    buy_raw = buy.ask or buy.last
+    sell_raw = sell.bid or sell.last
+    if buy_raw <= 0 or sell_raw <= 0:
+        return None
+    buy_px = buy_raw / divisor
+    if buy_px <= 0:
+        return None
+    edge = (sell_raw - buy_px) / buy_px * 100.0
+    if edge <= 0:
+        return None
+    return Opportunity(
+        exchange=buy.exchange,
+        base=buy.base,
+        pair=buy.pair,
+        chain=chain,
+        address=address,
+        dex=sell.exchange,
+        url="",
+        direction="cex_cex",
+        edge_pct=edge,
+        cex_price=buy_px,
+        dex_price=sell_raw,
+        liquidity_usd=0,
+        quote_volume=buy.quote_volume,
+        dex_symbol=sell.base,
+        quote_symbol=sell.quote or buy.quote,
+        gates=tuple(buy.gates),
+        sell_exchange=sell.exchange,
+        sell_gates=tuple(sell.gates),
+        sell_volume=sell.quote_volume,
+    )
 
 
 def raw_spread_pct(listing: Listing, pool: Pool) -> float | None:

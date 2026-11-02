@@ -7,7 +7,7 @@ import logging
 
 import aiohttp
 
-from spread_alert.logic import EXCHANGE_NAMES, Opportunity, chain_label, transfer_lines
+from spread_alert.logic import EXCHANGE_NAMES, Opportunity, _status_line, chain_label, transfer_lines
 from spread_alert.tax import tax_line
 
 log = logging.getLogger(__name__)
@@ -85,7 +85,9 @@ def _paint_notes(notes: list[str]) -> list[str]:
 
     for note in notes:
         safe = html.escape(note)
-        if note.startswith("Chain DEX:") and "Cùng chain" in note:
+        if note.startswith("Chain:") and "Cùng mạng" in note:
+            chunk.append(f"+ {safe}")
+        elif note.startswith("Chain DEX:") and "Cùng chain" in note:
             chunk.append(f"+ {safe}")
         elif note.startswith("Chain DEX:") and "Khác chain" in note:
             chunk.append(f"- {safe}")
@@ -103,6 +105,8 @@ def _paint_notes(notes: list[str]) -> list[str]:
 
 
 def format_opportunity(opp: Opportunity) -> str:
+    if opp.direction == "cex_cex":
+        return _format_cex_pair(opp)
     venue = EXCHANGE_NAMES.get(opp.exchange, opp.exchange)
     dex = opp.dex.replace("_", " ").title()
     pool = chain_label(opp.chain)
@@ -143,6 +147,45 @@ def format_opportunity(opp: Opportunity) -> str:
     venue_url = trade_url(opp.exchange, opp.base, opp.pair)
     if venue_url:
         links.append(f'<a href="{html.escape(venue_url, quote=True)}">{html.escape(venue)}</a>')
+    if links:
+        lines.append(" · ".join(links))
+    return "\n".join(lines)
+
+
+def _format_cex_pair(opp: Opportunity) -> str:
+    buy = EXCHANGE_NAMES.get(opp.exchange, opp.exchange)
+    sell = EXCHANGE_NAMES.get(opp.sell_exchange, opp.sell_exchange)
+    pool = chain_label(opp.chain)
+    lines = [
+        f"<b>⚡ {html.escape(opp.base)}</b>  {opp.edge_pct:.2f}%",
+        html.escape(f"Mua {buy} → bán {sell} ({pool})"),
+        "Hai sàn CEX, cùng một mạng",
+        "",
+        f"Mua {html.escape(buy)}: <b>{format_price(opp.cex_price)}</b>",
+        f"Bán {html.escape(sell)}: <b>{format_price(opp.dex_price)}</b>",
+    ]
+    if opp.quote_volume:
+        lines.append(f"Vol {html.escape(buy)} 24h: {format_usd(opp.quote_volume)}")
+    if opp.sell_volume:
+        lines.append(f"Vol {html.escape(sell)} 24h: {format_usd(opp.sell_volume)}")
+    shown_tax = tax_line(opp.buy_tax, opp.sell_tax, opp.transfer_tax)
+    if shown_tax:
+        lines.append(html.escape(shown_tax))
+    notes = [f"Chain: {pool}. Cùng mạng, rút được và nạp được."]
+    buy_gates = [gate for gate in opp.gates if gate.chain == opp.chain]
+    sell_gates = [gate for gate in opp.sell_gates if gate.chain == opp.chain]
+    notes.extend(_status_line("Rút", buy, buy_gates, opp.chain, withdraw=True))
+    notes.extend(_status_line("Nạp", sell, sell_gates, opp.chain, withdraw=False))
+    lines.extend(_paint_notes(notes))
+    lines.append(f"Hợp đồng: <code>{html.escape(short_address(opp.address))}</code>")
+    links = []
+    buy_url = trade_url(opp.exchange, opp.base, opp.pair)
+    sell_pair = f"{opp.dex_symbol}/{opp.quote_symbol}" if opp.quote_symbol else opp.pair
+    sell_url = trade_url(opp.sell_exchange, opp.dex_symbol, sell_pair)
+    if buy_url:
+        links.append(f'<a href="{html.escape(buy_url, quote=True)}">{html.escape(buy)}</a>')
+    if sell_url:
+        links.append(f'<a href="{html.escape(sell_url, quote=True)}">{html.escape(sell)}</a>')
     if links:
         lines.append(" · ".join(links))
     return "\n".join(lines)

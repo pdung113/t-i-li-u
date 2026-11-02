@@ -6,10 +6,12 @@ from spread_alert.config import Config
 from spread_alert.logic import (
     ChainGate,
     Listing,
+    Market,
     Opportunity,
     Pool,
     anchor_indexes,
     best_opportunity,
+    cex_spreads,
     chain_id,
     clean_address,
     is_ignored_asset,
@@ -25,6 +27,11 @@ from spread_alert.universe import assemble_markets
 
 def _quote(last: float, bid: float | None = None, ask: float | None = None, volume: float | None = 100_000) -> PriceQuote:
     return PriceQuote(pair="X/USDT", quote="USDT", last=last, bid=bid, ask=ask, quote_volume=volume)
+
+
+def _tradable(listing: Listing, chain: str = "ethereum", withdraw: bool = True, deposit: bool = True) -> Listing:
+    listing.gates = (ChainGate(chain, chain.upper(), withdraw, deposit),)
+    return listing
 
 
 def _listing(exchange: str, base: str, last: float, bid=None, ask=None, volume=100_000, top=None) -> Listing:
@@ -165,7 +172,7 @@ class LogicTest(unittest.TestCase):
     def test_edges_use_bid_ask(self):
         pool = _pool(price_usd=100)
         # Ask is far above the pool, so the buy-CEX edge is gone. Bid still clears a small DEX discount.
-        wide = _listing("gate", "PEPE", 105, bid=103, ask=120)
+        wide = _tradable(_listing("gate", "PEPE", 105, bid=103, ask=120))
         missed = best_opportunity(
             [wide],
             pool,
@@ -180,7 +187,7 @@ class LogicTest(unittest.TestCase):
         self.assertLess(missed.edge_pct, 5)
 
         pool = _pool(price_usd=106)
-        tight = _listing("binance", "PEPE", 100, bid=99.5, ask=100.4)
+        tight = _tradable(_listing("binance", "PEPE", 100, bid=99.5, ask=100.4))
         hit = best_opportunity(
             [tight],
             pool,
@@ -269,8 +276,18 @@ class LogicTest(unittest.TestCase):
         )
         self.assertAlmostEqual(book["BTC"].last, 101)
         self.assertAlmostEqual(book["BTC"].top_notional, 204)
-        opportunity = best_opportunity(
+        blocked = best_opportunity(
             [_listing("binance", "PEPE", 1, bid=0.99, ask=1.01)],
+            _pool(price_usd=1.2),
+            token_address="0x6982508145454ce325ddbe47a25d4ec3d2311933",
+            chain="ethereum",
+            min_volume=0,
+            min_top_notional=0,
+            max_spread=80,
+        )
+        self.assertIsNone(blocked)
+        opportunity = best_opportunity(
+            [_tradable(_listing("binance", "PEPE", 1, bid=0.99, ask=1.01))],
             _pool(price_usd=1.2, liquidity_base=1_500_000, liquidity_quote=45_000, volume_h24=12_300),
             token_address="0x6982508145454ce325ddbe47a25d4ec3d2311933",
             chain="ethereum",
@@ -288,7 +305,8 @@ class LogicTest(unittest.TestCase):
         self.assertIn("45.0K WETH", text)
         self.assertIn("Vol DEX 24h:", text)
         self.assertIn("DexScreener", text)
-        self.assertIn("không có dữ liệu công khai", text)
+        self.assertIn("Cùng chain", text)
+        self.assertIn("không có dữ liệu công khai", format_opportunity(_opportunity()))
         self.assertTrue(format_price(0.000004898).startswith("$0.000004898"))
 
     def test_transfer_lines_same_chain_and_bridge(self):
@@ -338,19 +356,38 @@ class LogicTest(unittest.TestCase):
         self.assertTrue(any(line.startswith("Nạp ") and "đang khóa" in line for line in deposit_closed))
         self.assertTrue(any("Không nạp được" in line for line in deposit_closed))
 
-        closed = _listing("gate", "ENJ", 1, bid=0.99, ask=1.01)
-        closed.gates = (ChainGate("ethereum", "ETH", True, False),)
-        kept = best_opportunity(
-            [closed],
-            _pool(price_usd=0.8, base_symbol="ENJ"),
-            token_address="0xabc",
-            chain="ethereum",
-            min_volume=0,
-            min_top_notional=0,
-            max_spread=80,
+        closed = _tradable(_listing("gate", "ENJ", 1, bid=0.99, ask=1.01), deposit=False)
+        self.assertIsNone(
+            best_opportunity(
+                [closed],
+                _pool(price_usd=0.8, base_symbol="ENJ"),
+                token_address="0xabc",
+                chain="ethereum",
+                min_volume=0,
+                min_top_notional=0,
+                max_spread=80,
+            )
         )
-        self.assertIsNotNone(kept)
-        colored = format_opportunity(kept)
+        other_chain = _tradable(_listing("gate", "ENJ", 1, bid=0.9, ask=0.91), chain="bsc")
+        self.assertIsNone(
+            best_opportunity(
+                [other_chain],
+                _pool(price_usd=1.2, base_symbol="ENJ"),
+                token_address="0xabc",
+                chain="ethereum",
+                min_volume=0,
+                min_top_notional=0,
+                max_spread=80,
+            )
+        )
+        colored = format_opportunity(
+            _opportunity(
+                exchange="gate",
+                base="ENJ",
+                direction="buy_dex",
+                gates=(ChainGate("ethereum", "ETH", True, False),),
+            )
+        )
         self.assertIn('class="language-diff"', colored)
         self.assertIn("+ Chain DEX: Ethereum", colored)
         self.assertNotIn("- Chain DEX: Ethereum", colored)
@@ -398,6 +435,34 @@ class LogicTest(unittest.TestCase):
         scanner._mark(_opportunity(edge_pct=11.1))
         self.assertFalse(scanner._due(_opportunity(edge_pct=16)))
         self.assertTrue(scanner._due(_opportunity(base="NEW", address="0xdef", edge_pct=6)))
+
+    def test_cex_spread_requires_the_same_open_network(self):
+        cheap = _tradable(_listing("binance", "ENJ", 1, bid=0.99, ask=1.0))
+        rich = _tradable(_listing("gate", "ENJ", 1.1, bid=1.08, ask=1.12))
+        market = Market(chain="ethereum", address="0xabc", listings=[cheap, rich])
+        found = cex_spreads({("ethereum", "0xabc"): market}, min_volume=0, min_top_notional=0, max_spread=80)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].exchange, "binance")
+        self.assertEqual(found[0].sell_exchange, "gate")
+        self.assertGreater(found[0].edge_pct, 5)
+        text = format_opportunity(found[0])
+        self.assertIn("Mua Binance", text)
+        self.assertIn("bán Gate.io", text)
+        self.assertIn("Cùng mạng", text)
+        self.assertIn("+ Rút Binance", text)
+        self.assertIn("+ Nạp Gate", text)
+
+        cheap.gates = (ChainGate("ethereum", "ETH", False, True),)
+        self.assertEqual(
+            cex_spreads({("ethereum", "0xabc"): market}, min_volume=0, min_top_notional=0, max_spread=80),
+            [],
+        )
+        cheap.gates = (ChainGate("bsc", "BSC", True, True),)
+        rich.gates = (ChainGate("bsc", "BSC", True, True),)
+        self.assertEqual(
+            cex_spreads({("ethereum", "0xabc"): market}, min_volume=0, min_top_notional=0, max_spread=80),
+            [],
+        )
 
 
 if __name__ == "__main__":

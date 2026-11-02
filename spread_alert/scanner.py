@@ -13,7 +13,7 @@ import aiohttp
 from spread_alert.cex import known_exchanges, load_coins, load_prices
 from spread_alert.config import Config
 from spread_alert.dex import DexClient
-from spread_alert.logic import EXCHANGE_NAMES, Opportunity, best_opportunity, raw_spread_pct
+from spread_alert.logic import EXCHANGE_NAMES, Opportunity, best_opportunity, cex_spreads, raw_spread_pct
 from spread_alert.tax import lookup_tax, tax_line
 from spread_alert.universe import assemble_markets
 
@@ -124,6 +124,32 @@ class Scanner:
                     alerts.append(opportunity)
                 pending.put_nowait(opportunity)
 
+        async def _emit_cex() -> None:
+            nonlocal repeated
+            spreads = cex_spreads(
+                self.markets,
+                min_volume=self.config.min_cex_quote_volume_usd,
+                min_top_notional=self.config.min_top_notional_usd,
+                max_spread=self.config.max_spread_pct,
+            )
+            spreads.sort(key=lambda item: item.edge_pct, reverse=True)
+            for opportunity in spreads:
+                if opportunity.edge_pct < self.config.spread_threshold_pct:
+                    continue
+                async with lock:
+                    if not self._due(opportunity):
+                        repeated += 1
+                        continue
+                    extra_room = len(alerts) < self.config.max_alerts_per_scan
+                    bigger = alerts and opportunity.edge_pct > min(item.edge_pct for item in alerts)
+                    if not extra_room and (not bigger or len(alerts) >= self.config.max_alerts_per_scan + 5):
+                        hidden_cex[0] += 1
+                        continue
+                    self._mark(opportunity)
+                    alerts.append(opportunity)
+                pending.put_nowait(opportunity)
+
+        hidden_cex = [0]
         sender_task = asyncio.create_task(sender())
         refresh = asyncio.create_task(self._refresh_loop())
         pools: dict = {}
@@ -140,6 +166,10 @@ class Scanner:
                 await refresh
             except asyncio.CancelledError:
                 pass
+            try:
+                await _emit_cex()
+            except Exception:
+                log.exception("Quét chênh lệch giữa các sàn CEX lỗi")
             pending.put_nowait(None)
             await sender_task
 
@@ -159,6 +189,14 @@ class Scanner:
             )
             if opportunity is not None:
                 found.append(opportunity)
+        found.extend(
+            cex_spreads(
+                self.markets,
+                min_volume=self.config.min_cex_quote_volume_usd,
+                min_top_notional=self.config.min_top_notional_usd,
+                max_spread=self.config.max_spread_pct,
+            )
+        )
         found.sort(key=lambda item: item.edge_pct, reverse=True)
         alerts.sort(key=lambda item: item.edge_pct, reverse=True)
         if repeated:
@@ -175,7 +213,7 @@ class Scanner:
             dex_requests=self.dex.requests - requests_before,
             duration_sec=time.monotonic() - started,
             alerts=alerts,
-            hidden=hidden,
+            hidden=hidden + hidden_cex[0],
             leaders=found[:15],
             sanity=sanity_lines(self.markets, pools),
             chains=dict(chain_counts),
@@ -243,6 +281,15 @@ class Scanner:
                     listing.top_notional = quote.top_notional
 
     def _alert_key(self, opportunity: Opportunity) -> tuple:
+        if opportunity.direction == "cex_cex":
+            return (
+                opportunity.base,
+                opportunity.chain,
+                opportunity.address,
+                opportunity.direction,
+                opportunity.exchange,
+                opportunity.sell_exchange,
+            )
         return (opportunity.base, opportunity.chain, opportunity.address, opportunity.direction)
 
     def _due(self, opportunity: Opportunity) -> bool:

@@ -59,18 +59,31 @@ def _log_result(result, config: Config, top: int, once: bool) -> None:
     rows = result.leaders if once else result.alerts
     for opportunity in rows[:top]:
         venue = EXCHANGE_NAMES.get(opportunity.exchange, opportunity.exchange)
-        side = "CEX rẻ" if opportunity.direction == "buy_cex" else "DEX rẻ"
-        logging.info(
-            "%6.2f%%  %-8s %-12s %-10s %-8s CEX %s  DEX %s  liq $%.0f",
-            opportunity.edge_pct,
-            opportunity.base,
-            venue,
-            opportunity.chain,
-            side,
-            format_price(opportunity.cex_price),
-            format_price(opportunity.dex_price),
-            opportunity.liquidity_usd,
-        )
+        if opportunity.direction == "cex_cex":
+            sell = EXCHANGE_NAMES.get(opportunity.sell_exchange, opportunity.sell_exchange)
+            logging.info(
+                "%6.2f%%  %-8s mua %-12s %s  bán %-12s %s  %s",
+                opportunity.edge_pct,
+                opportunity.base,
+                venue,
+                format_price(opportunity.cex_price),
+                sell,
+                format_price(opportunity.dex_price),
+                opportunity.chain,
+            )
+        else:
+            side = "CEX rẻ" if opportunity.direction == "buy_cex" else "DEX rẻ"
+            logging.info(
+                "%6.2f%%  %-8s %-12s %-10s %-8s CEX %s  DEX %s  liq $%.0f",
+                opportunity.edge_pct,
+                opportunity.base,
+                venue,
+                opportunity.chain,
+                side,
+                format_price(opportunity.cex_price),
+                format_price(opportunity.dex_price),
+                opportunity.liquidity_usd,
+            )
     if not once and not result.alerts and result.leaders:
         leader = result.leaders[0]
         logging.info(
