@@ -428,22 +428,6 @@ def pick_pool(pairs: list[dict], address: str, listings: list[Listing], min_liqu
     return best
 
 
-def movement_blocked(direction: str, gates: tuple[ChainGate, ...]) -> bool:
-    """True when the exchange publishes that the needed transfer is closed.
-
-    Buying the CEX needs a withdrawal. Buying the pool needs a deposit.
-    Missing data stays visible, because Bybit, MEXC, and OKX do not publish it.
-    """
-    usable = [gate for gate in gates if gate.chain or gate.raw_name]
-    if not usable:
-        return False
-    need_withdraw = direction == "buy_cex"
-    flags = [gate.withdraw_open if need_withdraw else gate.deposit_open for gate in usable]
-    if any(flag is True or flag is None for flag in flags):
-        return False
-    return any(flag is False for flag in flags)
-
-
 def best_opportunity(
     listings: list[Listing],
     pool: Pool,
@@ -465,8 +449,6 @@ def best_opportunity(
             min_top_notional=min_top_notional,
         )
         if opportunity is None or opportunity.edge_pct > max_spread:
-            continue
-        if movement_blocked(opportunity.direction, opportunity.gates):
             continue
         if best is None or opportunity.edge_pct > best.edge_pct:
             best = opportunity
@@ -644,7 +626,7 @@ def _open_chains(gates: list[ChainGate], withdraw: bool) -> list[tuple[str, str]
     return found
 
 
-def _status_line(action: str, venue: str, gates: list[ChainGate], pool_chain: str, withdraw: bool) -> str:
+def _status_line(action: str, venue: str, gates: list[ChainGate], pool_chain: str, withdraw: bool) -> list[str]:
     open_chains = _open_chains(gates, withdraw)
     on_pool = [gate for gate in gates if gate.chain == pool_chain]
     pool_label = chain_label(pool_chain)
@@ -653,13 +635,17 @@ def _status_line(action: str, venue: str, gates: list[ChainGate], pool_chain: st
         flag = gate.withdraw_open if withdraw else gate.deposit_open
         return flag is False
 
+    lines: list[str] = []
     if open_chains:
         shown = ", ".join(label for _chain, label in open_chains[:4])
-        locked = f" Đang khóa trên {pool_label}." if on_pool and all(closed(gate) for gate in on_pool) else ""
-        return f"{action} {venue}: đang mở trên {shown}.{locked}"
-    if any(closed(gate) for gate in gates):
-        return f"{action} {venue}: đang khóa"
-    return f"{action} {venue}: sàn không ghi rõ trạng thái"
+        lines.append(f"{action} {venue}: đang mở trên {shown}")
+    if on_pool and all(closed(gate) for gate in on_pool):
+        lines.append(f"{action} {venue}: đang khóa trên {pool_label}")
+    elif not open_chains and any(closed(gate) for gate in gates):
+        lines.append(f"{action} {venue}: đang khóa")
+    elif not lines:
+        lines.append(f"{action} {venue}: sàn không ghi rõ trạng thái")
+    return lines
 
 
 def transfer_lines(exchange: str, base: str, direction: str, pool_chain: str, gates: tuple[ChainGate, ...]) -> list[str]:
@@ -682,8 +668,8 @@ def transfer_lines(exchange: str, base: str, direction: str, pool_chain: str, ga
         return lines
 
     lines = [
-        _status_line("Rút", venue, usable, pool_chain, withdraw=True),
-        _status_line("Nạp", venue, usable, pool_chain, withdraw=False),
+        *_status_line("Rút", venue, usable, pool_chain, withdraw=True),
+        *_status_line("Nạp", venue, usable, pool_chain, withdraw=False),
     ]
     need_withdraw = direction == "buy_cex"
     pool_label = chain_label(pool_chain)

@@ -12,7 +12,6 @@ from spread_alert.logic import (
     is_ignored_asset,
     pick_pool,
     symbols_match,
-    movement_blocked,
     transfer_lines,
 )
 from spread_alert.telegram import format_opportunity, format_price
@@ -276,11 +275,9 @@ class LogicTest(unittest.TestCase):
                 ChainGate("bsc", "BSC", True, False),
             ),
         )
-        withdraw = next(line for line in shifted if line.startswith("Rút "))
-        deposit = next(line for line in shifted if line.startswith("Nạp "))
-        self.assertIn("đang mở trên BSC", withdraw)
-        self.assertIn("Đang khóa trên Ethereum", withdraw)
-        self.assertIn("đang mở trên Ethereum", deposit)
+        self.assertTrue(any(line.startswith("Rút ") and "đang mở trên BSC" in line for line in shifted))
+        self.assertTrue(any(line.startswith("Rút ") and "đang khóa trên Ethereum" in line for line in shifted))
+        self.assertTrue(any(line.startswith("Nạp ") and "đang mở trên Ethereum" in line for line in shifted))
         self.assertTrue(any("deBridge" in line for line in shifted))
 
         deposit_closed = transfer_lines(
@@ -293,21 +290,22 @@ class LogicTest(unittest.TestCase):
         self.assertTrue(any(line.startswith("Nạp ") and "đang khóa" in line for line in deposit_closed))
         self.assertTrue(any("Không nạp được" in line for line in deposit_closed))
 
-        blocked = _listing("gate", "PEPE", 1, bid=0.99, ask=1.01)
-        blocked.gates = (ChainGate("ethereum", "ETH", True, False),)
-        self.assertIsNone(
-            best_opportunity(
-                [blocked],
-                _pool(price_usd=0.8),
-                token_address="0xabc",
-                chain="ethereum",
-                min_volume=0,
-                min_top_notional=0,
-                max_spread=80,
-            )
+        closed = _listing("gate", "ENJ", 1, bid=0.99, ask=1.01)
+        closed.gates = (ChainGate("ethereum", "ETH", True, False),)
+        kept = best_opportunity(
+            [closed],
+            _pool(price_usd=0.8, base_symbol="ENJ"),
+            token_address="0xabc",
+            chain="ethereum",
+            min_volume=0,
+            min_top_notional=0,
+            max_spread=80,
         )
-        self.assertFalse(movement_blocked("buy_cex", blocked.gates))
-        self.assertTrue(movement_blocked("buy_dex", blocked.gates))
+        self.assertIsNotNone(kept)
+        colored = format_opportunity(kept)
+        self.assertIn('class="language-diff"', colored)
+        self.assertIn("+ Rút Gate", colored)
+        self.assertIn("- Nạp Gate", colored)
 
         missing = transfer_lines("bybit", "ENJ", "buy_cex", "ethereum", ())
         self.assertTrue(any("Rút " in line and "không có dữ liệu công khai" in line for line in missing))

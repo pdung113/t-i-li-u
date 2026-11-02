@@ -57,6 +57,33 @@ def trade_url(exchange: str, base: str, pair: str) -> str | None:
     return links.get(exchange)
 
 
+def _paint_notes(notes: list[str]) -> list[str]:
+    """Telegram colors a diff block: lines starting with + are green, - are red."""
+    painted: list[str] = []
+    chunk: list[str] = []
+
+    def flush() -> None:
+        if not chunk:
+            return
+        body = "\n".join(chunk)
+        painted.append(f'<pre><code class="language-diff">{body}</code></pre>')
+        chunk.clear()
+
+    for note in notes:
+        safe = html.escape(note)
+        if note.startswith(("Rút ", "Nạp ")) and "đang mở" in note:
+            chunk.append(f"+ {safe}")
+        elif note.startswith(("Rút ", "Nạp ")) and "đang khóa" in note:
+            chunk.append(f"- {safe}")
+        elif note.startswith(("Không nạp được", "Không rút được")):
+            chunk.append(f"- {safe}")
+        else:
+            flush()
+            painted.append(safe)
+    flush()
+    return painted
+
+
 def format_opportunity(opp: Opportunity) -> str:
     venue = EXCHANGE_NAMES.get(opp.exchange, opp.exchange)
     dex = opp.dex.replace("_", " ").title()
@@ -77,8 +104,7 @@ def format_opportunity(opp: Opportunity) -> str:
     ]
     if opp.quote_volume:
         lines.append(f"Vol CEX 24h: {format_usd(opp.quote_volume)}")
-    for note in transfer_lines(opp.exchange, opp.base, opp.direction, opp.chain, opp.gates):
-        lines.append(html.escape(note))
+    lines.extend(_paint_notes(transfer_lines(opp.exchange, opp.base, opp.direction, opp.chain, opp.gates)))
     lines.append(f"Hợp đồng: <code>{html.escape(short_address(opp.address))}</code>")
     links = []
     if opp.url:
