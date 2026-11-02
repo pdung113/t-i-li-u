@@ -648,31 +648,31 @@ def _status_line(action: str, venue: str, gates: list[ChainGate], pool_chain: st
     return lines
 
 
-def chain_compare_line(direction: str, pool_chain: str, gates: tuple[ChainGate, ...] | list[ChainGate]) -> str:
-    """Say which chain the DEX pool is on, and whether the CEX lists that same chain."""
+def chain_compare_line(_direction: str, pool_chain: str, gates: tuple[ChainGate, ...] | list[ChainGate]) -> str:
+    """Say which chain the DEX pool is on, and whether the CEX lists that same chain.
+
+    Color follows the chain match only. Deposit and withdrawal locks stay on their own lines.
+    """
     label = chain_label(pool_chain)
     head = f"Chain DEX: {label}"
     usable = [gate for gate in gates if gate.chain or gate.raw_name]
     if not usable:
         return f"{head}. Sàn không ghi chain để so."
-    need_withdraw = direction == "buy_cex"
-    on_pool = [gate for gate in usable if gate.chain == pool_chain]
-    open_chains = _open_chains(usable, need_withdraw)
-    open_names = ", ".join(name for _chain, name in open_chains[:4])
-
-    def opened(gate: ChainGate) -> bool:
-        flag = gate.withdraw_open if need_withdraw else gate.deposit_open
-        return flag is True
-
-    if any(opened(gate) for gate in on_pool):
-        verb = "rút" if need_withdraw else "nạp"
-        return f"{head}. Cùng chain với sàn, {verb} được."
-    if on_pool:
-        extra = f" Chain đang mở: {open_names}." if open_names else ""
-        return f"{head}. Sàn có chain này nhưng đang khóa.{extra}"
-    if open_names:
-        return f"{head}. Khác chain. Sàn đang mở: {open_names}."
-    return f"{head}. Sàn không mở chain nào."
+    if any(gate.chain == pool_chain for gate in usable):
+        return f"{head}. Cùng chain với sàn."
+    names: list[str] = []
+    seen: set[str] = set()
+    for gate in usable:
+        shown = chain_label(gate.chain) if gate.chain else gate.raw_name
+        if not shown or shown in seen:
+            continue
+        seen.add(shown)
+        names.append(shown)
+        if len(names) == 4:
+            break
+    if names:
+        return f"{head}. Khác chain. Sàn có: {', '.join(names)}."
+    return f"{head}. Khác chain."
 
 
 def transfer_lines(exchange: str, base: str, direction: str, pool_chain: str, gates: tuple[ChainGate, ...]) -> list[str]:
@@ -721,7 +721,7 @@ def transfer_lines(exchange: str, base: str, direction: str, pool_chain: str, ga
             lines.append("Không nạp được coin lên sàn")
         return lines
 
-    lines.append(f"Pool ở {pool_label}, lệch chain")
+    lines.append(f"Chain đang mở không phải {pool_label}, cần cầu")
     named = False
     for chain, label in open_chains[:3]:
         routes = _BRIDGES.get(frozenset({chain, pool_chain}), ()) if chain and pool_chain else ()

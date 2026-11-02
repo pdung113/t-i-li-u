@@ -181,7 +181,7 @@ python -m spread_alert
 
 ## 8. Đọc một tin nhắn
 
-`Mua Gate.io → bán Uniswap (Ethereum)` nghĩa là giá mua trên Gate đang thấp hơn giá pool. Dòng `Chain DEX` ghi chain của pool DEX. Chữ xanh `Cùng chain` là sàn CEX có đúng chain đó và đang mở. Chữ đỏ `Khác chain` hoặc `đang khóa` là chain DEX không khớp chain sàn đang mở. Phần trăm đã tính giá ask/bid nếu sàn có sổ lệnh. Chưa trừ phí rút coin, phí gas, và trượt giá khi mua số lượng lớn. Hãy tự kiểm tra pool và hợp đồng trước khi đặt lệnh.
+`Mua Gate.io → bán Uniswap (Ethereum)` nghĩa là giá mua trên Gate đang thấp hơn giá pool. Dòng `Chain DEX` ghi chain của pool DEX. Chữ xanh là cùng chain với sàn CEX. Chữ đỏ là khác chain. Dòng Rút và Nạp vẫn xanh khi đang mở, đỏ khi đang khóa. Phần trăm đã tính giá ask/bid nếu sàn có sổ lệnh. Chưa trừ phí rút coin, phí gas, và trượt giá khi mua số lượng lớn. Hãy tự kiểm tra pool và hợp đồng trước khi đặt lệnh.
 
 ## Việc hay gặp
 

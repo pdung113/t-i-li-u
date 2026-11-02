@@ -73,7 +73,7 @@ def _paint_notes(notes: list[str]) -> list[str]:
         safe = html.escape(note)
         if note.startswith("Chain DEX:") and "Cùng chain" in note:
             chunk.append(f"+ {safe}")
-        elif note.startswith("Chain DEX:") and ("Khác chain" in note or "đang khóa" in note):
+        elif note.startswith("Chain DEX:") and "Khác chain" in note:
             chunk.append(f"- {safe}")
         elif note.startswith(("Rút ", "Nạp ")) and "đang mở" in note:
             chunk.append(f"+ {safe}")
