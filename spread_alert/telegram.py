@@ -8,6 +8,7 @@ import logging
 import aiohttp
 
 from spread_alert.logic import EXCHANGE_NAMES, Opportunity, chain_label, transfer_lines
+from spread_alert.tax import tax_line
 
 log = logging.getLogger(__name__)
 
@@ -129,6 +130,9 @@ def format_opportunity(opp: Opportunity) -> str:
         lines.append("Trong pool: " + " · ".join(parts))
     if opp.dex_volume_h24:
         lines.append(f"Vol DEX 24h: {format_usd(opp.dex_volume_h24)}")
+    shown_tax = tax_line(opp.buy_tax, opp.sell_tax, opp.transfer_tax)
+    if shown_tax:
+        lines.append(html.escape(shown_tax))
     if opp.quote_volume:
         lines.append(f"Vol CEX 24h: {format_usd(opp.quote_volume)}")
     lines.extend(_paint_notes(transfer_lines(opp.exchange, opp.base, opp.direction, opp.chain, opp.gates)))

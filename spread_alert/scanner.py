@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import aiohttp
 
@@ -14,6 +14,7 @@ from spread_alert.cex import known_exchanges, load_coins, load_prices
 from spread_alert.config import Config
 from spread_alert.dex import DexClient
 from spread_alert.logic import EXCHANGE_NAMES, Opportunity, best_opportunity, raw_spread_pct
+from spread_alert.tax import lookup_tax, tax_line
 from spread_alert.universe import assemble_markets
 
 log = logging.getLogger(__name__)
@@ -72,6 +73,23 @@ class Scanner:
                 item = await pending.get()
                 if item is None:
                     return
+                original = item
+                found = await lookup_tax(self.session, item.chain, item.address)
+                if found is not None:
+                    item = replace(
+                        item,
+                        buy_tax=found.buy,
+                        sell_tax=found.sell,
+                        transfer_tax=found.transfer,
+                    )
+                    async with lock:
+                        for index, existing in enumerate(alerts):
+                            if existing is original:
+                                alerts[index] = item
+                                break
+                    shown = tax_line(item.buy_tax, item.sell_tax, item.transfer_tax)
+                    if shown:
+                        log.info("%s %s", item.base, shown)
                 if on_alert is not None:
                     await on_alert(item)
 

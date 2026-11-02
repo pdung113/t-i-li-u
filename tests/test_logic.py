@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 
 from spread_alert.cex import ListedCoin, PriceQuote, _prices_binance, _prices_gate
 from spread_alert.logic import (
@@ -14,6 +15,7 @@ from spread_alert.logic import (
     symbols_match,
     transfer_lines,
 )
+from spread_alert.tax import percent_from_fee_rate, percent_from_fraction, tax_from_payload, tax_line
 from spread_alert.telegram import format_opportunity, format_price
 from spread_alert.universe import assemble_markets
 
@@ -254,6 +256,9 @@ class LogicTest(unittest.TestCase):
         text = format_opportunity(opportunity)
         self.assertIn("PEPE", text)
         self.assertIn("Liquidity DEX:", text)
+        self.assertNotIn("Tax DEX", text)
+        taxed = replace(opportunity, buy_tax=5, sell_tax=10.5, transfer_tax=0)
+        self.assertIn("Tax DEX: mua 5% · bán 10.5%", format_opportunity(taxed))
         self.assertIn("1.50M PEPE", text)
         self.assertIn("45.0K WETH", text)
         self.assertIn("Vol DEX 24h:", text)
@@ -332,6 +337,29 @@ class LogicTest(unittest.TestCase):
         self.assertTrue(any("Rút " in line and "không có dữ liệu công khai" in line for line in missing))
         self.assertTrue(any("Nạp " in line and "không có dữ liệu công khai" in line for line in missing))
         self.assertTrue(any("bybit.com" in line and "ENJ" in line for line in missing))
+
+    def test_tax_is_percent_and_hidden_when_zero(self):
+        self.assertAlmostEqual(percent_from_fraction("0.1"), 10)
+        self.assertAlmostEqual(percent_from_fraction("1"), 100)
+        self.assertIsNone(percent_from_fraction(""))
+        self.assertAlmostEqual(percent_from_fee_rate("200"), 2)
+        evm = tax_from_payload(
+            {"code": 1, "result": {"0xabc": {"buy_tax": "0.05", "sell_tax": "0", "transfer_tax": ""}}},
+            "0xAbC",
+            "ethereum",
+        )
+        self.assertAlmostEqual(evm.buy, 5)
+        self.assertAlmostEqual(evm.sell, 0)
+        self.assertIsNone(evm.transfer)
+        self.assertEqual(tax_line(evm.buy, evm.sell, evm.transfer), "Tax DEX: mua 5%")
+        sol = tax_from_payload(
+            {"code": 1, "result": {"mint": {"transfer_fee": {"current_fee_rate": {"fee_rate": "200"}}}}},
+            "mint",
+            "solana",
+        )
+        self.assertEqual(tax_line(sol.buy, sol.sell, sol.transfer), "Tax DEX: chuyển 2%")
+        self.assertIsNone(tax_line(0, 0, 0))
+        self.assertIsNone(tax_from_payload({"code": 0}, "0xabc", "ethereum"))
 
 
 if __name__ == "__main__":

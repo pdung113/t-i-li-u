@@ -181,7 +181,7 @@ python -m spread_alert
 
 ## 8. Đọc một tin nhắn
 
-`Mua Gate.io → bán Uniswap (Ethereum)` nghĩa là giá mua trên Gate đang thấp hơn giá pool. Dòng `Liquidity DEX` là tổng thanh khoản của pool, kèm số coin đang nằm trong pool và vol DEX 24 giờ. Dòng `Chain DEX` ghi chain của pool DEX. Chữ xanh là cùng chain với sàn CEX. Chữ đỏ là khác chain. Dòng Rút và Nạp vẫn xanh khi đang mở, đỏ khi đang khóa. Phần trăm đã tính giá ask/bid nếu sàn có sổ lệnh. Chưa trừ phí rút coin, phí gas, và trượt giá khi mua số lượng lớn. Hãy tự kiểm tra pool và hợp đồng trước khi đặt lệnh.
+`Mua Gate.io → bán Uniswap (Ethereum)` nghĩa là giá mua trên Gate đang thấp hơn giá pool. Dòng `Liquidity DEX` là tổng thanh khoản của pool, kèm số coin đang nằm trong pool và vol DEX 24 giờ. Nếu token có tax, tin thêm dòng `Tax DEX` (mua, bán, hoặc chuyển). Token không có tax thì không có dòng này. Dòng `Chain DEX` ghi chain của pool DEX. Chữ xanh là cùng chain với sàn CEX. Chữ đỏ là khác chain. Dòng Rút và Nạp vẫn xanh khi đang mở, đỏ khi đang khóa. Phần trăm đã tính giá ask/bid nếu sàn có sổ lệnh. Chưa trừ phí rút coin, phí gas, và trượt giá khi mua số lượng lớn. Hãy tự kiểm tra pool và hợp đồng trước khi đặt lệnh.
 
 ## Việc hay gặp
 

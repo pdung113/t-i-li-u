@@ -396,6 +396,9 @@ class Opportunity:
     liquidity_base: float | None = None
     liquidity_quote: float | None = None
     dex_volume_h24: float | None = None
+    buy_tax: float | None = None
+    sell_tax: float | None = None
+    transfer_tax: float | None = None
 
 
 def _optional_amount(value: object) -> float | None:
