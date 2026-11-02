@@ -261,8 +261,9 @@ class LogicTest(unittest.TestCase):
             "ethereum",
             (ChainGate("ethereum", "ETH", True, True),),
         )
-        self.assertIn("đang mở trên Ethereum", same[0])
-        self.assertIn("không cần cầu", same[1])
+        self.assertTrue(any(line.startswith("Rút ") and "đang mở trên Ethereum" in line for line in same))
+        self.assertTrue(any(line.startswith("Nạp ") and "đang mở trên Ethereum" in line for line in same))
+        self.assertTrue(any("không cần cầu" in line for line in same))
 
         shifted = transfer_lines(
             "gate",
@@ -271,17 +272,30 @@ class LogicTest(unittest.TestCase):
             "ethereum",
             (
                 ChainGate("ethereum", "ETH", False, True),
-                ChainGate("bsc", "BSC", True, True),
+                ChainGate("bsc", "BSC", True, False),
             ),
         )
-        self.assertIn("đang mở trên BSC", shifted[0])
-        self.assertIn("Đang khóa trên Ethereum", shifted[0])
+        withdraw = next(line for line in shifted if line.startswith("Rút "))
+        deposit = next(line for line in shifted if line.startswith("Nạp "))
+        self.assertIn("đang mở trên BSC", withdraw)
+        self.assertIn("Đang khóa trên Ethereum", withdraw)
+        self.assertIn("đang mở trên Ethereum", deposit)
         self.assertTrue(any("deBridge" in line for line in shifted))
 
+        deposit_closed = transfer_lines(
+            "gate",
+            "ENJ",
+            "buy_dex",
+            "ethereum",
+            (ChainGate("ethereum", "ETH", True, False),),
+        )
+        self.assertTrue(any(line.startswith("Nạp ") and "đang khóa" in line for line in deposit_closed))
+        self.assertTrue(any("Không nạp được" in line for line in deposit_closed))
+
         missing = transfer_lines("bybit", "ENJ", "buy_cex", "ethereum", ())
-        self.assertIn("không có dữ liệu công khai", missing[0])
-        self.assertIn("bybit.com", missing[1])
-        self.assertIn("ENJ", missing[1])
+        self.assertTrue(any("Rút " in line and "không có dữ liệu công khai" in line for line in missing))
+        self.assertTrue(any("Nạp " in line and "không có dữ liệu công khai" in line for line in missing))
+        self.assertTrue(any("bybit.com" in line and "ENJ" in line for line in missing))
 
 
 if __name__ == "__main__":

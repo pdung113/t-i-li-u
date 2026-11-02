@@ -611,62 +611,95 @@ def make_gate(raw_name: str, withdraw: object, deposit: object) -> ChainGate:
     )
 
 
-def transfer_lines(exchange: str, base: str, direction: str, pool_chain: str, gates: tuple[ChainGate, ...]) -> list[str]:
-    """Plain-text lines about whether the CEX leg of the trade can move on-chain."""
-    venue = EXCHANGE_NAMES.get(exchange, exchange)
-    withdraw = direction == "buy_cex"
-    action = "Rút" if withdraw else "Nạp"
-    usable = [gate for gate in gates if gate.chain or gate.raw_name]
-    if not usable:
-        lines = [f"{action} {venue}: không có dữ liệu công khai về khóa hay mở"]
-        page = _WITHDRAW_PAGE.get(exchange)
-        if page:
-            lines.append(f"Xem trên sàn: {page.format(coin=base)}")
-        return lines
-
-    def opened(gate: ChainGate) -> bool:
-        return (gate.withdraw_open if withdraw else gate.deposit_open) is True
-
-    def closed(gate: ChainGate) -> bool:
-        return (gate.withdraw_open if withdraw else gate.deposit_open) is False
-
-    open_chains: list[tuple[str, str]] = []
+def _open_chains(gates: list[ChainGate], withdraw: bool) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for gate in usable:
-        if not opened(gate):
+    for gate in gates:
+        flag = gate.withdraw_open if withdraw else gate.deposit_open
+        if flag is not True:
             continue
         label = chain_label(gate.chain) if gate.chain else gate.raw_name
         if label in seen:
             continue
         seen.add(label)
-        open_chains.append((gate.chain, label))
+        found.append((gate.chain, label))
+    return found
 
+
+def _status_line(action: str, venue: str, gates: list[ChainGate], pool_chain: str, withdraw: bool) -> str:
+    open_chains = _open_chains(gates, withdraw)
+    on_pool = [gate for gate in gates if gate.chain == pool_chain]
     pool_label = chain_label(pool_chain)
-    on_pool = [gate for gate in usable if gate.chain == pool_chain]
-    if any(opened(gate) for gate in on_pool):
-        return [
-            f"{action} {venue}: đang mở trên {pool_label}",
-            "Trùng chain với pool, đi thẳng, không cần cầu",
-        ]
+
+    def closed(gate: ChainGate) -> bool:
+        flag = gate.withdraw_open if withdraw else gate.deposit_open
+        return flag is False
+
     if open_chains:
         shown = ", ".join(label for _chain, label in open_chains[:4])
         locked = f" Đang khóa trên {pool_label}." if on_pool and all(closed(gate) for gate in on_pool) else ""
+        return f"{action} {venue}: đang mở trên {shown}.{locked}"
+    if any(closed(gate) for gate in gates):
+        return f"{action} {venue}: đang khóa"
+    return f"{action} {venue}: sàn không ghi rõ trạng thái"
+
+
+def transfer_lines(exchange: str, base: str, direction: str, pool_chain: str, gates: tuple[ChainGate, ...]) -> list[str]:
+    """Withdraw and deposit status for the CEX in this alert.
+
+    Buying the CEX and selling the pool needs a withdrawal. Buying the pool and
+    selling the CEX needs a deposit, which many venues suspend while the CEX
+    price is the higher one.
+    """
+    venue = EXCHANGE_NAMES.get(exchange, exchange)
+    usable = [gate for gate in gates if gate.chain or gate.raw_name]
+    if not usable:
         lines = [
-            f"{action} {venue}: đang mở trên {shown}.{locked}",
-            f"Pool ở {pool_label}, lệch chain",
+            f"Rút {venue}: không có dữ liệu công khai về khóa hay mở",
+            f"Nạp {venue}: không có dữ liệu công khai về khóa hay mở",
         ]
-        named = False
-        for chain, label in open_chains[:3]:
-            routes = _BRIDGES.get(frozenset({chain, pool_chain}), ()) if chain and pool_chain else ()
-            if not routes:
-                continue
-            joined = ", ".join(f"{name} {url}" for name, url in routes[:2])
-            lines.append(f"Cầu {label} → {pool_label}: {joined}")
-            named = True
-        if not named:
-            lines.append("Chưa có cầu riêng cho cặp chain này. Thử https://app.debridge.finance hoặc https://app.across.to")
-        lines.append("Cầu chỉ đi được khi đúng token có trong danh sách. Bản bọc của sàn thường không sang được pool.")
+        page = _WITHDRAW_PAGE.get(exchange)
+        if page:
+            lines.append(f"Xem trên sàn: {page.format(coin=base)}")
         return lines
-    if any(closed(gate) for gate in usable):
-        return [f"{action} {venue}: đang khóa"]
-    return [f"{action} {venue}: sàn không ghi rõ trạng thái"]
+
+    lines = [
+        _status_line("Rút", venue, usable, pool_chain, withdraw=True),
+        _status_line("Nạp", venue, usable, pool_chain, withdraw=False),
+    ]
+    need_withdraw = direction == "buy_cex"
+    pool_label = chain_label(pool_chain)
+    on_pool = [gate for gate in usable if gate.chain == pool_chain]
+
+    def opened(gate: ChainGate) -> bool:
+        flag = gate.withdraw_open if need_withdraw else gate.deposit_open
+        return flag is True
+
+    open_chains = _open_chains(usable, need_withdraw)
+    if any(opened(gate) for gate in on_pool):
+        verb = "rút" if need_withdraw else "nạp"
+        lines.append(f"Trùng chain với pool, {verb} thẳng, không cần cầu")
+        return lines
+    if not open_chains:
+        if need_withdraw:
+            lines.append("Không rút được coin ra khỏi sàn")
+        else:
+            lines.append("Không nạp được coin lên sàn")
+        return lines
+
+    lines.append(f"Pool ở {pool_label}, lệch chain")
+    named = False
+    for chain, label in open_chains[:3]:
+        routes = _BRIDGES.get(frozenset({chain, pool_chain}), ()) if chain and pool_chain else ()
+        if not routes:
+            continue
+        joined = ", ".join(f"{name} {url}" for name, url in routes[:2])
+        if need_withdraw:
+            lines.append(f"Cầu {label} → {pool_label}: {joined}")
+        else:
+            lines.append(f"Cầu {pool_label} → {label}: {joined}")
+        named = True
+    if not named:
+        lines.append("Chưa có cầu riêng cho cặp chain này. Thử https://app.debridge.finance hoặc https://app.across.to")
+    lines.append("Cầu chỉ đi được khi đúng token có trong danh sách. Bản bọc của sàn thường không sang được pool.")
+    return lines
