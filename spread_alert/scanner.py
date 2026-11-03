@@ -1,0 +1,442 @@
+"""Full scan loop: refresh CEX prices, batch DEX quotes, emit spreads."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+
+import aiohttp
+
+from spread_alert.cex import known_exchanges, kucoin_level1, load_coins, load_prices
+from spread_alert.config import Config
+from spread_alert.dex import DexClient
+from spread_alert.logic import (
+    EXCHANGE_NAMES,
+    Opportunity,
+    best_opportunity,
+    cex_spreads,
+    normalize_address,
+    normalize_symbol,
+    raw_spread_pct,
+    repriced,
+    stripped_base,
+    symbols_match,
+)
+from spread_alert.tax import lookup_tax, tax_line
+from spread_alert.universe import assemble_markets
+
+log = logging.getLogger(__name__)
+
+SANITY_SYMBOLS = ("BTC", "ETH", "SOL")
+SANITY_CHAIN = {"BTC": "ethereum", "ETH": "ethereum", "SOL": "solana"}
+
+
+@dataclass(slots=True)
+class ScanResult:
+    markets: int
+    pools: int
+    dex_requests: int
+    duration_sec: float
+    alerts: list[Opportunity] = field(default_factory=list)
+    hidden: int = 0
+    leaders: list[Opportunity] = field(default_factory=list)
+    sanity: list[str] = field(default_factory=list)
+    chains: dict[str, int] = field(default_factory=dict)
+
+
+class Scanner:
+    def __init__(self, config: Config, session: aiohttp.ClientSession, seen_path: Path | None = None) -> None:
+        self.config = config
+        self.session = session
+        self.dex = DexClient(
+            session,
+            per_sec=config.dex_requests_per_sec,
+            batch_size=config.dex_batch_size,
+            min_liquidity=config.min_dex_liquidity_usd,
+        )
+        self.markets = {}
+        self.price_index = {}
+        self.universe_at = 0.0
+        self.seen_path = seen_path or Path.cwd() / ".alerted-coins.txt"
+        self.seen_coins = self._load_seen()
+        self.watch: dict[tuple, tuple[float, float, float]] = {}
+        remembered = sum(1 for key in self.seen_coins if ":" not in key)
+        if remembered:
+            log.info("Đã nhớ %s coin đã báo. Vòng sau bỏ qua những coin này.", remembered)
+
+    async def scan(self, on_alert=None) -> ScanResult:
+        started = time.monotonic()
+        requests_before = self.dex.requests
+        await self._ensure_universe()
+        if not self.markets:
+            return ScanResult(
+                markets=0,
+                pools=0,
+                dex_requests=self.dex.requests - requests_before,
+                duration_sec=time.monotonic() - started,
+            )
+
+        alerts: list[Opportunity] = []
+        hidden = 0
+        repeated = 0
+        lock = asyncio.Lock()
+        pending: asyncio.Queue[Opportunity | None] = asyncio.Queue()
+
+        async def sender() -> None:
+            while True:
+                item = await pending.get()
+                if item is None:
+                    return
+                original = item
+                found = await lookup_tax(self.session, item.chain, item.address)
+                if found is not None:
+                    item = replace(
+                        item,
+                        buy_tax=found.buy,
+                        sell_tax=found.sell,
+                        transfer_tax=found.transfer,
+                    )
+                    async with lock:
+                        for index, existing in enumerate(alerts):
+                            if existing is original:
+                                alerts[index] = item
+                                break
+                    shown = tax_line(item.buy_tax, item.sell_tax, item.transfer_tax)
+                    if shown:
+                        log.info("%s %s", item.base, shown)
+                if on_alert is not None:
+                    await on_alert(item)
+
+        async def on_chunk(chunk: dict) -> None:
+            nonlocal hidden, repeated
+            for (chain, address), pool in chunk.items():
+                market = self.markets.get((chain, address))
+                if market is None:
+                    continue
+                opportunity = best_opportunity(
+                    market.listings,
+                    pool,
+                    token_address=address,
+                    chain=chain,
+                    min_volume=self.config.min_cex_quote_volume_usd,
+                    min_top_notional=self.config.min_top_notional_usd,
+                    max_spread=self.config.max_spread_pct,
+                )
+                if opportunity is None:
+                    continue
+                if opportunity.edge_pct < self.config.spread_threshold_pct:
+                    self.watch.pop(self._watch_key(opportunity), None)
+                    continue
+                if not await self._kucoin_still_open(opportunity):
+                    self.watch.pop(self._watch_key(opportunity), None)
+                    continue
+                async with lock:
+                    if not self._price_confirmed(opportunity):
+                        continue
+                    if not self._due(opportunity):
+                        repeated += 1
+                        continue
+                    extra_room = len(alerts) < self.config.max_alerts_per_scan
+                    bigger = alerts and opportunity.edge_pct > min(item.edge_pct for item in alerts)
+                    if not extra_room and (not bigger or len(alerts) >= self.config.max_alerts_per_scan + 5):
+                        hidden += 1
+                        continue
+                    self._mark(opportunity)
+                    alerts.append(opportunity)
+                pending.put_nowait(opportunity)
+
+        async def _emit_cex() -> None:
+            nonlocal repeated
+            spreads = cex_spreads(
+                self.markets,
+                min_volume=self.config.min_cex_quote_volume_usd,
+                min_top_notional=self.config.min_top_notional_usd,
+                max_spread=self.config.max_spread_pct,
+            )
+            spreads.sort(key=lambda item: item.edge_pct, reverse=True)
+            for opportunity in spreads:
+                if opportunity.edge_pct < self.config.spread_threshold_pct:
+                    self.watch.pop(self._watch_key(opportunity), None)
+                    continue
+                if not await self._kucoin_still_open(opportunity):
+                    self.watch.pop(self._watch_key(opportunity), None)
+                    continue
+                async with lock:
+                    if not self._price_confirmed(opportunity):
+                        continue
+                    if not self._due(opportunity):
+                        repeated += 1
+                        continue
+                    extra_room = len(alerts) < self.config.max_alerts_per_scan
+                    bigger = alerts and opportunity.edge_pct > min(item.edge_pct for item in alerts)
+                    if not extra_room and (not bigger or len(alerts) >= self.config.max_alerts_per_scan + 5):
+                        hidden_cex[0] += 1
+                        continue
+                    self._mark(opportunity)
+                    alerts.append(opportunity)
+                pending.put_nowait(opportunity)
+
+        hidden_cex = [0]
+        sender_task = asyncio.create_task(sender())
+        refresh = asyncio.create_task(self._refresh_loop())
+        pools: dict = {}
+        try:
+            groups: dict[str, dict[str, list]] = defaultdict(dict)
+            for (chain, address), market in self.markets.items():
+                groups[chain][address] = market.listings
+            pools = await self.dex.fetch_pools(groups, on_chunk=on_chunk)
+        except Exception:
+            log.exception("Quét DEX lỗi")
+        finally:
+            refresh.cancel()
+            try:
+                await refresh
+            except asyncio.CancelledError:
+                pass
+            try:
+                await _emit_cex()
+            except Exception:
+                log.exception("Quét chênh lệch giữa các sàn CEX lỗi")
+            pending.put_nowait(None)
+            await sender_task
+
+        found: list[Opportunity] = []
+        for (chain, address), market in self.markets.items():
+            pool = pools.get((chain, address))
+            if pool is None:
+                continue
+            opportunity = best_opportunity(
+                market.listings,
+                pool,
+                token_address=address,
+                chain=chain,
+                min_volume=self.config.min_cex_quote_volume_usd,
+                min_top_notional=self.config.min_top_notional_usd,
+                max_spread=self.config.max_spread_pct,
+            )
+            if opportunity is not None:
+                found.append(opportunity)
+        found.extend(
+            cex_spreads(
+                self.markets,
+                min_volume=self.config.min_cex_quote_volume_usd,
+                min_top_notional=self.config.min_top_notional_usd,
+                max_spread=self.config.max_spread_pct,
+            )
+        )
+        found.sort(key=lambda item: item.edge_pct, reverse=True)
+        alerts.sort(key=lambda item: item.edge_pct, reverse=True)
+        if repeated:
+            log.info("Bỏ %s coin đã báo ở vòng trước", repeated)
+        chain_counts = Counter(chain for chain, _address in self.markets)
+        return ScanResult(
+            markets=len(self.markets),
+            pools=len(pools),
+            dex_requests=self.dex.requests - requests_before,
+            duration_sec=time.monotonic() - started,
+            alerts=alerts,
+            hidden=hidden + hidden_cex[0],
+            leaders=found[:15],
+            sanity=sanity_lines(self.markets, pools),
+            chains=dict(chain_counts),
+        )
+
+    async def _ensure_universe(self) -> None:
+        if self.markets and time.monotonic() - self.universe_at < self.config.universe_refresh_sec:
+            return
+        enabled = [name for name in self.config.exchanges if name in set(known_exchanges())]
+        unknown = [name for name in self.config.exchanges if name not in set(known_exchanges())]
+        for name in unknown:
+            log.warning("Sàn không hỗ trợ: %s", name)
+        log.info("Đang tải hợp đồng và giá từ %s", ", ".join(enabled) or "(không có sàn)")
+        loaded = await asyncio.gather(*(self._load_exchange(name) for name in enabled))
+        coins = [coin for batch in loaded for coin in batch]
+        markets, index, unmapped = assemble_markets(coins, self.config.chains)
+        self.markets = markets
+        self.price_index = index
+        self.universe_at = time.monotonic()
+        chain_counts = Counter(chain for chain, _address in markets)
+        summary = ", ".join(f"{name} {count}" for name, count in chain_counts.most_common(8))
+        log.info("Vũ trụ: %s hợp đồng trên %s chain (%s)", len(markets), len(chain_counts), summary or "trống")
+        if unmapped:
+            skipped = ", ".join(f"{name}:{count}" for name, count in unmapped.most_common(6))
+            log.info("Bỏ qua chain chưa có trên DexScreener: %s", skipped)
+
+    async def _load_exchange(self, exchange: str) -> list:
+        try:
+            coins = await load_coins(self.session, exchange, self.config.quotes)
+        except Exception as exc:
+            log.warning("Bỏ qua %s: %s", EXCHANGE_NAMES.get(exchange, exchange), exc)
+            return []
+        priced = sum(1 for coin in coins if coin.quote is not None)
+        log.info("%s: %s coin, %s có giá %s", EXCHANGE_NAMES.get(exchange, exchange), len(coins), priced, "/".join(self.config.quotes))
+        return coins
+
+    async def _refresh_loop(self) -> None:
+        while True:
+            try:
+                await self._refresh_prices()
+            except Exception as exc:
+                log.warning("Làm mới giá CEX lỗi: %s", exc)
+            await asyncio.sleep(self.config.price_refresh_sec)
+
+    async def _refresh_prices(self) -> None:
+        exchanges = sorted({exchange for exchange, _base in self.price_index})
+
+        async def one(exchange: str):
+            try:
+                return exchange, await load_prices(self.session, exchange, self.config.quotes)
+            except Exception as exc:
+                log.warning("Giá %s: %s", exchange, exc)
+                return exchange, None
+
+        results = await asyncio.gather(*(one(exchange) for exchange in exchanges))
+        for exchange, prices in results:
+            if not prices:
+                continue
+            for base, quote in prices.items():
+                for listing in self.price_index.get((exchange, base), ()):
+                    listing.last = quote.last
+                    listing.bid = quote.bid
+                    listing.ask = quote.ask
+                    listing.quote_volume = quote.quote_volume
+                    listing.top_notional = quote.top_notional
+                    listing.bid_notional = quote.bid_notional
+                    listing.ask_notional = quote.ask_notional
+                    listing.low = quote.low
+                    listing.high = quote.high
+
+    def _watch_key(self, opportunity: Opportunity) -> tuple:
+        return (
+            opportunity.exchange,
+            opportunity.sell_exchange,
+            opportunity.base,
+            opportunity.chain,
+            opportunity.address,
+            opportunity.direction,
+        )
+
+    async def _kucoin_still_open(self, opportunity: Opportunity) -> bool:
+        """KuCoin alerts use a fresh last trade, the price on the KuCoin page.
+
+        allTickers sometimes prints a tiny ask that the page never traded.
+        """
+        if opportunity.exchange != "kucoin" or opportunity.direction == "cex_cex":
+            return True
+        if self.session is None:
+            return False
+        symbol = opportunity.pair.replace("/", "-")
+        try:
+            fresh = await kucoin_level1(self.session, symbol)
+        except Exception as exc:
+            log.warning("KuCoin %s: không đối lại được giá, bỏ tin (%s)", opportunity.base, exc)
+            return False
+        if fresh is None:
+            return False
+        matched, divisor = symbols_match(opportunity.base, opportunity.dex_symbol)
+        if not matched or divisor <= 0:
+            return False
+        last = fresh.last / divisor
+        bid = fresh.bid / divisor if fresh.bid and fresh.bid > 0 else None
+        ask = fresh.ask / divisor if fresh.ask and fresh.ask > 0 else None
+        priced = repriced(
+            opportunity.direction,
+            last,
+            bid,
+            ask,
+            opportunity.dex_price,
+            bid_notional=fresh.bid_notional,
+            ask_notional=fresh.ask_notional,
+            min_notional=self.config.min_top_notional_usd,
+        )
+        if priced is None or priced[0] < self.config.spread_threshold_pct:
+            return False
+        opportunity.edge_pct, opportunity.cex_price = priced
+        return True
+
+    def _price_confirmed(self, opportunity: Opportunity) -> bool:
+        """Send only after a later price refresh still shows the same spread.
+
+        One ticker poll can print a book price the exchange page never traded.
+        """
+        key = self._watch_key(opportunity)
+        now = time.monotonic()
+        previous = self.watch.get(key)
+        self.watch[key] = (opportunity.edge_pct, opportunity.cex_price, now)
+        if previous is None:
+            return False
+        prev_edge, prev_px, seen_at = previous
+        if now - seen_at < self.config.price_refresh_sec:
+            return False
+        if prev_edge < self.config.spread_threshold_pct or prev_px <= 0:
+            return False
+        return abs(opportunity.cex_price - prev_px) / prev_px <= 0.03
+
+    def _coin_keys(self, opportunity: Opportunity) -> set[str]:
+        symbol = normalize_symbol(opportunity.base)
+        keys = {stripped_base(symbol) or symbol} if symbol else set()
+        if opportunity.address:
+            keys.add(f"{opportunity.chain}:{normalize_address(opportunity.address)}")
+        return keys
+
+    def _due(self, opportunity: Opportunity) -> bool:
+        """A coin sent on an earlier scan, even after a restart, stays quiet."""
+        keys = self._coin_keys(opportunity)
+        return not keys or keys.isdisjoint(self.seen_coins)
+
+    def _mark(self, opportunity: Opportunity) -> None:
+        fresh = [key for key in self._coin_keys(opportunity) if key not in self.seen_coins]
+        if not fresh:
+            return
+        self.seen_coins.update(fresh)
+        try:
+            self.seen_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.seen_path.open("a", encoding="utf-8") as handle:
+                for key in fresh:
+                    handle.write(key + "\n")
+                handle.flush()
+        except OSError as exc:
+            log.warning("Không lưu được danh sách coin đã báo: %s", exc)
+
+    def _load_seen(self) -> set[str]:
+        if not self.seen_path.is_file():
+            return set()
+        try:
+            text = self.seen_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            log.warning("Không đọc được danh sách coin đã báo: %s", exc)
+            return set()
+        return {line.strip() for line in text.splitlines() if line.strip()}
+
+
+def sanity_lines(markets: dict, pools: dict) -> list[str]:
+    lines = []
+    for symbol in SANITY_SYMBOLS:
+        best = None
+        preferred_chain = SANITY_CHAIN[symbol]
+        for (chain, _address), market in markets.items():
+            pool = pools.get((chain, _address))
+            if pool is None:
+                continue
+            listing = next((item for item in market.listings if item.base == symbol), None)
+            if listing is None:
+                continue
+            spread = raw_spread_pct(listing, pool)
+            if spread is None:
+                continue
+            score = (chain == preferred_chain, pool.liquidity_usd)
+            if best is None or score > best[0]:
+                best = (score, listing, pool, spread, chain)
+        if best is None:
+            continue
+        _score, listing, pool, spread, chain = best
+        venue = EXCHANGE_NAMES.get(listing.exchange, listing.exchange)
+        lines.append(
+            f"Đối chiếu {symbol} {venue}/{chain}: CEX ${listing.last:,.4f} "
+            f"DEX ${pool.price_usd:,.4f} lệch {spread:+.2f}% (thanh khoản ${pool.liquidity_usd:,.0f})"
+        )
+    return lines

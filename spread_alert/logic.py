@@ -1,0 +1,1025 @@
+"""Pure helpers: chain ids, symbol matching, and spread math."""
+
+from __future__ import annotations
+
+import re
+import statistics
+from dataclasses import dataclass
+
+# Exchange network name -> DexScreener chain id.
+# Only aliases that are unambiguous. Unknown networks are skipped.
+CHAIN_ALIASES: dict[str, str] = {
+    "eth": "ethereum",
+    "erc20": "ethereum",
+    "ethereum": "ethereum",
+    "bsc": "bsc",
+    "bep20": "bsc",
+    "bnb smart chain": "bsc",
+    "sol": "solana",
+    "solana": "solana",
+    "base": "base",
+    "baseevm": "base",
+    "matic": "polygon",
+    "polygon": "polygon",
+    "polygon pos": "polygon",
+    "avax_c": "avalanche",
+    "avaxc": "avalanche",
+    "avaxc-chain": "avalanche",
+    "avaxcchain": "avalanche",
+    "c-chain": "avalanche",
+    "arbevm": "arbitrum",
+    "arbitrum": "arbitrum",
+    "arbitrumone": "arbitrum",
+    "arb": "arbitrum",
+    "op": "optimism",
+    "optimism": "optimism",
+    "opeth": "optimism",
+    "linea": "linea",
+    "lineaeth": "linea",
+    "zksync": "zksync",
+    "zksyncera": "zksync",
+    "zksera": "zksync",
+    "zksync2": "zksync",
+    "scroll": "scroll",
+    "blast": "blast",
+    "blasteth": "blast",
+    "mantle": "mantle",
+    "mnt": "mantle",
+    "trx": "tron",
+    "trc20": "tron",
+    "tron": "tron",
+    "ton": "ton",
+    "ton2": "ton",
+    "sui": "sui",
+    "suinew": "sui",
+    "apt": "aptos",
+    "aptos": "aptos",
+    "ftm": "fantom",
+    "fantom": "fantom",
+    "cro": "cronos",
+    "cronos": "cronos",
+    "cronoschain": "cronos",
+    "xdai": "gnosis",
+    "gnosis": "gnosis",
+    "celo": "celo",
+    "glmr": "moonbeam",
+    "moonbeam": "moonbeam",
+    "movr": "moonriver",
+    "moonriver": "moonriver",
+    "kava": "kava",
+    "kavaevm": "kava",
+    "metis": "metis",
+    "core": "core",
+    "coredao": "core",
+    "opbnb": "opbnb",
+    "pulse": "pulsechain",
+    "pulsechain": "pulsechain",
+    "manta": "manta",
+    "mantanetwork": "manta",
+    "merlin": "merlin",
+    "taiko": "taiko",
+    "mode": "mode",
+    "sei": "sei",
+    "seievm": "sei",
+    "sonic": "sonic",
+    "bera": "berachain",
+    "berachain": "berachain",
+    "near": "near",
+    "nearprotocol": "near",
+    "starknet": "starknet",
+    "worldchain": "worldchain",
+    "unichain": "unichain",
+    "abstract": "abstract",
+    "abs": "abstract",
+    "hyperevm": "hyperevm",
+    "hype": "hyperevm",
+    "soneium": "soneium",
+    "ink": "ink",
+    "apechain": "apechain",
+    "kaia": "kaia",
+    "klay": "kaia",
+    "chz2": "chiliz",
+    "chiliz": "chiliz",
+    "cap20": "chiliz",
+    "ron": "ronin",
+    "ronin": "ronin",
+    "morph": "morph",
+    "kcc": "kcc",
+    "aurora": "aurora",
+    "scrl": "scroll",
+}
+
+# Native gas token -> wrapped contract used when the CEX leaves the address blank.
+WRAPPED_NATIVE: dict[tuple[str, str], str] = {
+    ("ethereum", "ETH"): "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+    ("bsc", "BNB"): "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    ("polygon", "POL"): "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
+    ("polygon", "MATIC"): "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
+    ("avalanche", "AVAX"): "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+    ("arbitrum", "ETH"): "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+    ("optimism", "ETH"): "0x4200000000000000000000000000000000000006",
+    ("base", "ETH"): "0x4200000000000000000000000000000000000006",
+    ("linea", "ETH"): "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f",
+    ("scroll", "ETH"): "0x5300000000000000000000000000000000000004",
+    ("blast", "ETH"): "0x4300000000000000000000000000000000000004",
+    ("zksync", "ETH"): "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91",
+    ("solana", "SOL"): "So11111111111111111111111111111111111111112",
+    ("tron", "TRX"): "TNUC9Qb1rRpS5CbWLmNMxXBjyFoydXjWFR",
+    ("mantle", "MNT"): "0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8",
+    ("fantom", "FTM"): "0x21be370d5312f44cb42ce377bc9b8a0cef1a4c83",
+    ("cronos", "CRO"): "0x5c7f8a570d578ed84e63fdfa7b1ee72deae1ae23",
+    ("sui", "SUI"): "0x2::sui::SUI",
+    ("aptos", "APT"): "0x1::aptos_coin::AptosCoin",
+}
+
+_PLACEHOLDERS = {
+    "",
+    "0x",
+    "0x0",
+    "0x0000000000000000000000000000000000000000",
+    "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "null",
+    "none",
+    "-",
+}
+
+_WRAPPED_BASES = {"ETH", "BTC", "BNB", "SOL", "MATIC", "POL", "AVAX", "FTM", "CRO", "MNT", "BERA", "TRX", "S"}
+_MULTIPLIER = re.compile(r"^(1000000|100000|10000|1000)([A-Z][A-Z0-9]{1,20})$")
+_LEVERAGED = re.compile(r"^[A-Z0-9]{2,15}(2L|2S|3L|3S|5L|5S)$")
+
+STABLES = {
+    "USDT",
+    "USDC",
+    "DAI",
+    "FDUSD",
+    "TUSD",
+    "USDE",
+    "USD1",
+    "BUSD",
+    "USDP",
+    "FRAX",
+    "PYUSD",
+    "GUSD",
+    "USDD",
+    "EURC",
+    "EURT",
+    "USDY",
+    "USDS",
+    "RLUSD",
+    "USD",
+    "USDP",
+    "CRVUSD",
+    "GHO",
+    "USDG",
+    "XUSD",
+}
+
+FIAT = {
+    "EUR",
+    "GBP",
+    "TRY",
+    "BRL",
+    "AUD",
+    "RUB",
+    "UAH",
+    "PLN",
+    "ARS",
+    "NGN",
+    "ZAR",
+    "VND",
+    "IDR",
+    "JPY",
+    "KRW",
+    "MXN",
+    "COP",
+    "CZK",
+    "CAD",
+    "CHF",
+    "SGD",
+    "HKD",
+    "INR",
+}
+
+MAJOR_QUOTES = STABLES | {
+    "WETH",
+    "ETH",
+    "WBNB",
+    "BNB",
+    "WSOL",
+    "SOL",
+    "WBTC",
+    "BTC",
+    "WMATIC",
+    "POL",
+    "MATIC",
+    "WAVAX",
+    "AVAX",
+    "WTRX",
+    "TRX",
+    "SUI",
+    "TON",
+}
+
+EXCHANGE_NAMES = {
+    "binance": "Binance",
+    "gate": "Gate.io",
+    "kucoin": "KuCoin",
+    "bitget": "Bitget",
+    "htx": "HTX",
+    "mexc": "MEXC",
+    "okx": "OKX",
+    "bybit": "Bybit",
+}
+
+
+def chain_id(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    lowered = raw.strip().lower()
+    squashed = re.sub(r"[\s_\-]+", "", lowered)
+    return CHAIN_ALIASES.get(lowered) or CHAIN_ALIASES.get(squashed)
+
+
+def normalize_address(address: str) -> str:
+    value = address.strip()
+    if value.startswith("0x") and "::" not in value:
+        return value.lower()
+    return value
+
+
+def clean_address(address: str | None) -> str | None:
+    if address is None:
+        return None
+    value = str(address).strip()
+    if value.lower() in _PLACEHOLDERS:
+        return None
+    if len(value) < 6:
+        return None
+    return normalize_address(value)
+
+
+def wrapped_native(chain: str, base: str) -> str | None:
+    return WRAPPED_NATIVE.get((chain, base.upper()))
+
+
+def normalize_symbol(symbol: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", symbol.upper())
+
+
+def symbols_match(cex_base: str, dex_symbol: str) -> tuple[bool, float]:
+    """Return (matches, divisor applied to the CEX price).
+
+    Divisor converts the CEX quote into the same unit the DEX pool uses.
+    Binance lists 1000PEPE as the price of 1000 tokens; the pool is usually 1 PEPE.
+    """
+    cex = normalize_symbol(cex_base)
+    dex = normalize_symbol(dex_symbol)
+    if not cex or not dex:
+        return False, 1.0
+    if cex == dex:
+        return True, 1.0
+    if _is_wrapped_alias(dex, cex) or _is_wrapped_alias(cex, dex):
+        return True, 1.0
+    scaled = _MULTIPLIER.fullmatch(cex)
+    if scaled and (scaled.group(2) == dex or _is_wrapped_alias(dex, scaled.group(2))):
+        return True, float(scaled.group(1))
+    scaled = _MULTIPLIER.fullmatch(dex)
+    if scaled and (scaled.group(2) == cex or _is_wrapped_alias(cex, scaled.group(2))):
+        return True, 1.0 / float(scaled.group(1))
+    return False, 1.0
+
+
+def _is_wrapped_alias(maybe_wrapped: str, underlying: str) -> bool:
+    return maybe_wrapped == f"W{underlying}" and underlying in _WRAPPED_BASES
+
+
+def is_ignored_asset(base: str, name: str = "") -> bool:
+    symbol = normalize_symbol(base)
+    if not symbol or symbol in STABLES or symbol in FIAT:
+        return True
+    if _LEVERAGED.fullmatch(symbol):
+        return True
+    label = name.lower()
+    if "leveraged" in label or "leverage token" in label:
+        return True
+    return False
+
+
+def anchor_indexes(prices: list[float], tolerance: float = 0.25) -> list[int] | None:
+    """Indexes of prices that sit near the median.
+
+    Returns None when there is no majority, so a shared ticker symbol is not
+    treated as one asset.
+    """
+    if not prices:
+        return None
+    midpoint = statistics.median(prices)
+    if midpoint <= 0:
+        return None
+    chosen = [index for index, price in enumerate(prices) if abs(price - midpoint) / midpoint <= tolerance]
+    if len(chosen) * 2 < len(prices):
+        return None
+    return chosen
+
+
+def stripped_base(base: str) -> str | None:
+    matched = _MULTIPLIER.fullmatch(normalize_symbol(base))
+    if not matched:
+        return None
+    return matched.group(2)
+
+
+@dataclass(frozen=True, slots=True)
+class ChainGate:
+    """Deposit and withdrawal status for one network on a CEX."""
+
+    chain: str
+    raw_name: str
+    withdraw_open: bool | None
+    deposit_open: bool | None
+
+
+@dataclass(slots=True)
+class Listing:
+    exchange: str
+    base: str
+    pair: str
+    quote: str
+    last: float
+    bid: float | None = None
+    ask: float | None = None
+    quote_volume: float | None = None
+    top_notional: float | None = None
+    bid_notional: float | None = None
+    ask_notional: float | None = None
+    low: float | None = None
+    high: float | None = None
+    name: str = ""
+    gates: tuple[ChainGate, ...] = ()
+
+
+@dataclass(slots=True)
+class Market:
+    chain: str
+    address: str
+    listings: list[Listing]
+
+
+@dataclass(frozen=True, slots=True)
+class Pool:
+    chain: str
+    dex: str
+    url: str
+    base_symbol: str
+    quote_symbol: str
+    price_usd: float
+    liquidity_usd: float
+    liquidity_base: float | None = None
+    liquidity_quote: float | None = None
+    volume_h24: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Opportunity:
+    exchange: str
+    base: str
+    pair: str
+    chain: str
+    address: str
+    dex: str
+    url: str
+    direction: str
+    edge_pct: float
+    cex_price: float
+    dex_price: float
+    liquidity_usd: float
+    quote_volume: float | None
+    dex_symbol: str
+    quote_symbol: str
+    gates: tuple[ChainGate, ...] = ()
+    liquidity_base: float | None = None
+    liquidity_quote: float | None = None
+    dex_volume_h24: float | None = None
+    buy_tax: float | None = None
+    sell_tax: float | None = None
+    transfer_tax: float | None = None
+    sell_exchange: str = ""
+    sell_gates: tuple[ChainGate, ...] = ()
+    sell_volume: float | None = None
+
+
+def _optional_amount(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number <= 0:
+        return None
+    return number
+
+
+def pick_pool(pairs: list[dict], address: str, listings: list[Listing], min_liquidity: float) -> Pool | None:
+    wanted = normalize_address(address)
+    best: Pool | None = None
+    for pair in pairs:
+        base = pair.get("baseToken") or {}
+        quote = pair.get("quoteToken") or {}
+        base_addr = clean_address(str(base.get("address") or ""))
+        if base_addr != wanted:
+            continue
+        quote_symbol = normalize_symbol(str(quote.get("symbol") or ""))
+        if quote_symbol not in MAJOR_QUOTES:
+            continue
+        base_symbol = str(base.get("symbol") or "")
+        if not any(symbols_match(item.base, base_symbol)[0] for item in listings):
+            continue
+        book = pair.get("liquidity") or {}
+        try:
+            price = float(pair["priceUsd"])
+            liquidity = float(book.get("usd") or 0)
+        except (TypeError, ValueError, KeyError):
+            continue
+        if price <= 0 or liquidity < min_liquidity:
+            continue
+        pool = Pool(
+            chain=str(pair.get("chainId") or ""),
+            dex=str(pair.get("dexId") or "dex"),
+            url=str(pair.get("url") or ""),
+            base_symbol=base_symbol,
+            quote_symbol=str(quote.get("symbol") or ""),
+            price_usd=price,
+            liquidity_usd=liquidity,
+            liquidity_base=_optional_amount(book.get("base")),
+            liquidity_quote=_optional_amount(book.get("quote")),
+            volume_h24=_optional_amount((pair.get("volume") or {}).get("h24")),
+        )
+        if best is None or pool.liquidity_usd > best.liquidity_usd:
+            best = pool
+    return best
+
+
+def transfer_open(gates: tuple[ChainGate, ...] | list[ChainGate], chain: str, *, withdraw: bool) -> bool:
+    """True only when this venue can move the coin on that exact chain."""
+    for gate in gates:
+        if gate.chain != chain:
+            continue
+        flag = gate.withdraw_open if withdraw else gate.deposit_open
+        if flag is True:
+            return True
+    return False
+
+
+def route_open(gates: tuple[ChainGate, ...] | list[ChainGate], pool_chain: str, direction: str) -> bool:
+    """DEX/CEX arb needs the pool chain, and the transfer that trade uses, to be open."""
+    return transfer_open(gates, pool_chain, withdraw=direction == "buy_cex")
+
+
+def route_headline(direction: str, pool_chain: str, gates: tuple[ChainGate, ...] | list[ChainGate]) -> str | None:
+    """Green status line. A closed same-chain transfer is not alerted, so there is no red line."""
+    if direction == "buy_cex" and transfer_open(gates, pool_chain, withdraw=True):
+        return "CEX cho rút cùng chain"
+    if direction == "buy_dex" and transfer_open(gates, pool_chain, withdraw=False):
+        return "CEX cho nạp cùng chain"
+    return None
+
+
+def best_opportunity(
+    listings: list[Listing],
+    pool: Pool,
+    *,
+    token_address: str,
+    chain: str,
+    min_volume: float,
+    min_top_notional: float,
+    max_spread: float,
+) -> Opportunity | None:
+    best: Opportunity | None = None
+    for listing in listings:
+        opportunity = _opportunity_for(
+            listing,
+            pool,
+            token_address=token_address,
+            chain=chain,
+            min_volume=min_volume,
+            min_top_notional=min_top_notional,
+        )
+        if opportunity is None or opportunity.edge_pct > max_spread:
+            continue
+        if not route_open(opportunity.gates, opportunity.chain, opportunity.direction):
+            continue
+        if best is None or opportunity.edge_pct > best.edge_pct:
+            best = opportunity
+    return best
+
+
+def cex_spreads(
+    markets: dict,
+    *,
+    min_volume: float,
+    min_top_notional: float,
+    max_spread: float,
+) -> list[Opportunity]:
+    """CEX versus CEX on one contract, only when withdraw and deposit share that chain."""
+    found: list[Opportunity] = []
+    seen: set[tuple] = set()
+    for market in markets.values():
+        listings = list(market.listings)
+        for buy in listings:
+            for sell in listings:
+                if buy.exchange == sell.exchange:
+                    continue
+                opportunity = _cex_pair(
+                    buy,
+                    sell,
+                    chain=market.chain,
+                    address=market.address,
+                    min_volume=min_volume,
+                    min_top_notional=min_top_notional,
+                )
+                if opportunity is None or opportunity.edge_pct > max_spread:
+                    continue
+                key = (opportunity.exchange, opportunity.sell_exchange, opportunity.chain, opportunity.address)
+                if key in seen:
+                    continue
+                seen.add(key)
+                found.append(opportunity)
+    return found
+
+
+def _listing_tradable(listing: Listing, min_volume: float, min_top_notional: float) -> bool:
+    if listing.last <= 0:
+        return False
+    if listing.quote_volume is not None and listing.quote_volume < min_volume:
+        return False
+    if listing.top_notional is not None and listing.top_notional < min_top_notional:
+        return False
+    return True
+
+
+def _cex_pair(
+    buy: Listing,
+    sell: Listing,
+    *,
+    chain: str,
+    address: str,
+    min_volume: float,
+    min_top_notional: float,
+) -> Opportunity | None:
+    if not _listing_tradable(buy, min_volume, min_top_notional):
+        return None
+    if not _listing_tradable(sell, min_volume, min_top_notional):
+        return None
+    if not transfer_open(buy.gates, chain, withdraw=True):
+        return None
+    if not transfer_open(sell.gates, chain, withdraw=False):
+        return None
+    matched, divisor = symbols_match(buy.base, sell.base)
+    if not matched or divisor <= 0:
+        return None
+    buy_last = buy.last / divisor
+    sell_last = sell.last
+    if buy_last <= 0 or sell_last <= 0:
+        return None
+    buy_ask = buy.ask / divisor if buy.ask and buy.ask > 0 else None
+    sell_bid = sell.bid if sell.bid and sell.bid > 0 else None
+    buy_state = _book_state(
+        buy_last, buy_ask, buy.ask_notional, buy.low, buy.high, min_top_notional, worse="above"
+    )
+    sell_state = _book_state(
+        sell_last, sell_bid, sell.bid_notional, sell.low, sell.high, min_top_notional, worse="below"
+    )
+    if buy_state == "block" or sell_state == "block":
+        return None
+    buy_px = buy_ask if buy_state == "use" and buy_ask else buy_last
+    sell_px = sell_bid if sell_state == "use" and sell_bid else sell_last
+    if buy_px <= 0:
+        return None
+    executable = (sell_px - buy_px) / buy_px * 100.0
+    last_edge = (sell_last - buy_last) / buy_last * 100.0
+    if executable <= 0 or last_edge <= 0:
+        return None
+    edge = min(executable, last_edge)
+    return Opportunity(
+        exchange=buy.exchange,
+        base=buy.base,
+        pair=buy.pair,
+        chain=chain,
+        address=address,
+        dex=sell.exchange,
+        url="",
+        direction="cex_cex",
+        edge_pct=edge,
+        cex_price=buy_px,
+        dex_price=sell_px,
+        liquidity_usd=0,
+        quote_volume=buy.quote_volume,
+        dex_symbol=sell.base,
+        quote_symbol=sell.quote or buy.quote,
+        gates=tuple(buy.gates),
+        sell_exchange=sell.exchange,
+        sell_gates=tuple(sell.gates),
+        sell_volume=sell.quote_volume,
+    )
+
+
+_BOOK_GAP = 0.02
+
+
+def _book_state(
+    last: float,
+    price: float | None,
+    notional: float | None,
+    low: float | None,
+    high: float | None,
+    min_notional: float,
+    *,
+    worse: str,
+) -> str:
+    """How a bid or ask may affect the spread.
+
+    ignore: missing, only a few dollars, outside today's range, or a gift price
+    too far from the last trade to trust.
+    block: a real quote worse than the last trade by more than 2%.
+    use: close enough to the last trade to price the order.
+    """
+    if price is None or price <= 0 or last <= 0:
+        return "ignore"
+    if low and low > 0 and price < low * 0.99:
+        return "ignore"
+    if high and high > 0 and price > high * 1.01:
+        return "ignore"
+    if notional is not None and min_notional > 0 and notional < min_notional:
+        return "ignore"
+    if abs(price - last) / last <= _BOOK_GAP:
+        return "use"
+    if worse == "above" and price > last:
+        return "block"
+    if worse == "below" and price < last:
+        return "block"
+    return "ignore"
+
+
+def _priced_edge(
+    last: float,
+    bid: float | None,
+    ask: float | None,
+    other: float,
+    *,
+    bid_notional: float | None = None,
+    ask_notional: float | None = None,
+    low: float | None = None,
+    high: float | None = None,
+    min_notional: float = 0,
+) -> tuple[str, float, float] | None:
+    """Spread against the last trade, which is the price shown on the exchange page.
+
+    A dust order or a print outside the day's range is not a price. A real bid
+    or ask more than 2% from the last trade blocks that direction.
+    """
+    if last <= 0 or other <= 0:
+        return None
+    ask_state = _book_state(last, ask, ask_notional, low, high, min_notional, worse="above")
+    bid_state = _book_state(last, bid, bid_notional, low, high, min_notional, worse="below")
+    last_buy = (other - last) / last * 100.0
+    last_sell = (last - other) / other * 100.0
+
+    def finish(direction: str, last_edge: float, state: str, book: float | None):
+        if last_edge <= 0 or state == "block":
+            return None
+        if state == "use" and book and book > 0:
+            if direction == "buy_cex":
+                book_edge = (other - book) / book * 100.0
+            else:
+                book_edge = (book - other) / other * 100.0
+            if book_edge <= 0:
+                return None
+            return direction, min(book_edge, last_edge), book
+        return direction, last_edge, last
+
+    if last_buy >= last_sell:
+        opened = finish("buy_cex", last_buy, ask_state, ask)
+        return opened if opened is not None else finish("buy_dex", last_sell, bid_state, bid)
+    opened = finish("buy_dex", last_sell, bid_state, bid)
+    return opened if opened is not None else finish("buy_cex", last_buy, ask_state, ask)
+
+
+def repriced(
+    direction: str,
+    last: float,
+    bid: float | None,
+    ask: float | None,
+    other: float,
+    *,
+    bid_notional: float | None = None,
+    ask_notional: float | None = None,
+    low: float | None = None,
+    high: float | None = None,
+    min_notional: float = 0,
+) -> tuple[float, float] | None:
+    """Fresh edge for an alert already pointing one way. None if that way is gone."""
+    priced = _priced_edge(
+        last,
+        bid,
+        ask,
+        other,
+        bid_notional=bid_notional,
+        ask_notional=ask_notional,
+        low=low,
+        high=high,
+        min_notional=min_notional,
+    )
+    if priced is None or priced[0] != direction:
+        return None
+    return priced[1], priced[2]
+
+
+def raw_spread_pct(listing: Listing, pool: Pool) -> float | None:
+    matched, divisor = symbols_match(listing.base, pool.base_symbol)
+    if not matched or divisor <= 0 or listing.last <= 0:
+        return None
+    last = listing.last / divisor
+    if last <= 0:
+        return None
+    return (pool.price_usd - last) / last * 100.0
+
+
+def _opportunity_for(
+    listing: Listing,
+    pool: Pool,
+    *,
+    token_address: str,
+    chain: str,
+    min_volume: float,
+    min_top_notional: float,
+) -> Opportunity | None:
+    matched, divisor = symbols_match(listing.base, pool.base_symbol)
+    if not matched or divisor <= 0 or listing.last <= 0:
+        return None
+    if listing.quote_volume is not None and listing.quote_volume < min_volume:
+        return None
+    if listing.top_notional is not None and listing.top_notional < min_top_notional:
+        return None
+    last = listing.last / divisor
+    bid = listing.bid / divisor if listing.bid and listing.bid > 0 else None
+    ask = listing.ask / divisor if listing.ask and listing.ask > 0 else None
+    priced = _priced_edge(
+        last,
+        bid,
+        ask,
+        pool.price_usd,
+        bid_notional=listing.bid_notional,
+        ask_notional=listing.ask_notional,
+        low=(listing.low / divisor) if listing.low and listing.low > 0 else None,
+        high=(listing.high / divisor) if listing.high and listing.high > 0 else None,
+        min_notional=min_top_notional,
+    )
+    if priced is None:
+        return None
+    direction, edge, cex_price = priced
+    return Opportunity(
+        exchange=listing.exchange,
+        base=listing.base,
+        pair=listing.pair,
+        chain=pool.chain or chain,
+        address=token_address,
+        dex=pool.dex,
+        url=pool.url,
+        direction=direction,
+        edge_pct=edge,
+        cex_price=cex_price,
+        dex_price=pool.price_usd,
+        liquidity_usd=pool.liquidity_usd,
+        quote_volume=listing.quote_volume,
+        liquidity_base=pool.liquidity_base,
+        liquidity_quote=pool.liquidity_quote,
+        dex_volume_h24=pool.volume_h24,
+        dex_symbol=pool.base_symbol,
+        quote_symbol=pool.quote_symbol,
+        gates=tuple(listing.gates),
+    )
+
+
+_CHAIN_LABELS = {
+    "ethereum": "Ethereum",
+    "bsc": "BSC",
+    "solana": "Solana",
+    "arbitrum": "Arbitrum",
+    "optimism": "Optimism",
+    "base": "Base",
+    "polygon": "Polygon",
+    "avalanche": "Avalanche",
+    "tron": "Tron",
+    "ton": "TON",
+    "sui": "Sui",
+    "aptos": "Aptos",
+    "linea": "Linea",
+    "scroll": "Scroll",
+    "zksync": "zkSync",
+    "blast": "Blast",
+    "mantle": "Mantle",
+}
+
+# Well-known routes only. A bridge still has to list that exact token.
+_BRIDGES: dict[frozenset[str], tuple[tuple[str, str], ...]] = {
+    frozenset({"ethereum", "arbitrum"}): (("Arbitrum Bridge", "https://bridge.arbitrum.io"),),
+    frozenset({"ethereum", "optimism"}): (("Optimism Bridge", "https://app.optimism.io/bridge"),),
+    frozenset({"ethereum", "base"}): (
+        ("Superbridge", "https://superbridge.app"),
+        ("Across", "https://app.across.to"),
+    ),
+    frozenset({"ethereum", "polygon"}): (("Polygon Portal", "https://portal.polygon.technology/bridge"),),
+    frozenset({"ethereum", "bsc"}): (
+        ("deBridge", "https://app.debridge.finance"),
+        ("Stargate", "https://stargate.finance/bridge"),
+    ),
+    frozenset({"ethereum", "avalanche"}): (
+        ("Core", "https://core.app/bridge"),
+        ("Stargate", "https://stargate.finance/bridge"),
+    ),
+    frozenset({"ethereum", "linea"}): (("Linea Bridge", "https://bridge.linea.build"),),
+    frozenset({"ethereum", "scroll"}): (("Scroll Bridge", "https://scroll.io/bridge"),),
+    frozenset({"ethereum", "zksync"}): (("zkSync Bridge", "https://portal.zksync.io/bridge"),),
+    frozenset({"ethereum", "blast"}): (("Blast Bridge", "https://blast.io/bridge"),),
+    frozenset({"ethereum", "mantle"}): (("Mantle Bridge", "https://app.mantle.xyz/bridge"),),
+    frozenset({"ethereum", "solana"}): (
+        ("deBridge", "https://app.debridge.finance"),
+        ("Mayan", "https://mayan.finance"),
+    ),
+    frozenset({"ethereum", "tron"}): (("deBridge", "https://app.debridge.finance"),),
+    frozenset({"arbitrum", "base"}): (("Across", "https://app.across.to"),),
+    frozenset({"arbitrum", "optimism"}): (("Across", "https://app.across.to"), ("Stargate", "https://stargate.finance/bridge")),
+    frozenset({"arbitrum", "polygon"}): (("Across", "https://app.across.to"),),
+    frozenset({"base", "optimism"}): (("Superbridge", "https://superbridge.app"), ("Across", "https://app.across.to")),
+    frozenset({"bsc", "arbitrum"}): (("deBridge", "https://app.debridge.finance"), ("Stargate", "https://stargate.finance/bridge")),
+    frozenset({"bsc", "solana"}): (("deBridge", "https://app.debridge.finance"),),
+}
+
+_WITHDRAW_PAGE = {
+    "binance": "https://www.binance.com/en/my/wallet/account/main/withdrawal/crypto/{coin}",
+    "gate": "https://www.gate.io/myaccount/withdraw/{coin}",
+    "kucoin": "https://www.kucoin.com/assets/withdraw/{coin}",
+    "bitget": "https://www.bitget.com/asset/withdraw?coinId=2&coin={coin}",
+    "htx": "https://www.htx.com/finance/withdraw/",
+    "mexc": "https://www.mexc.com/assets/withdraw/{coin}",
+    "okx": "https://www.okx.com/balance/withdrawal/{coin}",
+    "bybit": "https://www.bybit.com/user/assets/withdraw?coin={coin}",
+}
+
+
+def chain_label(chain: str) -> str:
+    return _CHAIN_LABELS.get(chain, chain or "?")
+
+
+def flag_open(value: object) -> bool | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "allowed", "normal"}:
+        return True
+    if text in {"0", "false", "no", "prohibited", "suspended", "delisted"}:
+        return False
+    return None
+
+
+def make_gate(raw_name: str, withdraw: object, deposit: object) -> ChainGate:
+    return ChainGate(
+        chain=chain_id(raw_name) or "",
+        raw_name=raw_name,
+        withdraw_open=flag_open(withdraw),
+        deposit_open=flag_open(deposit),
+    )
+
+
+def _open_chains(gates: list[ChainGate], withdraw: bool) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for gate in gates:
+        flag = gate.withdraw_open if withdraw else gate.deposit_open
+        if flag is not True:
+            continue
+        label = chain_label(gate.chain) if gate.chain else gate.raw_name
+        if label in seen:
+            continue
+        seen.add(label)
+        found.append((gate.chain, label))
+    return found
+
+
+def _status_line(action: str, venue: str, gates: list[ChainGate], pool_chain: str, withdraw: bool) -> list[str]:
+    open_chains = _open_chains(gates, withdraw)
+    on_pool = [gate for gate in gates if gate.chain == pool_chain]
+    pool_label = chain_label(pool_chain)
+
+    def closed(gate: ChainGate) -> bool:
+        flag = gate.withdraw_open if withdraw else gate.deposit_open
+        return flag is False
+
+    lines: list[str] = []
+    if open_chains:
+        shown = ", ".join(label for _chain, label in open_chains[:4])
+        lines.append(f"{action} {venue}: đang mở trên {shown}")
+    if on_pool and all(closed(gate) for gate in on_pool):
+        lines.append(f"{action} {venue}: đang khóa trên {pool_label}")
+    elif not open_chains and any(closed(gate) for gate in gates):
+        lines.append(f"{action} {venue}: đang khóa")
+    elif not lines:
+        lines.append(f"{action} {venue}: sàn không ghi rõ trạng thái")
+    return lines
+
+
+def chain_compare_line(_direction: str, pool_chain: str, gates: tuple[ChainGate, ...] | list[ChainGate]) -> str:
+    """Say which chain the DEX pool is on, and whether the CEX lists that same chain.
+
+    Color follows the chain match only. Deposit and withdrawal locks stay on their own lines.
+    """
+    label = chain_label(pool_chain)
+    head = f"Chain DEX: {label}"
+    usable = [gate for gate in gates if gate.chain or gate.raw_name]
+    if not usable:
+        return f"{head}. Sàn không ghi chain để so."
+    if any(gate.chain == pool_chain for gate in usable):
+        return f"{head}. Cùng chain với sàn."
+    names: list[str] = []
+    seen: set[str] = set()
+    for gate in usable:
+        shown = chain_label(gate.chain) if gate.chain else gate.raw_name
+        if not shown or shown in seen:
+            continue
+        seen.add(shown)
+        names.append(shown)
+        if len(names) == 4:
+            break
+    if names:
+        return f"{head}. Khác chain. Sàn có: {', '.join(names)}."
+    return f"{head}. Khác chain."
+
+
+def transfer_lines(exchange: str, base: str, direction: str, pool_chain: str, gates: tuple[ChainGate, ...]) -> list[str]:
+    """Withdraw and deposit status for the CEX in this alert.
+
+    Buying the CEX and selling the pool needs a withdrawal. Buying the pool and
+    selling the CEX needs a deposit, which many venues suspend while the CEX
+    price is the higher one.
+    """
+    venue = EXCHANGE_NAMES.get(exchange, exchange)
+    usable = [gate for gate in gates if gate.chain or gate.raw_name]
+    compare = chain_compare_line(direction, pool_chain, usable)
+    headline = route_headline(direction, pool_chain, usable)
+    if not usable:
+        lines = [
+            *([headline] if headline else []),
+            compare,
+            f"Rút {venue}: không có dữ liệu công khai về khóa hay mở",
+            f"Nạp {venue}: không có dữ liệu công khai về khóa hay mở",
+        ]
+        page = _WITHDRAW_PAGE.get(exchange)
+        if page:
+            lines.append(f"Xem trên sàn: {page.format(coin=base)}")
+        return lines
+
+    lines = [
+        *([headline] if headline else []),
+        compare,
+        *_status_line("Rút", venue, usable, pool_chain, withdraw=True),
+        *_status_line("Nạp", venue, usable, pool_chain, withdraw=False),
+    ]
+    need_withdraw = direction == "buy_cex"
+    pool_label = chain_label(pool_chain)
+    on_pool = [gate for gate in usable if gate.chain == pool_chain]
+
+    def opened(gate: ChainGate) -> bool:
+        flag = gate.withdraw_open if need_withdraw else gate.deposit_open
+        return flag is True
+
+    open_chains = _open_chains(usable, need_withdraw)
+    if any(opened(gate) for gate in on_pool):
+        verb = "rút" if need_withdraw else "nạp"
+        lines.append(f"Trùng chain với pool, {verb} thẳng, không cần cầu")
+        return lines
+    if not open_chains:
+        if need_withdraw:
+            lines.append("Không rút được coin ra khỏi sàn")
+        else:
+            lines.append("Không nạp được coin lên sàn")
+        return lines
+
+    lines.append(f"Chain đang mở không phải {pool_label}, cần cầu")
+    named = False
+    for chain, label in open_chains[:3]:
+        routes = _BRIDGES.get(frozenset({chain, pool_chain}), ()) if chain and pool_chain else ()
+        if not routes:
+            continue
+        joined = ", ".join(f"{name} {url}" for name, url in routes[:2])
+        if need_withdraw:
+            lines.append(f"Cầu {label} → {pool_label}: {joined}")
+        else:
+            lines.append(f"Cầu {pool_label} → {label}: {joined}")
+        named = True
+    if not named:
+        lines.append("Chưa có cầu riêng cho cặp chain này. Thử https://app.debridge.finance hoặc https://app.across.to")
+    lines.append("Cầu chỉ đi được khi đúng token có trong danh sách. Bản bọc của sàn thường không sang được pool.")
+    return lines
