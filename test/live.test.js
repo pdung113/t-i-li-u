@@ -3,7 +3,7 @@ import test from "node:test";
 import { ethers } from "ethers";
 import { resolveChain } from "../src/chains.js";
 import { marketCapUsd } from "../src/mcap.js";
-import { simulateSwap, underlyingToken } from "../src/simulate.js";
+import { hasBuyLiquidity, simulateSwap, underlyingToken } from "../src/simulate.js";
 import { fetchStatuses } from "../src/twitter.js";
 
 const CAKE = "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82";
@@ -91,6 +91,14 @@ test("vốn hóa CAKE trên BSC nằm trong khoảng hợp lý", { timeout: 30_0
   console.log("CAKE mcap", cap.usd);
   assert.ok(cap.usd > 1_000_000);
   assert.ok(cap.usd < 100_000_000_000);
+});
+
+test("CAKE đã có thanh khoản, địa chỉ lạ thì chưa", { timeout: 20_000 }, async () => {
+  assert.equal(await hasBuyLiquidity(provider, chain, CAKE), true);
+  assert.equal(
+    await hasBuyLiquidity(provider, chain, "0x0000000000000000000000000000000000000001"),
+    false,
+  );
 });
 
 test("đọc timeline X", { timeout: 30_000 }, async () => {

@@ -225,6 +225,25 @@ export function tokenFromPair(pair, weth) {
   return null;
 }
 
+export async function hasBuyLiquidity(provider, chain, token) {
+  try {
+    const raw = await provider.call({
+      to: chain.factory,
+      data: factoryIface.encodeFunctionData("getPair", [token, chain.weth]),
+    });
+    const [pair] = coder.decode(["address"], raw);
+    if (pair === ethers.ZeroAddress) return false;
+    const reservesRaw = await provider.call({
+      to: pair,
+      data: pairIface.encodeFunctionData("getReserves"),
+    });
+    const [reserve0, reserve1] = coder.decode(["uint112", "uint112", "uint32"], reservesRaw);
+    return reserve0 > 0n && reserve1 > 0n;
+  } catch {
+    return false;
+  }
+}
+
 export async function describePool(provider, chain, token) {
   try {
     const raw = await provider.call({

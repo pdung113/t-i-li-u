@@ -59,8 +59,25 @@ function privateKey(value) {
   return key;
 }
 
+function normalizeMode(value) {
+  const raw = String(value || "twitter").trim().toLowerCase();
+  if (["twitter", "tw", "x", "tweet"].includes(raw)) return "twitter";
+  if (["liquid", "liquidity", "liq", "contract", "pool"].includes(raw)) return "liquid";
+  throw new Error("MODE phải là twitter hoặc liquid");
+}
+
 export function buildConfig(values, chainName) {
   const chain = resolveChain(chainName || values.CHAIN || "bsc");
+  const mode = normalizeMode(values.MODE);
+  let contract = (values.CONTRACT || "").trim();
+  if (mode === "liquid") {
+    if (!/^0x[a-fA-F0-9]{40}$/.test(contract)) {
+      throw new Error("MODE=liquid cần điền CONTRACT=0x... trong setup.txt");
+    }
+    contract = ethers.getAddress(contract);
+  } else {
+    contract = "";
+  }
   const buyAmount = values.BUY_AMOUNT || "0.05";
   const probeAmount = values.PROBE_AMOUNT || "0.002";
   const buyWei = ethers.parseEther(buyAmount);
@@ -76,6 +93,8 @@ export function buildConfig(values, chainName) {
   ethers.parseUnits(String(gasGwei), "gwei");
   return {
     chain,
+    mode,
+    contract,
     link: (values.LINK || "").trim(),
     rpc: (values.RPC_URL || "").trim() || chain.rpc,
     dryRun: flag(values.DRY_RUN, true),
@@ -91,6 +110,7 @@ export function buildConfig(values, chainName) {
     waitForPairMs: Math.round(num(values.WAIT_FOR_PAIR_MS, 120_000, "WAIT_FOR_PAIR_MS")),
     retryMs: Math.round(num(values.RETRY_MS, 400, "RETRY_MS")),
     pollMs: Math.round(num(values.POLL_MS, 0, "POLL_MS")),
+    liquidPollMs: Math.round(num(values.LIQUID_POLL_MS, 250, "LIQUID_POLL_MS")),
     privateKey: privateKey(values.PRIVATE_KEY),
   };
 }

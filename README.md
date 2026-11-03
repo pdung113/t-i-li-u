@@ -7,7 +7,12 @@ cd $HOME\t-i-li-u
 npm start
 ```
 
-`LINK` là link X của dự án. `CHAIN` là `bsc`, `eth`, `base`, hoặc `robinhood`.
+Hai chế độ, sửa `MODE` trong `setup.txt`:
+
+- `MODE=twitter` và điền `LINK`: chờ tài khoản X đăng contract rồi mua.
+- `MODE=liquid` và điền `CONTRACT=0x...`: contract đã biết. Tool chờ đến lúc add liquidity hoặc mở trade thì mua ngay.
+
+`CHAIN` là `bsc`, `eth`, `base`, hoặc `robinhood`.
 
 `MAX_TAX_PERCENT=10` nghĩa là tax trên 10% thì không mua. `MAX_MCAP_USD=100000` nghĩa là vốn hóa trên 100.000 USD thì không mua. Điền `0` nếu không muốn chặn theo vốn hóa.
 

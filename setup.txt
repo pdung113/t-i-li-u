@@ -1,9 +1,14 @@
 # Sửa file này bằng Notepad. Lưu (Ctrl+S). Rồi chỉ cần chạy: npm start
 # Chain: bsc | eth | base | robinhood
-# LINK là trang X hoặc link một tweet.
+#
+# Hai chế độ, dùng cái nào thì điền cái đó:
+# MODE=twitter  -> điền LINK, chờ họ đăng contract trên X rồi mua
+# MODE=liquid   -> điền CONTRACT đã biết, chờ add liquidity / mở trade rồi mua liền
 
+MODE=twitter
 CHAIN=bsc
 LINK=
+CONTRACT=
 
 # Số BNB hoặc ETH mua mỗi lần.
 BUY_AMOUNT=0.05

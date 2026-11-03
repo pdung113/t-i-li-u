@@ -45,6 +45,18 @@ DRY_RUN=false
   assert.equal(config.maxTaxPercent, 5);
   assert.equal(config.maxMcapUsd, 50000);
   assert.equal(config.dryRun, false);
+  assert.equal(config.mode, "twitter");
+  assert.throws(() => buildConfig({ MODE: "liquid", CHAIN: "bsc" }), /CONTRACT/);
+  const liquid = buildConfig({
+    MODE: "liquid",
+    CHAIN: "robinhood",
+    CONTRACT: "0x0d6b6f604c1bf5b3533c445334bb4e1044145688",
+  });
+  assert.equal(liquid.mode, "liquid");
+  assert.equal(liquid.contract, "0x0d6b6f604C1BF5b3533C445334bb4e1044145688");
+  assert.equal(liquid.liquidPollMs, 250);
+  assert.equal(buildConfig({ MODE: "tw", CHAIN: "bsc" }).mode, "twitter");
+  assert.throws(() => buildConfig({ MODE: "spot", CHAIN: "bsc" }), /MODE/);
   assert.equal(mcapDecision(50000, 50000).ok, true);
   assert.equal(mcapDecision(50001, 50000).reason, "too_high");
   assert.equal(mcapDecision(null, 50000).retry, true);

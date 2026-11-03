@@ -5,7 +5,7 @@ import { REASON_TEXT, decide, formatTax } from "./decide.js";
 import { log } from "./log.js";
 import { formatUsd, marketCapUsd, mcapDecision } from "./mcap.js";
 import { loadConfig } from "./setup.js";
-import { SIM_EOA, describePool, simulateSwap, underlyingToken } from "./simulate.js";
+import { SIM_EOA, describePool, hasBuyLiquidity, simulateSwap, underlyingToken } from "./simulate.js";
 import { extractAddresses, fetchStatus, fetchStatuses, parseTwitterTarget, tweetTimestamp } from "./twitter.js";
 
 const DEAD = new Set([
@@ -96,13 +96,16 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     await inspectToken(config, tokenArg);
     return;
   }
-  const targetSource = targetArg || config.link;
-  if (!targetSource) {
-    console.log("Mở setup.txt, điền LINK, lưu file, rồi chạy: npm start");
-    process.exitCode = 1;
-    return;
+  let target = null;
+  if (config.mode === "twitter") {
+    const targetSource = targetArg || config.link;
+    if (!targetSource) {
+      console.log("MODE=twitter: mở setup.txt, điền LINK, lưu file, rồi chạy: npm start");
+      process.exitCode = 1;
+      return;
+    }
+    target = parseTwitterTarget(targetSource);
   }
-  const target = parseTwitterTarget(targetSource);
   if (!config.dryRun && !config.privateKey) {
     throw new Error("Điền PRIVATE_KEY trong setup.txt, hoặc giữ DRY_RUN=true");
   }
@@ -124,10 +127,14 @@ export async function main(argv = process.argv.slice(2), options = {}) {
 
   const symbol = config.chain.nativeSymbol;
   log(
-    `Chain ${config.chain.name} | mua ${config.buyAmount} ${symbol} | gas ${config.gasGwei} gwei | tax tối đa ${config.maxTaxPercent}% | mcap tối đa ${config.maxMcapUsd > 0 ? `$${formatUsd(config.maxMcapUsd)}` : "không giới hạn"} | ${config.dryRun ? "DRY RUN" : "MUA THẬT"}`,
+    `Chế độ ${config.mode} | chain ${config.chain.name} | mua ${config.buyAmount} ${symbol} | gas ${config.gasGwei} gwei | tax tối đa ${config.maxTaxPercent}% | mcap tối đa ${config.maxMcapUsd > 0 ? `$${formatUsd(config.maxMcapUsd)}` : "không giới hạn"} | ${config.dryRun ? "DRY RUN" : "MUA THẬT"}`,
   );
   log(`RPC ${config.rpc}`);
-  log(`Theo dõi @${target.handle}${target.statusId ? ` tweet ${target.statusId}` : ""}`);
+  if (config.mode === "twitter") {
+    log(`Theo dõi @${target.handle}${target.statusId ? ` tweet ${target.statusId}` : ""}`);
+  } else {
+    log(`Chờ add liquidity hoặc mở trade của ${config.contract}`);
+  }
   if (wallet) {
     const balance = await provider.getBalance(wallet.address);
     const gasCap = ethers.parseUnits(String(config.gasGwei), "gwei") * BigInt(config.gasLimit);
@@ -187,19 +194,37 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     }
   };
 
-  const snipe = async (rawAddress, tweet) => {
+  const snipe = async (rawAddress, tweet, options = {}) => {
     let token = ethers.getAddress(rawAddress);
     const mark = token.toLowerCase();
     if (handledTokens.has(mark)) return;
     handledTokens.add(mark);
 
+    const waitForever = options.waitForever === true;
     const detectedAt = Date.now();
-    log(`Contract ${token} từ tweet ${tweet.id}. Đang đo tax...`);
+    const fromLiquid = tweet?.id === "liquid";
+    if (!fromLiquid) log(`Contract ${token} từ tweet ${tweet.id}. Đang đo tax...`);
 
-    const until = detectedAt + config.waitForPairMs;
+    const until = waitForever ? Number.POSITIVE_INFINITY : detectedAt + config.waitForPairMs;
     let attempt = 0;
+    let sawLiquidity = false;
+    let reported = false;
+    let lastWaitLog = 0;
     while (!stopped && Date.now() < until) {
       attempt += 1;
+      if (waitForever && !sawLiquidity) {
+        const ready = await hasBuyLiquidity(provider, config.chain, token);
+        if (!ready) {
+          if (Date.now() - lastWaitLog > 15_000) {
+            log(`Chưa có thanh khoản ${token}. Vẫn đang chờ add liquidity...`);
+            lastWaitLog = Date.now();
+          }
+          await sleep(config.liquidPollMs);
+          continue;
+        }
+        sawLiquidity = true;
+        log(`Đã có thanh khoản ${token}. Đo tax và mua ngay.`);
+      }
       const noncePromise =
         wallet && !config.dryRun ? provider.getTransactionCount(wallet.address, "pending") : Promise.resolve(null);
       let result;
@@ -238,7 +263,8 @@ export async function main(argv = process.argv.slice(2), options = {}) {
 
       const { probe, full, fill, decision } = result;
       const sizeNote = full && full !== probe ? ` | lệnh ${config.buyAmount} ${symbol} ${full.buyFailed ? "không mua được" : "mua được"}` : "";
-      if (attempt === 1 || decision.terminal || decision.ok) {
+      if (!reported || decision.terminal || decision.ok) {
+        reported = true;
         log(
           `Tax buy ${formatTax(probe.buyTaxBps)} sell ${formatTax(probe.sellTaxBps)} trong ${probe.ms}ms.${probe.buyRevert ? ` Buy: ${probe.buyRevert}.` : ""}${probe.sellRevert ? ` Sell: ${probe.sellRevert}.` : ""}${sizeNote}`,
         );
@@ -315,6 +341,13 @@ export async function main(argv = process.argv.slice(2), options = {}) {
 
     if (!stopped) log(`Hết ${Math.round(config.waitForPairMs / 1000)}s, không mua ${token}.`);
   };
+
+  if (config.mode === "liquid") {
+    await snipe(config.contract, { id: "liquid" }, { waitForever: true });
+    stop();
+    await provider.destroy();
+    return;
+  }
 
   if (target.statusId) {
     try {
