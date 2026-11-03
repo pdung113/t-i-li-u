@@ -19,6 +19,7 @@ from spread_alert.logic import (
     clean_address,
     is_ignored_asset,
     pick_pool,
+    repriced,
     symbols_match,
     transfer_lines,
 )
@@ -37,7 +38,19 @@ def _tradable(listing: Listing, chain: str = "ethereum", withdraw: bool = True, 
     return listing
 
 
-def _listing(exchange: str, base: str, last: float, bid=None, ask=None, volume=100_000, top=None) -> Listing:
+def _listing(
+    exchange: str,
+    base: str,
+    last: float,
+    bid=None,
+    ask=None,
+    volume=100_000,
+    top=None,
+    bid_notional=None,
+    ask_notional=None,
+    low=None,
+    high=None,
+) -> Listing:
     return Listing(
         exchange=exchange,
         base=base,
@@ -48,6 +61,10 @@ def _listing(exchange: str, base: str, last: float, bid=None, ask=None, volume=1
         ask=ask,
         quote_volume=volume,
         top_notional=top,
+        bid_notional=bid_notional,
+        ask_notional=ask_notional,
+        low=low,
+        high=high,
     )
 
 
@@ -458,6 +475,51 @@ class LogicTest(unittest.TestCase):
             self.assertLess(missed.edge_pct, 1)
             self.assertNotAlmostEqual(missed.cex_price, 0.0008409)
             self.assertNotEqual(missed.direction, "buy_cex")
+
+    def test_kucoin_page_price_ignores_a_dust_ask(self):
+        # KuCoin page shows the last trade. A $1 ask far from it must not become the alert.
+        dust = _tradable(
+            _listing(
+                "kucoin",
+                "OBI",
+                0.0009683,
+                bid=0.0009695,
+                ask=0.0008409,
+                bid_notional=70,
+                ask_notional=1.5,
+                low=0.0009293,
+                high=0.0010999,
+            )
+        )
+        pool = _pool(price_usd=0.00110, base_symbol="OBI")
+        found = best_opportunity(
+            [dust],
+            pool,
+            token_address="0x69a87c8788d4a48c1362b3b357d0e6b59c11d93f",
+            chain="bsc",
+            min_volume=0,
+            min_top_notional=200,
+            max_spread=80,
+        )
+        self.assertIsNotNone(found)
+        self.assertEqual(found.direction, "buy_cex")
+        self.assertAlmostEqual(found.cex_price, 0.0009683)
+        self.assertLess(found.edge_pct, 16)
+        self.assertGreater(found.edge_pct, 10)
+
+        fresh = repriced(
+            "buy_cex",
+            0.0009683,
+            0.0009695,
+            0.000989,
+            0.0009798,
+            bid_notional=70,
+            ask_notional=80,
+            min_notional=200,
+        )
+        self.assertIsNotNone(fresh)
+        self.assertLess(fresh[0], 5)
+        self.assertAlmostEqual(fresh[1], 0.0009683)
 
     def test_spread_must_still_be_there_after_a_price_refresh(self):
         with tempfile.TemporaryDirectory() as folder:

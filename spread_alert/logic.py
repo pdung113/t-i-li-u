@@ -350,6 +350,10 @@ class Listing:
     ask: float | None = None
     quote_volume: float | None = None
     top_notional: float | None = None
+    bid_notional: float | None = None
+    ask_notional: float | None = None
+    low: float | None = None
+    high: float | None = None
     name: str = ""
     gates: tuple[ChainGate, ...] = ()
 
@@ -580,12 +584,16 @@ def _cex_pair(
         return None
     buy_ask = buy.ask / divisor if buy.ask and buy.ask > 0 else None
     sell_bid = sell.bid if sell.bid and sell.bid > 0 else None
-    if buy_ask is not None and _near_last(buy_last, buy_ask) is None:
+    buy_state = _book_state(
+        buy_last, buy_ask, buy.ask_notional, buy.low, buy.high, min_top_notional, worse="above"
+    )
+    sell_state = _book_state(
+        sell_last, sell_bid, sell.bid_notional, sell.low, sell.high, min_top_notional, worse="below"
+    )
+    if buy_state == "block" or sell_state == "block":
         return None
-    if sell_bid is not None and _near_last(sell_last, sell_bid) is None:
-        return None
-    buy_px = _near_last(buy_last, buy_ask) or buy_last
-    sell_px = _near_last(sell_last, sell_bid) or sell_last
+    buy_px = buy_ask if buy_state == "use" and buy_ask else buy_last
+    sell_px = sell_bid if sell_state == "use" and sell_bid else sell_last
     if buy_px <= 0:
         return None
     executable = (sell_px - buy_px) / buy_px * 100.0
@@ -619,40 +627,112 @@ def _cex_pair(
 _BOOK_GAP = 0.02
 
 
-def _near_last(last: float, price: float | None) -> float | None:
-    """A book price is usable only when it sits near the last trade."""
+def _book_state(
+    last: float,
+    price: float | None,
+    notional: float | None,
+    low: float | None,
+    high: float | None,
+    min_notional: float,
+    *,
+    worse: str,
+) -> str:
+    """How a bid or ask may affect the spread.
+
+    ignore: missing, only a few dollars, outside today's range, or a gift price
+    too far from the last trade to trust.
+    block: a real quote worse than the last trade by more than 2%.
+    use: close enough to the last trade to price the order.
+    """
     if price is None or price <= 0 or last <= 0:
-        return None
-    if abs(price - last) / last > _BOOK_GAP:
-        return None
-    return price
+        return "ignore"
+    if low and low > 0 and price < low * 0.99:
+        return "ignore"
+    if high and high > 0 and price > high * 1.01:
+        return "ignore"
+    if notional is not None and min_notional > 0 and notional < min_notional:
+        return "ignore"
+    if abs(price - last) / last <= _BOOK_GAP:
+        return "use"
+    if worse == "above" and price > last:
+        return "block"
+    if worse == "below" and price < last:
+        return "block"
+    return "ignore"
 
 
 def _priced_edge(
-    last: float, bid: float | None, ask: float | None, other: float
+    last: float,
+    bid: float | None,
+    ask: float | None,
+    other: float,
+    *,
+    bid_notional: float | None = None,
+    ask_notional: float | None = None,
+    low: float | None = None,
+    high: float | None = None,
+    min_notional: float = 0,
 ) -> tuple[str, float, float] | None:
-    """Spread confirmed by both the last trade and the near-touch book.
+    """Spread against the last trade, which is the price shown on the exchange page.
 
-    One far-away bid or ask is not a real price. The edge is the smaller of
-    the book edge and the last-trade edge.
+    A dust order or a print outside the day's range is not a price. A real bid
+    or ask more than 2% from the last trade blocks that direction.
     """
     if last <= 0 or other <= 0:
         return None
-    ask_ok = _near_last(last, ask)
-    bid_ok = _near_last(last, bid)
-    buy_px = ask_ok if ask_ok is not None else last
-    sell_px = bid_ok if bid_ok is not None else last
-    edge_buy = (other - buy_px) / buy_px * 100.0
-    edge_sell = (sell_px - other) / other * 100.0
+    ask_state = _book_state(last, ask, ask_notional, low, high, min_notional, worse="above")
+    bid_state = _book_state(last, bid, bid_notional, low, high, min_notional, worse="below")
     last_buy = (other - last) / last * 100.0
     last_sell = (last - other) / other * 100.0
-    if edge_buy >= edge_sell:
-        if last_buy <= 0 or (ask is not None and ask > 0 and ask_ok is None):
+
+    def finish(direction: str, last_edge: float, state: str, book: float | None):
+        if last_edge <= 0 or state == "block":
             return None
-        return "buy_cex", min(edge_buy, last_buy), buy_px
-    if last_sell <= 0 or (bid is not None and bid > 0 and bid_ok is None):
+        if state == "use" and book and book > 0:
+            if direction == "buy_cex":
+                book_edge = (other - book) / book * 100.0
+            else:
+                book_edge = (book - other) / other * 100.0
+            if book_edge <= 0:
+                return None
+            return direction, min(book_edge, last_edge), book
+        return direction, last_edge, last
+
+    if last_buy >= last_sell:
+        opened = finish("buy_cex", last_buy, ask_state, ask)
+        return opened if opened is not None else finish("buy_dex", last_sell, bid_state, bid)
+    opened = finish("buy_dex", last_sell, bid_state, bid)
+    return opened if opened is not None else finish("buy_cex", last_buy, ask_state, ask)
+
+
+def repriced(
+    direction: str,
+    last: float,
+    bid: float | None,
+    ask: float | None,
+    other: float,
+    *,
+    bid_notional: float | None = None,
+    ask_notional: float | None = None,
+    low: float | None = None,
+    high: float | None = None,
+    min_notional: float = 0,
+) -> tuple[float, float] | None:
+    """Fresh edge for an alert already pointing one way. None if that way is gone."""
+    priced = _priced_edge(
+        last,
+        bid,
+        ask,
+        other,
+        bid_notional=bid_notional,
+        ask_notional=ask_notional,
+        low=low,
+        high=high,
+        min_notional=min_notional,
+    )
+    if priced is None or priced[0] != direction:
         return None
-    return "buy_dex", min(edge_sell, last_sell), sell_px
+    return priced[1], priced[2]
 
 
 def raw_spread_pct(listing: Listing, pool: Pool) -> float | None:
@@ -684,7 +764,17 @@ def _opportunity_for(
     last = listing.last / divisor
     bid = listing.bid / divisor if listing.bid and listing.bid > 0 else None
     ask = listing.ask / divisor if listing.ask and listing.ask > 0 else None
-    priced = _priced_edge(last, bid, ask, pool.price_usd)
+    priced = _priced_edge(
+        last,
+        bid,
+        ask,
+        pool.price_usd,
+        bid_notional=listing.bid_notional,
+        ask_notional=listing.ask_notional,
+        low=(listing.low / divisor) if listing.low and listing.low > 0 else None,
+        high=(listing.high / divisor) if listing.high and listing.high > 0 else None,
+        min_notional=min_top_notional,
+    )
     if priced is None:
         return None
     direction, edge, cex_price = priced

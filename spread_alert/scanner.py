@@ -11,7 +11,7 @@ from pathlib import Path
 
 import aiohttp
 
-from spread_alert.cex import known_exchanges, load_coins, load_prices
+from spread_alert.cex import known_exchanges, kucoin_level1, load_coins, load_prices
 from spread_alert.config import Config
 from spread_alert.dex import DexClient
 from spread_alert.logic import (
@@ -22,7 +22,9 @@ from spread_alert.logic import (
     normalize_address,
     normalize_symbol,
     raw_spread_pct,
+    repriced,
     stripped_base,
+    symbols_match,
 )
 from spread_alert.tax import lookup_tax, tax_line
 from spread_alert.universe import assemble_markets
@@ -129,6 +131,9 @@ class Scanner:
                 if opportunity.edge_pct < self.config.spread_threshold_pct:
                     self.watch.pop(self._watch_key(opportunity), None)
                     continue
+                if not await self._kucoin_still_open(opportunity):
+                    self.watch.pop(self._watch_key(opportunity), None)
+                    continue
                 async with lock:
                     if not self._price_confirmed(opportunity):
                         continue
@@ -155,6 +160,9 @@ class Scanner:
             spreads.sort(key=lambda item: item.edge_pct, reverse=True)
             for opportunity in spreads:
                 if opportunity.edge_pct < self.config.spread_threshold_pct:
+                    self.watch.pop(self._watch_key(opportunity), None)
+                    continue
+                if not await self._kucoin_still_open(opportunity):
                     self.watch.pop(self._watch_key(opportunity), None)
                     continue
                 async with lock:
@@ -297,6 +305,10 @@ class Scanner:
                     listing.ask = quote.ask
                     listing.quote_volume = quote.quote_volume
                     listing.top_notional = quote.top_notional
+                    listing.bid_notional = quote.bid_notional
+                    listing.ask_notional = quote.ask_notional
+                    listing.low = quote.low
+                    listing.high = quote.high
 
     def _watch_key(self, opportunity: Opportunity) -> tuple:
         return (
@@ -307,6 +319,44 @@ class Scanner:
             opportunity.address,
             opportunity.direction,
         )
+
+    async def _kucoin_still_open(self, opportunity: Opportunity) -> bool:
+        """KuCoin alerts use a fresh last trade, the price on the KuCoin page.
+
+        allTickers sometimes prints a tiny ask that the page never traded.
+        """
+        if opportunity.exchange != "kucoin" or opportunity.direction == "cex_cex":
+            return True
+        if self.session is None:
+            return False
+        symbol = opportunity.pair.replace("/", "-")
+        try:
+            fresh = await kucoin_level1(self.session, symbol)
+        except Exception as exc:
+            log.warning("KuCoin %s: không đối lại được giá, bỏ tin (%s)", opportunity.base, exc)
+            return False
+        if fresh is None:
+            return False
+        matched, divisor = symbols_match(opportunity.base, opportunity.dex_symbol)
+        if not matched or divisor <= 0:
+            return False
+        last = fresh.last / divisor
+        bid = fresh.bid / divisor if fresh.bid and fresh.bid > 0 else None
+        ask = fresh.ask / divisor if fresh.ask and fresh.ask > 0 else None
+        priced = repriced(
+            opportunity.direction,
+            last,
+            bid,
+            ask,
+            opportunity.dex_price,
+            bid_notional=fresh.bid_notional,
+            ask_notional=fresh.ask_notional,
+            min_notional=self.config.min_top_notional_usd,
+        )
+        if priced is None or priced[0] < self.config.spread_threshold_pct:
+            return False
+        opportunity.edge_pct, opportunity.cex_price = priced
+        return True
 
     def _price_confirmed(self, opportunity: Opportunity) -> bool:
         """Send only after a later price refresh still shows the same spread.

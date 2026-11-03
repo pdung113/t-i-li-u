@@ -25,6 +25,10 @@ class PriceQuote:
     ask: float | None = None
     quote_volume: float | None = None
     top_notional: float | None = None
+    bid_notional: float | None = None
+    ask_notional: float | None = None
+    low: float | None = None
+    high: float | None = None
 
 
 @dataclass(slots=True)
@@ -50,6 +54,10 @@ def listing_from(coin: ListedCoin, quote: PriceQuote) -> Listing:
         ask=quote.ask,
         quote_volume=quote.quote_volume,
         top_notional=quote.top_notional,
+        bid_notional=quote.bid_notional,
+        ask_notional=quote.ask_notional,
+        low=quote.low,
+        high=quote.high,
         name=coin.name,
         gates=tuple(coin.gates),
     )
@@ -180,6 +188,8 @@ def _prices_kucoin(payload: dict, quotes: tuple[str, ...]) -> dict[str, PriceQuo
         if not parts:
             continue
         base, quote = parts
+        bid = _num(row.get("buy"))
+        ask = _num(row.get("sell"))
         _store(
             found,
             base,
@@ -188,12 +198,43 @@ def _prices_kucoin(payload: dict, quotes: tuple[str, ...]) -> dict[str, PriceQuo
                 pair=f"{base}/{quote}",
                 quote=quote,
                 last=_num(row.get("last")) or 0,
-                bid=_num(row.get("buy")),
-                ask=_num(row.get("sell")),
+                bid=bid,
+                ask=ask,
                 quote_volume=_num(row.get("volValue")),
+                bid_notional=_notional(bid, _num(row.get("bestBidSize"))),
+                ask_notional=_notional(ask, _num(row.get("bestAskSize"))),
+                low=_num(row.get("low")),
+                high=_num(row.get("high")),
             ),
         )
     return _prefer(found, quotes)
+
+
+def _notional(price: float | None, size: float | None) -> float | None:
+    if price is None or size is None or price <= 0 or size <= 0:
+        return None
+    return price * size
+
+
+async def kucoin_level1(session: aiohttp.ClientSession, symbol: str) -> PriceQuote | None:
+    """Fresh KuCoin top of book. allTickers can print an ask the page is not trading."""
+    payload = await _json(session, "https://api.kucoin.com/api/v1/market/orderbook/level1", {"symbol": symbol})
+    row = payload.get("data") or {}
+    last = _num(row.get("price"))
+    if not last or last <= 0:
+        return None
+    bid = _num(row.get("bestBid"))
+    ask = _num(row.get("bestAsk"))
+    base, _, quote = symbol.partition("-")
+    return PriceQuote(
+        pair=f"{base}/{quote}",
+        quote=quote,
+        last=last,
+        bid=bid,
+        ask=ask,
+        bid_notional=_notional(bid, _num(row.get("bestBidSize"))),
+        ask_notional=_notional(ask, _num(row.get("bestAskSize"))),
+    )
 
 
 def _prices_bitget(payload: dict, quotes: tuple[str, ...]) -> dict[str, PriceQuote]:
