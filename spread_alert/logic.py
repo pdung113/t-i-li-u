@@ -574,16 +574,25 @@ def _cex_pair(
     matched, divisor = symbols_match(buy.base, sell.base)
     if not matched or divisor <= 0:
         return None
-    buy_raw = buy.ask or buy.last
-    sell_raw = sell.bid or sell.last
-    if buy_raw <= 0 or sell_raw <= 0:
+    buy_last = buy.last / divisor
+    sell_last = sell.last
+    if buy_last <= 0 or sell_last <= 0:
         return None
-    buy_px = buy_raw / divisor
+    buy_ask = buy.ask / divisor if buy.ask and buy.ask > 0 else None
+    sell_bid = sell.bid if sell.bid and sell.bid > 0 else None
+    if buy_ask is not None and _near_last(buy_last, buy_ask) is None:
+        return None
+    if sell_bid is not None and _near_last(sell_last, sell_bid) is None:
+        return None
+    buy_px = _near_last(buy_last, buy_ask) or buy_last
+    sell_px = _near_last(sell_last, sell_bid) or sell_last
     if buy_px <= 0:
         return None
-    edge = (sell_raw - buy_px) / buy_px * 100.0
-    if edge <= 0:
+    executable = (sell_px - buy_px) / buy_px * 100.0
+    last_edge = (sell_last - buy_last) / buy_last * 100.0
+    if executable <= 0 or last_edge <= 0:
         return None
+    edge = min(executable, last_edge)
     return Opportunity(
         exchange=buy.exchange,
         base=buy.base,
@@ -595,7 +604,7 @@ def _cex_pair(
         direction="cex_cex",
         edge_pct=edge,
         cex_price=buy_px,
-        dex_price=sell_raw,
+        dex_price=sell_px,
         liquidity_usd=0,
         quote_volume=buy.quote_volume,
         dex_symbol=sell.base,
@@ -605,6 +614,45 @@ def _cex_pair(
         sell_gates=tuple(sell.gates),
         sell_volume=sell.quote_volume,
     )
+
+
+_BOOK_GAP = 0.02
+
+
+def _near_last(last: float, price: float | None) -> float | None:
+    """A book price is usable only when it sits near the last trade."""
+    if price is None or price <= 0 or last <= 0:
+        return None
+    if abs(price - last) / last > _BOOK_GAP:
+        return None
+    return price
+
+
+def _priced_edge(
+    last: float, bid: float | None, ask: float | None, other: float
+) -> tuple[str, float, float] | None:
+    """Spread confirmed by both the last trade and the near-touch book.
+
+    One far-away bid or ask is not a real price. The edge is the smaller of
+    the book edge and the last-trade edge.
+    """
+    if last <= 0 or other <= 0:
+        return None
+    ask_ok = _near_last(last, ask)
+    bid_ok = _near_last(last, bid)
+    buy_px = ask_ok if ask_ok is not None else last
+    sell_px = bid_ok if bid_ok is not None else last
+    edge_buy = (other - buy_px) / buy_px * 100.0
+    edge_sell = (sell_px - other) / other * 100.0
+    last_buy = (other - last) / last * 100.0
+    last_sell = (last - other) / other * 100.0
+    if edge_buy >= edge_sell:
+        if last_buy <= 0 or (ask is not None and ask > 0 and ask_ok is None):
+            return None
+        return "buy_cex", min(edge_buy, last_buy), buy_px
+    if last_sell <= 0 or (bid is not None and bid > 0 and bid_ok is None):
+        return None
+    return "buy_dex", min(edge_sell, last_sell), sell_px
 
 
 def raw_spread_pct(listing: Listing, pool: Pool) -> float | None:
@@ -636,20 +684,10 @@ def _opportunity_for(
     last = listing.last / divisor
     bid = listing.bid / divisor if listing.bid and listing.bid > 0 else None
     ask = listing.ask / divisor if listing.ask and listing.ask > 0 else None
-    if last <= 0:
+    priced = _priced_edge(last, bid, ask, pool.price_usd)
+    if priced is None:
         return None
-    buy_px = ask or last
-    sell_px = bid or last
-    if buy_px <= 0 or sell_px <= 0:
-        return None
-    edge_buy_cex = (pool.price_usd - buy_px) / buy_px * 100.0
-    edge_buy_dex = (sell_px - pool.price_usd) / pool.price_usd * 100.0
-    if edge_buy_cex >= edge_buy_dex:
-        direction, edge, cex_price = "buy_cex", edge_buy_cex, buy_px
-    else:
-        direction, edge, cex_price = "buy_dex", edge_buy_dex, sell_px
-    if edge <= 0:
-        return None
+    direction, edge, cex_price = priced
     return Opportunity(
         exchange=listing.exchange,
         base=listing.base,

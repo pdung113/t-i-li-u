@@ -61,6 +61,7 @@ class Scanner:
         self.universe_at = 0.0
         self.seen_path = seen_path or Path.cwd() / ".alerted-coins.txt"
         self.seen_coins = self._load_seen()
+        self.watch: dict[tuple, tuple[float, float, float]] = {}
         remembered = sum(1 for key in self.seen_coins if ":" not in key)
         if remembered:
             log.info("Đã nhớ %s coin đã báo. Vòng sau bỏ qua những coin này.", remembered)
@@ -123,9 +124,14 @@ class Scanner:
                     min_top_notional=self.config.min_top_notional_usd,
                     max_spread=self.config.max_spread_pct,
                 )
-                if opportunity is None or opportunity.edge_pct < self.config.spread_threshold_pct:
+                if opportunity is None:
+                    continue
+                if opportunity.edge_pct < self.config.spread_threshold_pct:
+                    self.watch.pop(self._watch_key(opportunity), None)
                     continue
                 async with lock:
+                    if not self._price_confirmed(opportunity):
+                        continue
                     if not self._due(opportunity):
                         repeated += 1
                         continue
@@ -149,8 +155,11 @@ class Scanner:
             spreads.sort(key=lambda item: item.edge_pct, reverse=True)
             for opportunity in spreads:
                 if opportunity.edge_pct < self.config.spread_threshold_pct:
+                    self.watch.pop(self._watch_key(opportunity), None)
                     continue
                 async with lock:
+                    if not self._price_confirmed(opportunity):
+                        continue
                     if not self._due(opportunity):
                         repeated += 1
                         continue
@@ -288,6 +297,34 @@ class Scanner:
                     listing.ask = quote.ask
                     listing.quote_volume = quote.quote_volume
                     listing.top_notional = quote.top_notional
+
+    def _watch_key(self, opportunity: Opportunity) -> tuple:
+        return (
+            opportunity.exchange,
+            opportunity.sell_exchange,
+            opportunity.base,
+            opportunity.chain,
+            opportunity.address,
+            opportunity.direction,
+        )
+
+    def _price_confirmed(self, opportunity: Opportunity) -> bool:
+        """Send only after a later price refresh still shows the same spread.
+
+        One ticker poll can print a book price the exchange page never traded.
+        """
+        key = self._watch_key(opportunity)
+        now = time.monotonic()
+        previous = self.watch.get(key)
+        self.watch[key] = (opportunity.edge_pct, opportunity.cex_price, now)
+        if previous is None:
+            return False
+        prev_edge, prev_px, seen_at = previous
+        if now - seen_at < self.config.price_refresh_sec:
+            return False
+        if prev_edge < self.config.spread_threshold_pct or prev_px <= 0:
+            return False
+        return abs(opportunity.cex_price - prev_px) / prev_px <= 0.03
 
     def _coin_keys(self, opportunity: Opportunity) -> set[str]:
         symbol = normalize_symbol(opportunity.base)

@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -441,6 +442,40 @@ class LogicTest(unittest.TestCase):
             restarted = Scanner(Config(telegram_bot_token="", telegram_chat_id=""), None, seen)
             self.assertFalse(restarted._due(first))
             self.assertTrue(restarted._due(_opportunity(base="NEW", address="0xdef", edge_pct=6)))
+
+    def test_book_far_from_last_trade_is_not_a_spread(self):
+        fake = _tradable(_listing("kucoin", "OBI", 0.0009683, bid=0.0009695, ask=0.0008409))
+        missed = best_opportunity(
+            [fake],
+            _pool(price_usd=0.0009651, base_symbol="OBI"),
+            token_address="0x69a87c8788d4a48c1362b3b357d0e6b59c11d93f",
+            chain="bsc",
+            min_volume=0,
+            min_top_notional=0,
+            max_spread=80,
+        )
+        if missed is not None:
+            self.assertLess(missed.edge_pct, 1)
+            self.assertNotAlmostEqual(missed.cex_price, 0.0008409)
+            self.assertNotEqual(missed.direction, "buy_cex")
+
+    def test_spread_must_still_be_there_after_a_price_refresh(self):
+        with tempfile.TemporaryDirectory() as folder:
+            scanner = Scanner(
+                Config(telegram_bot_token="", telegram_chat_id="", spread_threshold_pct=5, price_refresh_sec=8),
+                None,
+                Path(folder) / "seen.txt",
+            )
+            live = _opportunity(edge_pct=6, cex_price=1.0, address="0xabc")
+            self.assertFalse(scanner._price_confirmed(live))
+            self.assertFalse(scanner._price_confirmed(live))
+            key = scanner._watch_key(live)
+            edge, price, _seen = scanner.watch[key]
+            scanner.watch[key] = (edge, price, time.monotonic() - 10)
+            self.assertTrue(scanner._price_confirmed(live))
+            scanner.watch[key] = (14.0, 0.0008409, time.monotonic() - 10)
+            moved = _opportunity(edge_pct=6, cex_price=0.0009683, address="0xabc")
+            self.assertFalse(scanner._price_confirmed(moved))
 
     def test_cex_spread_requires_the_same_open_network(self):
         cheap = _tradable(_listing("binance", "ENJ", 1, bid=0.99, ask=1.0))
