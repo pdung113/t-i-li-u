@@ -1,0 +1,24 @@
+{
+  "name": "x-snipe",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Theo dõi link X của dự án và mua token V2 khi họ đăng contract, nếu tax còn trong ngưỡng.",
+  "scripts": {
+    "start": "node src/index.js",
+    "compile-probe": "node scripts/compile-probe.js",
+    "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pdung113/t-i-li-u.git"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "ethers": "^6.17.0"
+  },
+  "devDependencies": {
+    "solc": "^0.8.28"
+  }
+}
