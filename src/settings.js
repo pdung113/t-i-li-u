@@ -3,10 +3,10 @@
  * Ngưỡng tax, gas, và số lượng mua không đọc từ biến môi trường.
  */
 
-/** Chain: "bsc" | "eth" | "base". RPC/CHAIN trong .env vẫn ghi đè chain này. */
+/** Chain: "bsc" | "eth" | "base" | "robinhood". --chain hoặc CHAIN trong .env ghi đè dòng này. */
 export const CHAIN = "bsc";
 
-/** Số native (BNB trên BSC, ETH trên Ethereum/Base) cho mỗi lệnh mua. */
+/** Số native (BNB trên BSC, ETH trên Ethereum, Base và Robinhood Chain) cho mỗi lệnh mua. */
 export const BUY_AMOUNT = "0.05";
 
 /**

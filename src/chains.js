@@ -21,7 +21,7 @@ export const CHAINS = {
     chainId: 1,
     nativeSymbol: "ETH",
     eip1559: true,
-    rpc: "https://eth.llamarpc.com",
+    rpc: "https://ethereum.publicnode.com",
     router: "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
     factory: "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
     weth: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
@@ -49,12 +49,36 @@ export const CHAINS = {
       "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     ],
   },
+  robinhood: {
+    chainId: 4663,
+    nativeSymbol: "ETH",
+    eip1559: true,
+    rpc: "https://rpc.mainnet.chain.robinhood.com",
+    router: "0x89e5db8b5aa49aa85ac63f691524311aeb649eba",
+    factory: "0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f",
+    weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+    blacklist: [
+      "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+      "0x89e5db8b5aa49aa85ac63f691524311aeb649eba",
+      "0x8bcEaA40B9AcdfAedF85AdF4FF01F5Ad6517937f",
+      "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+    ],
+  },
+};
+
+const CHAIN_ALIASES = {
+  ethereum: "eth",
+  bnb: "bsc",
+  rh: "robinhood",
+  robinhoodchain: "robinhood",
 };
 
 export function resolveChain(name) {
-  const chain = CHAINS[String(name || "").toLowerCase()];
+  const raw = String(name || "").toLowerCase();
+  const key = CHAIN_ALIASES[raw] || raw;
+  const chain = CHAINS[key];
   if (!chain) {
-    throw new Error(`Chain không hỗ trợ: ${name}. Dùng bsc, eth, hoặc base.`);
+    throw new Error(`Chain không hỗ trợ: ${name}. Dùng bsc, eth, base, hoặc robinhood.`);
   }
-  return { name: String(name).toLowerCase(), ...chain };
+  return { name: key, ...chain };
 }

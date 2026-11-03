@@ -52,6 +52,39 @@ test("pair CAKE/WBNB được nhận ra", { timeout: 20_000 }, async () => {
   assert.equal(notPair, null);
 });
 
+test("router V2 của eth, base và robinhood khớp WETH", { timeout: 30_000 }, async () => {
+  const iface = new ethers.Interface(["function WETH() view returns (address)"]);
+  for (const name of ["eth", "base", "robinhood"]) {
+    const chain = resolveChain(name);
+    const rpc = new ethers.JsonRpcProvider(chain.rpc, chain.chainId, { staticNetwork: true });
+    try {
+      const raw = await rpc.call({ to: chain.router, data: iface.encodeFunctionData("WETH") });
+      const [weth] = ethers.AbiCoder.defaultAbiCoder().decode(["address"], raw);
+      assert.equal(weth.toLowerCase(), chain.weth.toLowerCase());
+    } finally {
+      await rpc.destroy();
+    }
+  }
+});
+
+test("mô phỏng mua trên Robinhood Chain", { timeout: 30_000 }, async () => {
+  const chain = resolveChain("robinhood");
+  const rpc = new ethers.JsonRpcProvider(chain.rpc, chain.chainId, { staticNetwork: true });
+  try {
+    const sim = await simulateSwap(rpc, {
+      chain,
+      token: "0x0d6b6f604C1BF5b3533C445334bb4e1044145688",
+      valueWei: ethers.parseEther("0.00005"),
+      withSell: true,
+    });
+    assert.equal(sim.buyFailed, false, sim.buyRevert || "buy sim failed");
+    assert.equal(sim.sellFailed, false, sim.sellRevert || "sell sim failed");
+    assert.ok(sim.ms < 4000);
+  } finally {
+    await rpc.destroy();
+  }
+});
+
 test("đọc timeline X", { timeout: 30_000 }, async () => {
   let tweets = [];
   let error = null;

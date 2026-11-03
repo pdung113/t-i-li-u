@@ -2,7 +2,15 @@
 
 Dán link X của dự án. Khi tài khoản đó đăng contract, tool mô phỏng mua và bán trên pool V2. Tax còn trong ngưỡng thì gửi lệnh mua ngay. Tax cao hơn ngưỡng, hoặc không bán được, thì bỏ qua.
 
-Pool hỗ trợ: PancakeSwap V2 (BSC), Uniswap V2 (Ethereum và Base).
+Pool hỗ trợ: PancakeSwap V2 (BSC) và Uniswap V2 (Ethereum, Base, Robinhood Chain). Chọn chain lúc chạy:
+
+```bash
+node src/index.js --chain eth https://x.com/ten_du_an
+node src/index.js --chain base https://x.com/ten_du_an
+node src/index.js --chain robinhood https://x.com/ten_du_an
+```
+
+Ví phải có native coin của đúng chain đó: BNB trên BSC, ETH trên Ethereum, Base, hoặc Robinhood Chain. Gas cũng trả bằng coin đó.
 
 ## Chạy
 
@@ -32,7 +40,7 @@ Sửa `src/settings.js`:
 | `MAX_TAX_PERCENT` | Không mua nếu buy tax **hoặc** sell tax cao hơn mức này. `10` = 10% |
 | `SLIPPAGE_PERCENT` | Trần trượt giá thêm so với kết quả mô phỏng |
 | `PROBE_AMOUNT` | Lệnh nhỏ để đo tax, tránh tính price impact thành tax |
-| `CHAIN` | `bsc`, `eth`, hoặc `base` |
+| `CHAIN` | `bsc`, `eth`, `base`, hoặc `robinhood` |
 | `DRY_RUN` | `true` thì không gửi giao dịch |
 
 Link tweet cụ thể (`https://x.com/user/status/...`) được quét ngay, kể cả tweet cũ. Link profile chỉ mua contract trong tweet mới, cộng thêm tweet đăng trong `LOOKBACK_SEC` giây gần nhất.

@@ -30,8 +30,8 @@ function readPrivateKey() {
   return key;
 }
 
-export function loadConfig() {
-  const chain = resolveChain(process.env.CHAIN || settings.CHAIN);
+export function loadConfig(chainName) {
+  const chain = resolveChain(chainName || process.env.CHAIN || settings.CHAIN);
   const buyWei = ethers.parseEther(settings.BUY_AMOUNT);
   const probeWei = ethers.parseEther(settings.PROBE_AMOUNT);
   if (buyWei <= 0n) throw new Error("BUY_AMOUNT phải lớn hơn 0");
@@ -113,17 +113,25 @@ async function inspectToken(config, tokenArg) {
 export async function main(argv = process.argv.slice(2)) {
   const tokenIdx = argv.indexOf("--token");
   const tokenArg = tokenIdx >= 0 ? argv[tokenIdx + 1] : null;
-  const skipIndex = tokenIdx >= 0 ? tokenIdx + 1 : -1;
-  const targetArg = argv.find((arg, index) => !arg.startsWith("--") && index !== skipIndex);
+  const chainIdx = argv.indexOf("--chain");
+  const chainArg = chainIdx >= 0 ? argv[chainIdx + 1] : null;
+  const skip = new Set();
+  if (tokenIdx >= 0) skip.add(tokenIdx + 1);
+  if (chainIdx >= 0) skip.add(chainIdx + 1);
+  const targetArg = argv.find((arg, index) => !arg.startsWith("--") && !skip.has(index));
   if (!targetArg && tokenIdx === -1) {
-    console.log("Cách dùng: npm start -- https://x.com/ten_du_an");
-    console.log("Thử tax:    npm start -- --token 0x...");
+    console.log("Cách dùng: node src/index.js --chain bsc https://x.com/ten_du_an");
+    console.log("Chain:     bsc | eth | base | robinhood");
+    console.log("Thử tax:   node src/index.js --chain eth --token 0x...");
     console.log("Chỉnh gas, số lượng, và ngưỡng tax trong src/settings.js");
     process.exitCode = 1;
     return;
   }
+  if (chainIdx >= 0 && !chainArg) {
+    throw new Error("Thiếu tên chain sau --chain. Dùng bsc, eth, base, hoặc robinhood.");
+  }
 
-  const config = loadConfig();
+  const config = loadConfig(chainArg);
   if (tokenIdx !== -1) {
     await inspectToken(config, tokenArg);
     return;

@@ -16,6 +16,16 @@ test("main nhận link và từ chối link lạ", async () => {
   await assert.rejects(() => main(["https://example.com/foo"]), /Không phải link X/);
 });
 
+test("chain eth, base, robinhood", async () => {
+  assert.equal(resolveChain("eth").chainId, 1);
+  assert.equal(resolveChain("ethereum").name, "eth");
+  assert.equal(resolveChain("base").chainId, 8453);
+  assert.equal(resolveChain("robinhood").chainId, 4663);
+  assert.equal(resolveChain("rh").name, "robinhood");
+  assert.equal(resolveChain("robinhood").weth, "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73");
+  await assert.rejects(() => main(["--chain", "nope", "https://x.com/foo"]), /Chain không hỗ trợ/);
+});
+
 test("parse link X", () => {
   assert.deepEqual(parseTwitterTarget("https://x.com/Some_Proj"), { handle: "Some_Proj", statusId: null });
   assert.deepEqual(parseTwitterTarget("https://twitter.com/Some_Proj/status/1234567890123456789?s=20"), {
