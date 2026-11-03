@@ -13,8 +13,9 @@ CONTRACT=
 # Số BNB hoặc ETH mua mỗi lần.
 BUY_AMOUNT=0.05
 
-# Gas. Mạng tắc thì tăng lên 5 hoặc 10.
-GAS_GWEI=3
+# Gas = giá gas đang chạy trên mạng nhân số này.
+# 2 = x2. 5 = x5. Muốn lệnh đi trước thì tăng số.
+GAS_X=2
 GAS_LIMIT=1200000
 
 # Tax cao hơn số này thì không mua. 10 = 10%.

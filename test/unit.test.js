@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ethers } from "ethers";
-import { buildBuyTx, minOutFromReceived } from "../src/buy.js";
+import { buildBuyTx, formatGwei, minOutFromReceived, pricedGas, scaleGas } from "../src/buy.js";
 import { resolveChain } from "../src/chains.js";
 import { decide, formatTax, taxBps } from "../src/decide.js";
 import { parseSimulateResult } from "../src/simulate.js";
@@ -55,6 +55,11 @@ DRY_RUN=false
   assert.equal(liquid.mode, "liquid");
   assert.equal(liquid.contract, "0x0d6b6f604C1BF5b3533C445334bb4e1044145688");
   assert.equal(liquid.liquidPollMs, 250);
+  assert.equal(liquid.gasX, 2);
+  assert.equal(buildConfig({ GAS_X: "5", CHAIN: "bsc" }).gasX, 5);
+  assert.equal(buildConfig({ GAS_GWEI: "3", CHAIN: "bsc" }).gasX, null);
+  assert.equal(buildConfig({ GAS_GWEI: "3", CHAIN: "bsc" }).gasGwei, "3");
+  assert.throws(() => buildConfig({ GAS_X: "0", CHAIN: "bsc" }), /GAS_X/);
   assert.equal(buildConfig({ MODE: "tw", CHAIN: "bsc" }).mode, "twitter");
   assert.throws(() => buildConfig({ MODE: "spot", CHAIN: "bsc" }), /MODE/);
   assert.equal(mcapDecision(50000, 50000).ok, true);
@@ -177,4 +182,30 @@ test("minOut và tx mua BSC dùng gas legacy", async () => {
   assert.equal(parsed.to, chain.router);
   assert.equal(parsed.value, ethers.parseEther("0.05"));
   assert.equal(parsed.gasPrice, ethers.parseUnits("3", "gwei"));
+
+  const gwei = ethers.parseUnits("1", "gwei");
+  assert.equal(formatGwei(gwei / 20n), "0.05 gwei");
+  assert.equal(formatGwei(gwei / 10n), "0.1 gwei");
+  assert.equal(scaleGas(gwei, 2), 2n * gwei);
+  assert.equal(scaleGas(gwei, 5), 5n * gwei);
+  const bscGas = pricedGas(chain, { gasPrice: 3n * gwei }, 2);
+  assert.equal(bscGas.gasPrice, 6n * gwei);
+  const eth = resolveChain("eth");
+  const ethGas = pricedGas(eth, { maxFeePerGas: 10n * gwei, maxPriorityFeePerGas: gwei }, 5);
+  assert.equal(ethGas.maxFeePerGas, 50n * gwei);
+  assert.equal(ethGas.maxPriorityFeePerGas, 5n * gwei);
+  const txEth = buildBuyTx({
+    chain: eth,
+    token: "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82",
+    walletAddress: "0x0000000000000000000000000000000000000001",
+    valueWei: 1n,
+    minOut: 1n,
+    gas: ethGas,
+    gasLimit: 500_000,
+    nonce: 1,
+    deadline: 1n,
+  });
+  assert.equal(txEth.type, 2);
+  assert.equal(txEth.maxFeePerGas, 50n * gwei);
+  assert.equal(txEth.maxPriorityFeePerGas, 5n * gwei);
 });

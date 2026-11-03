@@ -14,6 +14,8 @@ Hai chế độ, sửa `MODE` trong `setup.txt`:
 
 `CHAIN` là `bsc`, `eth`, `base`, hoặc `robinhood`.
 
+`GAS_X=2` nghĩa là trả gấp 2 lần giá gas đang chạy trên mạng lúc mua. Điền `5` nếu muốn x5.
+
 `MAX_TAX_PERCENT=10` nghĩa là tax trên 10% thì không mua. `MAX_MCAP_USD=100000` nghĩa là vốn hóa trên 100.000 USD thì không mua. Điền `0` nếu không muốn chặn theo vốn hóa.
 
 `DRY_RUN=true` thì chưa gửi tiền. Muốn mua thật thì đổi thành `false` và điền `PRIVATE_KEY`.

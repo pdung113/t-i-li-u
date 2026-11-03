@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ethers } from "ethers";
+import { pricedGas } from "../src/buy.js";
 import { resolveChain } from "../src/chains.js";
 import { marketCapUsd } from "../src/mcap.js";
 import { hasBuyLiquidity, simulateSwap, underlyingToken } from "../src/simulate.js";
@@ -9,6 +10,14 @@ import { fetchStatuses } from "../src/twitter.js";
 const CAKE = "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82";
 const chain = resolveChain("bsc");
 const provider = new ethers.JsonRpcProvider(chain.rpc, chain.chainId, { staticNetwork: true });
+
+test("giá gas BSC nhân x2", { timeout: 20_000 }, async () => {
+  const fee = await provider.getFeeData();
+  const quoted = pricedGas(chain, fee, 2);
+  assert.ok(fee.gasPrice > 0n);
+  assert.equal(quoted.gasPrice, (fee.gasPrice * 2000n + 999n) / 1000n);
+  console.log("BSC gas", fee.gasPrice.toString(), "x2", quoted.gasPrice.toString());
+});
 
 test("đo tax CAKE trên BSC dưới 1 giây mô phỏng", { timeout: 30_000 }, async () => {
   const sim = await simulateSwap(provider, {

@@ -1,6 +1,6 @@
 import { ethers } from "ethers";
 import { pathToFileURL } from "node:url";
-import { buildBuyTx, minOutFromReceived } from "./buy.js";
+import { buildBuyTx, describeGas, fixedGas, minOutFromReceived, pricedGas } from "./buy.js";
 import { REASON_TEXT, decide, formatTax } from "./decide.js";
 import { log } from "./log.js";
 import { formatUsd, marketCapUsd, mcapDecision } from "./mcap.js";
@@ -21,6 +21,12 @@ function isBlacklisted(chain, address) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function quoteBuyGas(provider, config) {
+  if (config.gasX == null) return fixedGas(config.chain, config.gasGwei);
+  const fee = await provider.getFeeData();
+  return pricedGas(config.chain, fee, config.gasX);
 }
 
 async function evaluateToken(provider, config, token, nowSec) {
@@ -126,8 +132,17 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   const nowSec = () => Math.floor(Date.now() / 1000) + timeOffset;
 
   const symbol = config.chain.nativeSymbol;
+  let gasNote = config.gasX == null ? `${config.gasGwei} gwei` : `x${config.gasX} giá hiện tại`;
+  let gasCap = 0n;
+  try {
+    const quoted = await quoteBuyGas(provider, config);
+    gasNote = describeGas(config, quoted);
+    gasCap = (quoted.gasPrice ?? quoted.maxFeePerGas) * BigInt(config.gasLimit);
+  } catch (error) {
+    log(`Chưa đọc được giá gas: ${error.shortMessage || error.message}`);
+  }
   log(
-    `Chế độ ${config.mode} | chain ${config.chain.name} | mua ${config.buyAmount} ${symbol} | gas ${config.gasGwei} gwei | tax tối đa ${config.maxTaxPercent}% | mcap tối đa ${config.maxMcapUsd > 0 ? `$${formatUsd(config.maxMcapUsd)}` : "không giới hạn"} | ${config.dryRun ? "DRY RUN" : "MUA THẬT"}`,
+    `Chế độ ${config.mode} | chain ${config.chain.name} | mua ${config.buyAmount} ${symbol} | gas ${gasNote} | tax tối đa ${config.maxTaxPercent}% | mcap tối đa ${config.maxMcapUsd > 0 ? `$${formatUsd(config.maxMcapUsd)}` : "không giới hạn"} | ${config.dryRun ? "DRY RUN" : "MUA THẬT"}`,
   );
   log(`RPC ${config.rpc}`);
   if (config.mode === "twitter") {
@@ -137,7 +152,6 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   }
   if (wallet) {
     const balance = await provider.getBalance(wallet.address);
-    const gasCap = ethers.parseUnits(String(config.gasGwei), "gwei") * BigInt(config.gasLimit);
     log(`Ví ${wallet.address} | số dư ${ethers.formatEther(balance)} ${symbol}`);
     if (!config.dryRun && balance < config.buyWei + gasCap) {
       log("Cảnh báo: số dư có thể không đủ cho số mua + trần gas. Dùng ví riêng, chỉ nạp số chấp nhận mất.");
@@ -227,6 +241,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
       }
       const noncePromise =
         wallet && !config.dryRun ? provider.getTransactionCount(wallet.address, "pending") : Promise.resolve(null);
+      const gasPromise = quoteBuyGas(provider, config).catch((error) => error);
       let result;
       try {
         result = await evaluateToken(provider, config, token, nowSec());
@@ -310,9 +325,16 @@ export async function main(argv = process.argv.slice(2), options = {}) {
 
       const minOut = minOutFromReceived(fill.gotTokens, config.slippagePercent);
       const deadline = BigInt(nowSec() + 180);
+      const quoted = await gasPromise;
+      if (quoted instanceof Error) {
+        log(`Không đọc được giá gas: ${quoted.shortMessage || quoted.message}`);
+        await sleep(config.retryMs);
+        continue;
+      }
+      const gasNote = describeGas(config, quoted);
       if (config.dryRun || !wallet) {
         log(
-          `DRY RUN khớp. Sẽ mua ${config.buyAmount} ${symbol}, minOut ${minOut}, gas ${config.gasGwei} gwei. Từ lúc thấy contract: ${Date.now() - detectedAt}ms.`,
+          `DRY RUN khớp. Sẽ mua ${config.buyAmount} ${symbol}, minOut ${minOut}, gas ${gasNote}. Từ lúc thấy contract: ${Date.now() - detectedAt}ms.`,
         );
         return;
       }
@@ -324,7 +346,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
         walletAddress: wallet.address,
         valueWei: config.buyWei,
         minOut,
-        gasGwei: config.gasGwei,
+        gas: quoted,
         gasLimit: config.gasLimit,
         nonce,
         deadline,
@@ -332,7 +354,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
       const raw = await wallet.signTransaction(tx);
       const sent = await provider.broadcastTransaction(raw);
       const elapsed = Date.now() - detectedAt;
-      log(`Đã gửi ${sent.hash} sau ${elapsed}ms.`);
+      log(`Đã gửi ${sent.hash} sau ${elapsed}ms, gas ${gasNote}.`);
       if (elapsed > 1000) {
         log("Lệnh vượt 1s kể từ lúc đọc được contract. Dùng RPC riêng nếu cần nhanh hơn.");
       }

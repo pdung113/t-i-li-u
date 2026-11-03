@@ -59,6 +59,22 @@ function privateKey(value) {
   return key;
 }
 
+function gasConfig(values) {
+  const hasX = values.GAS_X != null && String(values.GAS_X).trim() !== "";
+  const hasGwei = values.GAS_GWEI != null && String(values.GAS_GWEI).trim() !== "";
+  if (hasX) {
+    const gasX = num(values.GAS_X, 2, "GAS_X");
+    if (gasX <= 0 || gasX > 100) throw new Error("GAS_X phải lớn hơn 0 và không quá 100");
+    return { gasX, gasGwei: null };
+  }
+  if (hasGwei) {
+    const gasGwei = String(values.GAS_GWEI).trim();
+    ethers.parseUnits(gasGwei, "gwei");
+    return { gasX: null, gasGwei };
+  }
+  return { gasX: 2, gasGwei: null };
+}
+
 function normalizeMode(value) {
   const raw = String(value || "twitter").trim().toLowerCase();
   if (["twitter", "tw", "x", "tweet"].includes(raw)) return "twitter";
@@ -89,8 +105,7 @@ export function buildConfig(values, chainName) {
   if (maxTaxPercent < 0 || maxTaxPercent > 100) throw new Error("MAX_TAX_PERCENT phải từ 0 đến 100");
   if (slippagePercent < 0 || slippagePercent >= 100) throw new Error("SLIPPAGE_PERCENT phải từ 0 đến dưới 100");
   if (maxMcapUsd < 0) throw new Error("MAX_MCAP_USD phải từ 0 trở lên. 0 nghĩa là không giới hạn.");
-  const gasGwei = values.GAS_GWEI || "3";
-  ethers.parseUnits(String(gasGwei), "gwei");
+  const gas = gasConfig(values);
   return {
     chain,
     mode,
@@ -101,7 +116,8 @@ export function buildConfig(values, chainName) {
     buyAmount,
     buyWei,
     probeWei: probeParsed < buyWei ? probeParsed : buyWei,
-    gasGwei,
+    gasX: gas.gasX,
+    gasGwei: gas.gasGwei,
     gasLimit: Math.round(num(values.GAS_LIMIT, 1_200_000, "GAS_LIMIT")),
     maxTaxPercent,
     slippagePercent,
