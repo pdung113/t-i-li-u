@@ -224,6 +224,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     let sawLiquidity = false;
     let reported = false;
     let lastWaitLog = 0;
+    let lastRetryLog = 0;
     while (!stopped && Date.now() < until) {
       attempt += 1;
       if (waitForever && !sawLiquidity) {
@@ -240,7 +241,9 @@ export async function main(argv = process.argv.slice(2), options = {}) {
         log(`Đã có thanh khoản ${token}. Đo tax và mua ngay.`);
       }
       const noncePromise =
-        wallet && !config.dryRun ? provider.getTransactionCount(wallet.address, "pending") : Promise.resolve(null);
+        wallet && !config.dryRun
+          ? provider.getTransactionCount(wallet.address, "pending").catch((error) => error)
+          : Promise.resolve(null);
       const gasPromise = quoteBuyGas(provider, config).catch((error) => error);
       let result;
       try {
@@ -292,8 +295,11 @@ export async function main(argv = process.argv.slice(2), options = {}) {
 
       if (!decision.ok) {
         if (!decision.terminal) {
-          const pool = await describePool(provider, config.chain, token);
-          log(`Chưa vào lệnh (${pool}). Thử lại...`);
+          if (Date.now() - lastRetryLog > 15_000) {
+            const pool = await describePool(provider, config.chain, token);
+            log(`Chưa vào lệnh (${pool}). Thử lại...`);
+            lastRetryLog = Date.now();
+          }
           await sleep(config.retryMs);
           continue;
         }
@@ -340,6 +346,11 @@ export async function main(argv = process.argv.slice(2), options = {}) {
       }
 
       const nonce = await noncePromise;
+      if (nonce instanceof Error) {
+        log(`Không lấy được nonce: ${nonce.shortMessage || nonce.message}`);
+        await sleep(config.retryMs);
+        continue;
+      }
       const tx = buildBuyTx({
         chain: config.chain,
         token,
@@ -365,9 +376,12 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   };
 
   if (config.mode === "liquid") {
-    await snipe(config.contract, { id: "liquid" }, { waitForever: true });
-    stop();
-    await provider.destroy();
+    try {
+      await snipe(config.contract, { id: "liquid" }, { waitForever: true });
+    } finally {
+      stop();
+      await provider.destroy();
+    }
     return;
   }
 

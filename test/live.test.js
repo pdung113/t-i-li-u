@@ -3,6 +3,7 @@ import test from "node:test";
 import { ethers } from "ethers";
 import { pricedGas } from "../src/buy.js";
 import { resolveChain } from "../src/chains.js";
+import { main } from "../src/index.js";
 import { marketCapUsd } from "../src/mcap.js";
 import { hasBuyLiquidity, simulateSwap, underlyingToken } from "../src/simulate.js";
 import { fetchStatuses } from "../src/twitter.js";
@@ -105,20 +106,40 @@ test("vốn hóa CAKE trên BSC nằm trong khoảng hợp lý", { timeout: 30_0
 test("CAKE đã có thanh khoản, địa chỉ lạ thì chưa", { timeout: 20_000 }, async () => {
   assert.equal(await hasBuyLiquidity(provider, chain, CAKE), true);
   assert.equal(
+    await hasBuyLiquidity(provider, chain, "0x0eD7e52944161450477ee417DE9Cd3a859b14fD0"),
+    true,
+  );
+  assert.equal(
     await hasBuyLiquidity(provider, chain, "0x0000000000000000000000000000000000000001"),
     false,
   );
 });
 
+test("chế độ liquid dry-run với CAKE rồi dừng", { timeout: 45_000 }, async () => {
+  await main([], {
+    setupText: `
+MODE=liquid
+CHAIN=bsc
+CONTRACT=${CAKE}
+BUY_AMOUNT=0.002
+GAS_X=2
+MAX_TAX_PERCENT=10
+MAX_MCAP_USD=0
+DRY_RUN=true
+`,
+  });
+});
+
 test("đọc timeline X", { timeout: 30_000 }, async () => {
   let tweets = [];
   let error = null;
-  for (let attempt = 0; attempt < 3 && tweets.length === 0; attempt++) {
+  for (let attempt = 0; attempt < 5 && tweets.length === 0; attempt++) {
     try {
       tweets = await fetchStatuses("binance");
       error = null;
     } catch (err) {
       error = err;
+      await new Promise((resolve) => setTimeout(resolve, 400));
     }
   }
   if (tweets.length === 0) throw error || new Error("timeline trống");

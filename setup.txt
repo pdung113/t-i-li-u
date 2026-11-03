@@ -21,6 +21,9 @@ GAS_LIMIT=1200000
 # Tax cao hơn số này thì không mua. 10 = 10%.
 MAX_TAX_PERCENT=10
 
+# Chấp nhận giá tệ hơn bao nhiêu phần trăm so với lúc mô phỏng. 15 = 15%.
+SLIPPAGE_PERCENT=15
+
 # Vốn hóa (giá pool x tổng cung, quy ra USD) lớn hơn số này thì không mua.
 # 100000 = 100 nghìn đô. Điền 0 nếu không giới hạn.
 MAX_MCAP_USD=100000

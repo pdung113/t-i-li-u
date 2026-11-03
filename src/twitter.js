@@ -111,7 +111,7 @@ export function tweetTimestamp(tweet) {
  * @param {string} handle
  * @param {{ since?: number, signal?: AbortSignal }} [opts]
  */
-export async function fetchStatuses(handle, opts = {}) {
+async function fetchStatusesOnce(handle, opts = {}) {
   const url = new URL(`https://api.fxtwitter.com/2/profile/${encodeURIComponent(handle)}/statuses`);
   url.searchParams.set("count", "8");
   url.searchParams.set("with_replies", "1");
@@ -147,6 +147,20 @@ export async function fetchStatuses(handle, opts = {}) {
   }
   const results = Array.isArray(body?.results) ? body.results : [];
   return results.filter((item) => item && (item.type === "status" || item.text || item.raw_text));
+}
+
+export async function fetchStatuses(handle, opts = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await fetchStatusesOnce(handle, opts);
+    } catch (error) {
+      lastError = error;
+      if (error.code !== 404 || attempt === 2 || opts.signal?.aborted) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+  throw lastError;
 }
 
 /** @param {string} statusId */

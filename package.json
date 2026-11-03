@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Theo dõi link X của dự án và mua token V2 khi họ đăng contract, nếu tax còn trong ngưỡng.",
+  "description": "Mua token V2 khi dự án đăng contract trên X, hoặc khi contract đã biết được add liquidity.",
   "scripts": {
     "start": "node src/index.js",
     "compile-probe": "node scripts/compile-probe.js",
