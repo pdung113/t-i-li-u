@@ -1,0 +1,27 @@
+# Sửa file này bằng Notepad. Lưu (Ctrl+S). Rồi chỉ cần chạy: npm start
+# Chain: bsc | eth | base | robinhood
+# LINK là trang X hoặc link một tweet.
+
+CHAIN=bsc
+LINK=
+
+# Số BNB hoặc ETH mua mỗi lần.
+BUY_AMOUNT=0.05
+
+# Gas. Mạng tắc thì tăng lên 5 hoặc 10.
+GAS_GWEI=3
+GAS_LIMIT=1200000
+
+# Tax cao hơn số này thì không mua. 10 = 10%.
+MAX_TAX_PERCENT=10
+
+# Vốn hóa (giá pool x tổng cung, quy ra USD) lớn hơn số này thì không mua.
+# 100000 = 100 nghìn đô. Điền 0 nếu không giới hạn.
+MAX_MCAP_USD=100000
+
+# true = chưa gửi tiền. Muốn mua thật thì đổi thành false và điền PRIVATE_KEY.
+DRY_RUN=true
+PRIVATE_KEY=
+
+# Để trống nếu dùng RPC sẵn. Có RPC riêng thì dán vào.
+RPC_URL=

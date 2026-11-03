@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ethers } from "ethers";
 import { resolveChain } from "../src/chains.js";
+import { marketCapUsd } from "../src/mcap.js";
 import { simulateSwap, underlyingToken } from "../src/simulate.js";
 import { fetchStatuses } from "../src/twitter.js";
 
@@ -83,6 +84,13 @@ test("mô phỏng mua trên Robinhood Chain", { timeout: 30_000 }, async () => {
   } finally {
     await rpc.destroy();
   }
+});
+
+test("vốn hóa CAKE trên BSC nằm trong khoảng hợp lý", { timeout: 30_000 }, async () => {
+  const cap = await marketCapUsd(provider, chain, CAKE);
+  console.log("CAKE mcap", cap.usd);
+  assert.ok(cap.usd > 1_000_000);
+  assert.ok(cap.usd < 100_000_000_000);
 });
 
 test("đọc timeline X", { timeout: 30_000 }, async () => {

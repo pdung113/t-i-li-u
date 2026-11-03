@@ -6,6 +6,8 @@ import { resolveChain } from "../src/chains.js";
 import { decide, formatTax, taxBps } from "../src/decide.js";
 import { parseSimulateResult } from "../src/simulate.js";
 import { main } from "../src/index.js";
+import { fdvUsd, formatUsd, mcapDecision } from "../src/mcap.js";
+import { buildConfig, parseSetup } from "../src/setup.js";
 import { extractAddresses, parseTwitterTarget } from "../src/twitter.js";
 
 test("main nhận link và từ chối link lạ", async () => {
@@ -24,6 +26,36 @@ test("chain eth, base, robinhood", async () => {
   assert.equal(resolveChain("rh").name, "robinhood");
   assert.equal(resolveChain("robinhood").weth, "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73");
   await assert.rejects(() => main(["--chain", "nope", "https://x.com/foo"]), /Chain không hỗ trợ/);
+});
+
+test("setup.txt và ngưỡng vốn hóa", () => {
+  const values = parseSetup(`
+# ghi chú
+CHAIN=base
+LINK=https://x.com/abc
+BUY_AMOUNT=0.02
+MAX_TAX_PERCENT=5
+MAX_MCAP_USD=50000
+DRY_RUN=false
+`);
+  const config = buildConfig(values);
+  assert.equal(config.chain.name, "base");
+  assert.equal(config.link, "https://x.com/abc");
+  assert.equal(config.buyAmount, "0.02");
+  assert.equal(config.maxTaxPercent, 5);
+  assert.equal(config.maxMcapUsd, 50000);
+  assert.equal(config.dryRun, false);
+  assert.equal(mcapDecision(50000, 50000).ok, true);
+  assert.equal(mcapDecision(50001, 50000).reason, "too_high");
+  assert.equal(mcapDecision(null, 50000).retry, true);
+  assert.equal(mcapDecision(999999, 0).ok, true);
+
+  const supply = 1_000_000n * 10n ** 18n;
+  const tokenReserve = supply;
+  const nativeReserve = 10n ** 18n;
+  const price = 2_000n * 10n ** 8n;
+  assert.equal(fdvUsd(supply, tokenReserve, nativeReserve, price), 2000);
+  assert.equal(formatUsd(100000), "100.0k");
 });
 
 test("parse link X", () => {

@@ -1,11 +1,10 @@
-import "dotenv/config";
 import { ethers } from "ethers";
 import { pathToFileURL } from "node:url";
 import { buildBuyTx, minOutFromReceived } from "./buy.js";
-import { resolveChain } from "./chains.js";
 import { REASON_TEXT, decide, formatTax } from "./decide.js";
 import { log } from "./log.js";
-import * as settings from "./settings.js";
+import { formatUsd, marketCapUsd, mcapDecision } from "./mcap.js";
+import { loadConfig } from "./setup.js";
 import { SIM_EOA, describePool, simulateSwap, underlyingToken } from "./simulate.js";
 import { extractAddresses, fetchStatus, fetchStatuses, parseTwitterTarget, tweetTimestamp } from "./twitter.js";
 
@@ -13,44 +12,6 @@ const DEAD = new Set([
   "0x0000000000000000000000000000000000000000",
   "0x000000000000000000000000000000000000dead",
 ]);
-
-function envBool(name, fallback) {
-  const value = process.env[name];
-  if (value == null || value.trim() === "") return fallback;
-  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
-}
-
-function readPrivateKey() {
-  let key = (process.env.PRIVATE_KEY || "").trim().replace(/^["']|["']$/g, "");
-  if (!key) return null;
-  if (!key.startsWith("0x")) key = `0x${key}`;
-  if (!/^0x[0-9a-fA-F]{64}$/.test(key)) {
-    throw new Error("PRIVATE_KEY trong .env không đúng định dạng");
-  }
-  return key;
-}
-
-export function loadConfig(chainName) {
-  const chain = resolveChain(chainName || process.env.CHAIN || settings.CHAIN);
-  const buyWei = ethers.parseEther(settings.BUY_AMOUNT);
-  const probeWei = ethers.parseEther(settings.PROBE_AMOUNT);
-  if (buyWei <= 0n) throw new Error("BUY_AMOUNT phải lớn hơn 0");
-  if (probeWei <= 0n) throw new Error("PROBE_AMOUNT phải lớn hơn 0");
-  if (settings.MAX_TAX_PERCENT < 0 || settings.MAX_TAX_PERCENT > 100) {
-    throw new Error("MAX_TAX_PERCENT phải từ 0 đến 100");
-  }
-  if (settings.SLIPPAGE_PERCENT < 0 || settings.SLIPPAGE_PERCENT >= 100) {
-    throw new Error("SLIPPAGE_PERCENT phải từ 0 đến dưới 100");
-  }
-  return {
-    chain,
-    rpc: process.env.RPC_URL || chain.rpc,
-    dryRun: envBool("DRY_RUN", settings.DRY_RUN),
-    buyWei,
-    probeWei: probeWei < buyWei ? probeWei : buyWei,
-    privateKey: readPrivateKey(),
-  };
-}
 
 function isBlacklisted(chain, address) {
   const key = address.toLowerCase();
@@ -77,7 +38,7 @@ async function evaluateToken(provider, config, token, nowSec) {
     full = probe;
   }
 
-  const decision = decide(probe, settings.MAX_TAX_PERCENT);
+  const decision = decide(probe, config.maxTaxPercent);
   const fill = full && !full.buyFailed ? full : probe;
   return { probe, full, fill, decision };
 }
@@ -92,25 +53,32 @@ async function inspectToken(config, tokenArg) {
     const now = Number(block.timestamp);
     const token = ethers.getAddress(tokenArg);
     const started = Date.now();
-    const { probe, full, fill, decision } = await evaluateToken(provider, config, token, now);
+    const [{ probe, full, fill, decision }, cap] = await Promise.all([
+      evaluateToken(provider, config, token, now),
+      config.maxMcapUsd > 0 ? marketCapUsd(provider, config.chain, token).catch(() => null) : Promise.resolve(null),
+    ]);
     const symbol = config.chain.nativeSymbol;
+    const capNote = cap?.usd != null ? ` | mcap $${formatUsd(cap.usd)}` : "";
     log(
-      `${token} buy ${formatTax(probe.buyTaxBps)} sell ${formatTax(probe.sellTaxBps)} | ${REASON_TEXT[decision.reason] || decision.reason} | ${Date.now() - started}ms`,
+      `${token} buy ${formatTax(probe.buyTaxBps)} sell ${formatTax(probe.sellTaxBps)}${capNote} | ${REASON_TEXT[decision.reason] || decision.reason} | ${Date.now() - started}ms`,
     );
     if (probe.buyRevert) log(`Buy revert: ${probe.buyRevert}`);
     if (probe.sellRevert) log(`Sell revert: ${probe.sellRevert}`);
+    const gate = mcapDecision(cap?.usd ?? null, config.maxMcapUsd);
     if (full?.buyFailed) {
-      log(`Khối lượng ${settings.BUY_AMOUNT} ${symbol} không mua được trong mô phỏng.`);
-    } else if (decision.ok) {
-      const minOut = minOutFromReceived(fill.gotTokens, settings.SLIPPAGE_PERCENT);
-      log(`Trong ngưỡng ${settings.MAX_TAX_PERCENT}%. minOut ${minOut}. Lệnh kiểm tra này không gửi giao dịch.`);
+      log(`Khối lượng ${config.buyAmount} ${symbol} không mua được trong mô phỏng.`);
+    } else if (decision.ok && !gate.ok && !gate.retry) {
+      log(`Vốn hóa $${formatUsd(cap.usd)} lớn hơn $${formatUsd(config.maxMcapUsd)}. Lệnh kiểm tra này không gửi giao dịch.`);
+    } else if (decision.ok && gate.ok) {
+      const minOut = minOutFromReceived(fill.gotTokens, config.slippagePercent);
+      log(`Trong ngưỡng tax ${config.maxTaxPercent}% và mcap. minOut ${minOut}. Lệnh kiểm tra này không gửi giao dịch.`);
     }
   } finally {
     await provider.destroy();
   }
 }
 
-export async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2), options = {}) {
   const tokenIdx = argv.indexOf("--token");
   const tokenArg = tokenIdx >= 0 ? argv[tokenIdx + 1] : null;
   const chainIdx = argv.indexOf("--chain");
@@ -119,26 +87,24 @@ export async function main(argv = process.argv.slice(2)) {
   if (tokenIdx >= 0) skip.add(tokenIdx + 1);
   if (chainIdx >= 0) skip.add(chainIdx + 1);
   const targetArg = argv.find((arg, index) => !arg.startsWith("--") && !skip.has(index));
-  if (!targetArg && tokenIdx === -1) {
-    console.log("Cách dùng: node src/index.js --chain bsc https://x.com/ten_du_an");
-    console.log("Chain:     bsc | eth | base | robinhood");
-    console.log("Thử tax:   node src/index.js --chain eth --token 0x...");
-    console.log("Chỉnh gas, số lượng, và ngưỡng tax trong src/settings.js");
-    process.exitCode = 1;
-    return;
-  }
   if (chainIdx >= 0 && !chainArg) {
     throw new Error("Thiếu tên chain sau --chain. Dùng bsc, eth, base, hoặc robinhood.");
   }
 
-  const config = loadConfig(chainArg);
+  const config = loadConfig(chainArg, options.setupText);
   if (tokenIdx !== -1) {
     await inspectToken(config, tokenArg);
     return;
   }
-  const target = parseTwitterTarget(targetArg);
+  const targetSource = targetArg || config.link;
+  if (!targetSource) {
+    console.log("Mở setup.txt, điền LINK, lưu file, rồi chạy: npm start");
+    process.exitCode = 1;
+    return;
+  }
+  const target = parseTwitterTarget(targetSource);
   if (!config.dryRun && !config.privateKey) {
-    throw new Error("Đặt PRIVATE_KEY trong .env, hoặc giữ DRY_RUN = true trong src/settings.js");
+    throw new Error("Điền PRIVATE_KEY trong setup.txt, hoặc giữ DRY_RUN=true");
   }
 
   const provider = new ethers.JsonRpcProvider(config.rpc, config.chain.chainId, { staticNetwork: true });
@@ -158,19 +124,19 @@ export async function main(argv = process.argv.slice(2)) {
 
   const symbol = config.chain.nativeSymbol;
   log(
-    `Chain ${config.chain.name} | mua ${settings.BUY_AMOUNT} ${symbol} | gas ${settings.GAS_GWEI} gwei | tax tối đa ${settings.MAX_TAX_PERCENT}% | ${config.dryRun ? "DRY RUN" : "MUA THẬT"}`,
+    `Chain ${config.chain.name} | mua ${config.buyAmount} ${symbol} | gas ${config.gasGwei} gwei | tax tối đa ${config.maxTaxPercent}% | mcap tối đa ${config.maxMcapUsd > 0 ? `$${formatUsd(config.maxMcapUsd)}` : "không giới hạn"} | ${config.dryRun ? "DRY RUN" : "MUA THẬT"}`,
   );
   log(`RPC ${config.rpc}`);
   log(`Theo dõi @${target.handle}${target.statusId ? ` tweet ${target.statusId}` : ""}`);
   if (wallet) {
     const balance = await provider.getBalance(wallet.address);
-    const gasCap = ethers.parseUnits(String(settings.GAS_GWEI), "gwei") * BigInt(settings.GAS_LIMIT);
+    const gasCap = ethers.parseUnits(String(config.gasGwei), "gwei") * BigInt(config.gasLimit);
     log(`Ví ${wallet.address} | số dư ${ethers.formatEther(balance)} ${symbol}`);
     if (!config.dryRun && balance < config.buyWei + gasCap) {
       log("Cảnh báo: số dư có thể không đủ cho số mua + trần gas. Dùng ví riêng, chỉ nạp số chấp nhận mất.");
     }
   } else {
-    log("Chưa có PRIVATE_KEY — chỉ mô phỏng, không gửi lệnh.");
+    log("Chưa có PRIVATE_KEY trong setup.txt — chỉ mô phỏng, không gửi lệnh.");
   }
 
   const seenTweets = new Set();
@@ -230,7 +196,7 @@ export async function main(argv = process.argv.slice(2)) {
     const detectedAt = Date.now();
     log(`Contract ${token} từ tweet ${tweet.id}. Đang đo tax...`);
 
-    const until = detectedAt + settings.WAIT_FOR_PAIR_MS;
+    const until = detectedAt + config.waitForPairMs;
     let attempt = 0;
     while (!stopped && Date.now() < until) {
       attempt += 1;
@@ -241,7 +207,7 @@ export async function main(argv = process.argv.slice(2)) {
         result = await evaluateToken(provider, config, token, nowSec());
       } catch (error) {
         log(`Mô phỏng lỗi: ${error.shortMessage || error.message}`);
-        await sleep(settings.RETRY_MS);
+        await sleep(config.retryMs);
         continue;
       }
 
@@ -264,14 +230,14 @@ export async function main(argv = process.argv.slice(2)) {
             result = await evaluateToken(provider, config, token, nowSec());
           } catch (error) {
             log(`Mô phỏng lỗi: ${error.shortMessage || error.message}`);
-            await sleep(settings.RETRY_MS);
+            await sleep(config.retryMs);
             continue;
           }
         }
       }
 
       const { probe, full, fill, decision } = result;
-      const sizeNote = full && full !== probe ? ` | lệnh ${settings.BUY_AMOUNT} ${symbol} ${full.buyFailed ? "không mua được" : "mua được"}` : "";
+      const sizeNote = full && full !== probe ? ` | lệnh ${config.buyAmount} ${symbol} ${full.buyFailed ? "không mua được" : "mua được"}` : "";
       if (attempt === 1 || decision.terminal || decision.ok) {
         log(
           `Tax buy ${formatTax(probe.buyTaxBps)} sell ${formatTax(probe.sellTaxBps)} trong ${probe.ms}ms.${probe.buyRevert ? ` Buy: ${probe.buyRevert}.` : ""}${probe.sellRevert ? ` Sell: ${probe.sellRevert}.` : ""}${sizeNote}`,
@@ -279,7 +245,7 @@ export async function main(argv = process.argv.slice(2)) {
       }
 
       if (decision.ok && full?.buyFailed) {
-        log(`Không mua ${settings.BUY_AMOUNT} ${symbol}: pool không nhận khối lượng này. Giảm BUY_AMOUNT trong src/settings.js.`);
+        log(`Không mua ${config.buyAmount} ${symbol}: pool không nhận khối lượng này. Giảm BUY_AMOUNT trong setup.txt.`);
         return;
       }
 
@@ -287,18 +253,40 @@ export async function main(argv = process.argv.slice(2)) {
         if (!decision.terminal) {
           const pool = await describePool(provider, config.chain, token);
           log(`Chưa vào lệnh (${pool}). Thử lại...`);
-          await sleep(settings.RETRY_MS);
+          await sleep(config.retryMs);
           continue;
         }
         log(`Không mua: ${REASON_TEXT[decision.reason] || decision.reason}.`);
         return;
       }
 
-      const minOut = minOutFromReceived(fill.gotTokens, settings.SLIPPAGE_PERCENT);
+      if (config.maxMcapUsd > 0) {
+        let cap;
+        try {
+          cap = await marketCapUsd(provider, config.chain, token);
+        } catch (error) {
+          log(`Không đo được vốn hóa: ${error.shortMessage || error.message}`);
+          await sleep(config.retryMs);
+          continue;
+        }
+        const gate = mcapDecision(cap.usd, config.maxMcapUsd);
+        if (!gate.ok && gate.retry) {
+          log("Chưa có giá để tính vốn hóa. Thử lại...");
+          await sleep(config.retryMs);
+          continue;
+        }
+        if (!gate.ok) {
+          log(`Không mua: vốn hóa $${formatUsd(cap.usd)} lớn hơn $${formatUsd(config.maxMcapUsd)}.`);
+          return;
+        }
+        log(`Vốn hóa $${formatUsd(cap.usd)}, trong ngưỡng $${formatUsd(config.maxMcapUsd)}.`);
+      }
+
+      const minOut = minOutFromReceived(fill.gotTokens, config.slippagePercent);
       const deadline = BigInt(nowSec() + 180);
       if (config.dryRun || !wallet) {
         log(
-          `DRY RUN khớp. Sẽ mua ${settings.BUY_AMOUNT} ${symbol}, minOut ${minOut}, gas ${settings.GAS_GWEI} gwei. Từ lúc thấy contract: ${Date.now() - detectedAt}ms.`,
+          `DRY RUN khớp. Sẽ mua ${config.buyAmount} ${symbol}, minOut ${minOut}, gas ${config.gasGwei} gwei. Từ lúc thấy contract: ${Date.now() - detectedAt}ms.`,
         );
         return;
       }
@@ -310,8 +298,8 @@ export async function main(argv = process.argv.slice(2)) {
         walletAddress: wallet.address,
         valueWei: config.buyWei,
         minOut,
-        gasGwei: settings.GAS_GWEI,
-        gasLimit: settings.GAS_LIMIT,
+        gasGwei: config.gasGwei,
+        gasLimit: config.gasLimit,
         nonce,
         deadline,
       });
@@ -325,7 +313,7 @@ export async function main(argv = process.argv.slice(2)) {
       return;
     }
 
-    if (!stopped) log(`Hết ${Math.round(settings.WAIT_FOR_PAIR_MS / 1000)}s, không mua ${token}.`);
+    if (!stopped) log(`Hết ${Math.round(config.waitForPairMs / 1000)}s, không mua ${token}.`);
   };
 
   if (target.statusId) {
@@ -341,7 +329,7 @@ export async function main(argv = process.argv.slice(2)) {
     const nowUnix = Math.floor(Date.now() / 1000);
     const ordered = [...tweets].sort((a, b) => tweetTimestamp(a) - tweetTimestamp(b));
     for (const tweet of ordered) {
-      const fresh = tweetTimestamp(tweet) >= nowUnix - settings.LOOKBACK_SEC;
+      const fresh = tweetTimestamp(tweet) >= nowUnix - config.lookbackSec;
       considerTweet(tweet, { buy: fresh });
       since = Math.max(since, tweetTimestamp(tweet));
     }
@@ -387,7 +375,7 @@ export async function main(argv = process.argv.slice(2)) {
       log(`Vẫn đang theo dõi @${target.handle}.`);
       lastBeat = Date.now();
     }
-    const pause = settings.POLL_MS - (Date.now() - started);
+    const pause = config.pollMs - (Date.now() - started);
     if (pause > 0) await sleep(pause);
   }
 }
