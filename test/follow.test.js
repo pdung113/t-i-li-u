@@ -8,6 +8,8 @@ import { loadAlertConfig } from "../src/follow-alert.js";
 import {
   FollowError,
   createXClient,
+  enrichFollowed,
+  extractContracts,
   fileStore,
   formatFollowAlert,
   freshState,
@@ -24,6 +26,7 @@ function user(id, handle, extra = {}) {
     id: String(id),
     handle,
     name: extra.name || handle,
+    description: extra.description || "",
     protected: extra.protected === true,
     following: extra.following ?? null,
     url: `https://x.com/${handle}`,
@@ -45,6 +48,7 @@ function memoryStore(initial = freshState()) {
         bootstrapped: next.bootstrapped,
         emptyOk: next.emptyOk,
         seen: new Set(next.seen),
+        people: Array.isArray(next.people) ? next.people.map((item) => ({ ...item, contracts: [...(item.contracts || [])] })) : [],
         corrupt: false,
       };
     },
@@ -67,6 +71,104 @@ test("tin Telegram ghi tên và link", () => {
     "@github vừa follow The Octocat (@octocat)\nhttps://x.com/octocat",
   );
   assert.equal(formatFollowAlert("github", user(2, "octocat")), "@github vừa follow @octocat\nhttps://x.com/octocat");
+  const ca = "0x1111111111111111111111111111111111111111";
+  assert.equal(
+    formatFollowAlert("vladtenev", {
+      ...user(2, "proj", { name: "Proj" }),
+      contracts: [ca],
+      contractTweet: "https://x.com/proj/status/99",
+    }),
+    `@vladtenev vừa follow Proj (@proj)\nhttps://x.com/proj\nContract: ${ca}\nhttps://x.com/proj/status/99`,
+  );
+});
+
+test("lấy contract trong bio và bài của chính dự án", () => {
+  const ca = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const other = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const hash = `0x${"ab".repeat(32)}`;
+  assert.deepEqual(extractContracts(`CA: ${ca}`, `again ${ca}`, hash), [ca]);
+  assert.deepEqual(extractContracts(`tx ${hash} end`), []);
+  assert.deepEqual(extractContracts(`pair ${ca} ${other}`), [ca, other]);
+});
+
+test("follow một dự án thì tin có link X và contract, rồi được nhớ lại", async () => {
+  const bioCa = "0x1111111111111111111111111111111111111111";
+  const postCa = "0x2222222222222222222222222222222222222222";
+  const strangerCa = "0x3333333333333333333333333333333333333333";
+  const state = freshState();
+  state.bootstrapped = true;
+  state.seen.add("1");
+  const store = memoryStore(state);
+  const sent = [];
+  await watch({
+    handle: "vladtenev",
+    client: {
+      async profile(handle) {
+        if (handle === "proj") {
+          return profile("proj", { id: 2, name: "Proj", description: `CA: ${bioCa}`, following: 1 });
+        }
+        return profile("vladtenev", { id: 9, following: 893 });
+      },
+      async following() {
+        return {
+          users: [user(2, "proj", { name: "Proj" }), user(1, "old")],
+          cursor: null,
+        };
+      },
+      async statuses(handle) {
+        assert.equal(handle, "proj");
+        return [
+          {
+            id: "99",
+            text: `live ${postCa}`,
+            url: "https://x.com/proj/status/99",
+            author: { screen_name: "proj" },
+          },
+          {
+            id: "100",
+            text: `ignore ${strangerCa}`,
+            author: { screen_name: "someoneelse" },
+          },
+        ];
+      },
+    },
+    store,
+    maxCycles: 1,
+    sleep: async () => {},
+    log() {},
+    notify: async (text) => sent.push(text),
+  });
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /@vladtenev vừa follow Proj \(@proj\)/);
+  assert.match(sent[0], /https:\/\/x\.com\/proj\n/);
+  assert.match(sent[0], new RegExp(`Contract: ${bioCa}`));
+  assert.match(sent[0], new RegExp(`Contract: ${postCa}`));
+  assert.equal(sent[0].includes(strangerCa), false);
+  assert.match(sent[0], /https:\/\/x\.com\/proj\/status\/99/);
+  const remembered = store.get().people[0];
+  assert.equal(remembered.handle, "proj");
+  assert.equal(remembered.url, "https://x.com/proj");
+  assert.deepEqual(remembered.contracts, [bioCa, postCa]);
+  const restored = parseState(JSON.stringify(serializeState(store.get())));
+  assert.equal(restored.people[0].url, "https://x.com/proj");
+  assert.deepEqual(restored.people[0].contracts, [bioCa, postCa]);
+});
+
+test("không đọc được bài viết thì vẫn báo link", async () => {
+  const person = user(4, "quiet", { name: "Quiet" });
+  const enriched = await enrichFollowed(
+    {
+      async profile() {
+        throw new FollowError("@quiet đang khoá. Danh sách follow không công khai.", "private");
+      },
+      async statuses() {
+        throw new FollowError("Bài viết chưa tải được", "unavailable");
+      },
+    },
+    person,
+  );
+  assert.deepEqual(enriched.contracts, []);
+  assert.equal(formatFollowAlert("vladtenev", enriched), "@vladtenev vừa follow Quiet (@quiet)\nhttps://x.com/quiet");
 });
 
 test("chỉ lấy follow mới đứng trước id đã biết, theo thứ tự cũ đến mới", () => {

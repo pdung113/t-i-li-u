@@ -12,7 +12,8 @@ const USAGE = `Cách dùng:
 
 Điền TELEGRAM_BOT_TOKEN và TELEGRAM_CHAT_ID trong .env.
 Chỉ đọc follow công khai. Lần chạy đầu nhớ danh sách hiện tại, không gửi tin.
-Sau đó mỗi follow mới được báo qua Telegram.`;
+Sau đó mỗi follow mới được báo qua Telegram, kèm link X.
+Nếu người đó đăng contract trong bio hoặc bài viết, contract được thêm vào tin.`;
 
 export function loadAlertConfig(env = process.env) {
   const token = String(env.TELEGRAM_BOT_TOKEN || "").trim();

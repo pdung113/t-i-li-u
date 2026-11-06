@@ -32,6 +32,19 @@ test("đọc follow công khai của @github và chỉ báo người chưa có t
   }
 });
 
+test("@vladtenev là tài khoản công khai, đọc được bài viết", { timeout: 45_000 }, async () => {
+  const client = createXClient({ retries: 6 });
+  const profile = await client.profile("vladtenev");
+  assert.equal(profile.protected, false);
+  assert.equal(profile.handle.toLowerCase(), "vladtenev");
+  assert.equal(profile.url, "https://x.com/vladtenev");
+  assert.ok(profile.following > 0);
+  const tweets = await client.statuses(profile.handle, { count: 5 });
+  assert.ok(Array.isArray(tweets));
+  assert.ok(tweets.length > 0);
+  assert.ok(tweets.some((tweet) => typeof tweet.text === "string" && tweet.text.length > 0));
+});
+
 test("Telegram từ chối token giả", { timeout: 20_000 }, async () => {
   await assert.rejects(
     sendTelegram({

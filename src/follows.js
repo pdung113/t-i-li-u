@@ -17,7 +17,7 @@ export class FollowError extends Error {
 }
 
 export function freshState() {
-  return { bootstrapped: false, emptyOk: false, seen: new Set(), corrupt: false };
+  return { bootstrapped: false, emptyOk: false, seen: new Set(), people: [], corrupt: false };
 }
 
 /**
@@ -33,10 +33,17 @@ export function normalizeUser(raw) {
   const following = Number(record.following);
   const name = String(record.name || handle).replace(/[\r\n\t]+/g, " ").trim() || handle;
   const givenUrl = typeof record.url === "string" ? record.url : "";
+  const fromRaw =
+    record.raw_description && typeof record.raw_description === "object"
+      ? String(record.raw_description.text || "")
+      : "";
+  const fromField = String(record.description || "");
+  const description = (fromRaw.length > fromField.length ? fromRaw : fromField).replace(/[\r\n\t]+/g, " ").trim();
   return {
     id,
     handle,
     name,
+    description,
     protected: record.protected === true,
     following: Number.isFinite(following) ? following : null,
     url: /^https:\/\/(x|twitter)\.com\//i.test(givenUrl) ? givenUrl : `https://x.com/${handle}`,
@@ -69,11 +76,106 @@ export function newFollows(seen, usersNewestFirst) {
 
 /**
  * @param {string} target
- * @param {{ handle: string, name?: string, url: string }} user
+ * @param {{ handle: string, name?: string, url: string, contracts?: string[], contractTweet?: string | null }} user
  */
 export function formatFollowAlert(target, user) {
   const who = user.name && user.name !== user.handle ? `${user.name} (@${user.handle})` : `@${user.handle}`;
-  return `@${target} vừa follow ${who}\n${user.url}`;
+  const lines = [`@${target} vừa follow ${who}`, user.url];
+  for (const addr of user.contracts || []) lines.push(`Contract: ${addr}`);
+  if (user.contractTweet && user.contracts?.length) lines.push(user.contractTweet);
+  return lines.join("\n");
+}
+
+/** Địa chỉ contract EVM. Bỏ qua hash dài hơn 40 ký tự hex. */
+export function extractContracts(...parts) {
+  const seen = new Set();
+  const out = [];
+  for (const part of parts) {
+    if (typeof part !== "string" || !part) continue;
+    for (const match of part.matchAll(/0x[a-fA-F0-9]{40}(?![a-fA-F0-9])/gi)) {
+      const addr = match[0];
+      const key = addr.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(addr);
+      if (out.length >= 8) return out;
+    }
+  }
+  return out;
+}
+
+function tweetContractText(tweet) {
+  return [tweet?.text, tweet?.raw_text?.text, tweet?.embed_card?.title, tweet?.embed_card?.description]
+    .filter((part) => typeof part === "string")
+    .join("\n");
+}
+
+/**
+ * Đọc bio và bài mới của người vừa được follow. Lỗi mạng không chặn tin báo.
+ * @param {{ profile?: Function, statuses?: Function }} client
+ * @param {{ id: string, handle: string, name?: string, url: string, description?: string }} user
+ */
+export async function enrichFollowed(client, user) {
+  let description = user.description || "";
+  if (typeof client.profile === "function") {
+    try {
+      const fresh = await client.profile(user.handle, { retries: 1 });
+      if (fresh?.description) description = fresh.description;
+    } catch {
+      // Vẫn báo follow kèm link dù không đọc được bio.
+    }
+  }
+
+  let tweets = [];
+  if (typeof client.statuses === "function") {
+    try {
+      tweets = await client.statuses(user.handle, { count: 20, retries: 2 });
+    } catch {
+      tweets = [];
+    }
+  }
+
+  const contracts = extractContracts(description);
+  let contractTweet = null;
+  for (const tweet of tweets) {
+    const author = tweet?.author?.screen_name;
+    if (author && author.toLowerCase() !== user.handle.toLowerCase()) continue;
+    const found = extractContracts(tweetContractText(tweet));
+    if (!found.length) continue;
+    if (!contractTweet) {
+      contractTweet =
+        typeof tweet.url === "string" && /^https:\/\/(x|twitter)\.com\//i.test(tweet.url)
+          ? tweet.url
+          : `https://x.com/${user.handle}/status/${tweet.id}`;
+    }
+    for (const addr of found) {
+      if (!contracts.some((item) => item.toLowerCase() === addr.toLowerCase())) contracts.push(addr);
+    }
+  }
+
+  return {
+    ...user,
+    description,
+    contracts: contracts.slice(0, 8),
+    contractTweet: contracts.length ? contractTweet : null,
+  };
+}
+
+export function rememberPerson(state, user, at = new Date().toISOString()) {
+  if (!Array.isArray(state.people)) state.people = [];
+  const record = {
+    id: String(user.id),
+    handle: user.handle,
+    name: user.name || user.handle,
+    url: user.url,
+    contracts: [...(user.contracts || [])],
+    contractTweet: user.contractTweet || null,
+    at,
+  };
+  const index = state.people.findIndex((item) => item.id === record.id);
+  if (index >= 0) state.people[index] = record;
+  else state.people.push(record);
+  return record;
 }
 
 function effectiveStatus(http, body) {
@@ -204,7 +306,32 @@ export function createXClient({ fetchImpl = globalThis.fetch, sleep = delay, ret
       { retries: opts.retries ?? retries, sleep, signal: opts.signal },
     );
 
-  return { profile, following };
+  const statuses = (handle, opts = {}) =>
+    withRetry(
+      async () => {
+        const url = new URL(`${API}/2/profile/${encodeURIComponent(handle)}/statuses`);
+        url.searchParams.set("count", String(opts.count || 20));
+        const { http, body } = await requestJson(url, { fetchImpl, signal: opts.signal });
+        return parseStatuses(http, body);
+      },
+      { retries: opts.retries ?? retries, sleep, signal: opts.signal },
+    );
+
+  return { profile, following, statuses };
+}
+
+export function parseStatuses(http, body) {
+  const code = effectiveStatus(http, body);
+  if (code === 429) throw new FollowError("X đang giới hạn tốc độ", "rate");
+  const results = Array.isArray(body?.results) ? body.results : null;
+  if (results && code >= 200 && code < 300) {
+    return results.filter((item) => item && (item.text || item.raw_text || item.id));
+  }
+  if (code === 404 && results && results.length === 0) {
+    throw new FollowError("Bài viết chưa tải được", "unavailable");
+  }
+  if (code === 404) throw new FollowError("Không thấy tài khoản trên X", "not_found");
+  throw new FollowError("Bài viết chưa tải được", "unavailable");
 }
 
 /**
@@ -275,6 +402,7 @@ export function serializeState(state) {
     bootstrapped: state.bootstrapped === true,
     emptyOk: state.emptyOk === true,
     seen: [...state.seen],
+    people: Array.isArray(state.people) ? state.people : [],
   };
 }
 
@@ -296,7 +424,28 @@ export function parseState(text) {
   if (json.bootstrapped && seen.size === 0 && json.emptyOk !== true) {
     return { ...freshState(), corrupt: true };
   }
-  return { bootstrapped: json.bootstrapped, emptyOk: json.emptyOk === true, seen, corrupt: false };
+  const people = [];
+  if (Array.isArray(json.people)) {
+    for (const item of json.people) {
+      if (!item || typeof item !== "object") continue;
+      const id = String(item.id || "");
+      const handle = String(item.handle || "");
+      if (!/^\d+$/.test(id) || !/^[A-Za-z0-9_]{1,15}$/.test(handle)) continue;
+      const contracts = Array.isArray(item.contracts)
+        ? item.contracts.filter((addr) => typeof addr === "string" && /^0x[a-fA-F0-9]{40}$/.test(addr)).slice(0, 8)
+        : [];
+      people.push({
+        id,
+        handle,
+        name: String(item.name || handle),
+        url: typeof item.url === "string" && item.url.startsWith("https://") ? item.url : `https://x.com/${handle}`,
+        contracts,
+        contractTweet: typeof item.contractTweet === "string" ? item.contractTweet : null,
+        at: typeof item.at === "string" ? item.at : null,
+      });
+    }
+  }
+  return { bootstrapped: json.bootstrapped, emptyOk: json.emptyOk === true, seen, people, corrupt: false };
 }
 
 export function statePath(handle, dir = join("data", "follows")) {
@@ -406,11 +555,14 @@ export async function watch(opts) {
         log(`Đã nhớ ${result.seeded} follow gần nhất của @${canonical}. Follow mới sẽ báo qua Telegram.`);
       }
       for (const user of result.alerts) {
-        await opts.notify(formatFollowAlert(canonical, user));
+        const enriched = await enrichFollowed(opts.client, user);
+        await opts.notify(formatFollowAlert(canonical, enriched));
         state.seen.add(user.id);
         state.emptyOk = false;
+        rememberPerson(state, enriched);
         await opts.store.save(state);
-        log(`@${canonical} follow @${user.handle}`);
+        const contractNote = enriched.contracts.length ? ` | ${enriched.contracts.join(", ")}` : "";
+        log(`@${canonical} follow @${enriched.handle}${contractNote}`);
       }
       if (result.truncated) {
         log(`@${canonical} follow quá nhiều người trong một lúc. Một số follow cũ hơn trong khoảng trống có thể chưa được báo.`);

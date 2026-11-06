@@ -64,13 +64,15 @@ Mô phỏng bán dùng một ví sạch và nhích thời gian 3 phút để né
 
 ## Báo follow mới qua Telegram
 
-Tool đọc danh sách follow công khai của một tài khoản X. Lần chạy đầu chỉ ghi nhớ những người họ đang follow, không gửi tin. Những lần sau, follow mới được gửi qua Telegram.
+Tool đọc danh sách follow công khai của một tài khoản X. Lần chạy đầu chỉ ghi nhớ những người họ đang follow, không gửi tin. Những lần sau, follow mới được gửi qua Telegram, kèm link X của người đó.
+
+Nếu người vừa được follow để contract trong bio hoặc bài viết gần đây, tin nhắn thêm dòng `Contract: 0x...` và link bài đó. Những người đã báo được lưu trong `data/follows/`, gồm link và contract.
 
 Tài khoản khoá không dùng được, vì danh sách follow không công khai.
 
 ```bash
 cp .env.example .env
-npm run follow -- https://x.com/username
+npm run follow -- https://x.com/vladtenev
 ```
 
 Trong `.env`:
@@ -88,7 +90,7 @@ npm run follow -- --test-telegram
 Chạy một vòng rồi thoát:
 
 ```bash
-npm run follow -- --once https://x.com/username
+npm run follow -- --once https://x.com/vladtenev
 ```
 
-Follow đã có từ trước khi bật tool không được báo lại. Tool nhớ các id đã thấy trong `data/follows/`. Xoá file đó nếu muốn lập mốc lại từ đầu.
+Follow đã có từ trước khi bật tool không được báo lại. File `data/follows/<username>.json` nhớ id đã thấy và danh sách `people` (link X, contract). Xoá file đó nếu muốn lập mốc lại từ đầu.
