@@ -66,11 +66,20 @@ Mô phỏng bán dùng một ví sạch và nhích thời gian 3 phút để né
 
 ## NFT
 
-Tool riêng. Dán link OpenSea, link chợ có địa chỉ contract, hoặc link web mint của dự án. Tool đọc contract trên trang, xem ví đủ round nào, rồi mint đúng round đó.
+Mở `nft.txt` bằng Notepad. Sửa chain, gas, số lượng, link và private key trong file đó, rồi chạy:
 
 ```bash
-npm run nft -- mint https://mint.du-an.xyz
-npm run nft -- mint https://opensea.io/item/base/0xabc.../1 --qty 2 --gas 20 --max-price 0.05
+npm run nft
+```
+
+Chưa có `nft.txt` thì lệnh trên tạo file từ `nft.example.txt`. Mỗi dòng `key=` là một ví. Nhiều ví mint cùng lúc. Xong, tool in chain đang mint, ví nào thành công, ví nào thất bại, và tổng số NFT.
+
+`dry_run=true` trong file thì chỉ xem trước, không gửi. Đổi thành `false` khi muốn mint thật. Dùng ví riêng, chỉ nạp số chấp nhận mất. Không đưa `nft.txt` lên git sau khi đã dán key.
+
+Tool cũng nhận link OpenSea, link chợ có địa chỉ contract, hoặc trang mint. Ví đủ round nào thì canh đúng round đó.
+
+```bash
+npm run nft -- mint https://mint.du-an.xyz --qty 2 --gas 20 --max-price 0.05
 npm run nft -- buy https://opensea.io/collection/ten-bo-suu-tap --qty 1 --max-price 0.2
 ```
 
@@ -82,9 +91,7 @@ npm run nft -- buy https://opensea.io/collection/ten-bo-suu-tap --qty 1 --max-pr
 - Round chữ ký server không có chữ ký trên trang thì bỏ qua. Tool không tự tạo chữ ký.
 - Giá mỗi NFT cao hơn trần, hoặc số dư không đủ giá cộng gas, thì không mint.
 
-Số lượng và gas sửa trong `src/nft/settings.js`, hoặc ghi đè một lần bằng `--qty`, `--gas`, `--gas-limit`, `--max-price`. Chain lấy từ link hoặc từ trang. Khi trang không ghi chain, thêm `--chain eth`. Chain hỗ trợ: `eth`, `base`, `polygon`, `arbitrum`, `optimism`, `bsc`.
-
-`DRY_RUN` mặc định bật: in round, giờ mở và giao dịch, không gửi. Muốn mint thật thì `DRY_RUN=false` và điền `PRIVATE_KEY`. Dùng ví riêng, chỉ nạp số chấp nhận mất.
+Chain ghi trong `nft.txt`: `eth`, `base`, `polygon`, `arbitrum`, `optimism`, `bsc`. Gas và số lượng cũng ghi trong file đó. `src/nft/settings.js` chỉ là mặc định khi chạy lệnh lẻ.
 
 `buy` lấy listing đang rẻ nhất dưới trần giá. Cần `OPENSEA_API_KEY`. Link collection OpenSea cũng cần key này nếu trang không hiện địa chỉ contract. Link đã có `0x` thì mint không cần key.
 

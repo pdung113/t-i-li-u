@@ -4,13 +4,14 @@ import { ethers } from "ethers";
 import { nftIface, seaDropIface } from "../src/nft/abi.js";
 import { resolveNftChain } from "../src/nft/chains.js";
 import { loadNftOptions, main } from "../src/nft/index.js";
+import { formatReport, parseNotepad, shortAddress } from "../src/nft/notepad.js";
 import { pickCheapest } from "../src/nft/listings.js";
 import { proofFromLeaves, thirdwebLeaf, verifyProof } from "../src/nft/merkle.js";
 import { contractsFromCollection } from "../src/nft/opensea.js";
 import { chainHintsFromText, collectAllowInfo, extractCandidates, parseMarketUrl } from "../src/nft/parse.js";
 import { capQuantity, chooseFeeRecipient, genericRounds, selectRound, thirdwebRound } from "../src/nft/rounds.js";
 import { exposes } from "../src/nft/read.js";
-import { runMint } from "../src/nft/run.js";
+import { runMint, runMintWallets } from "../src/nft/run.js";
 
 const nft = "0x1111111111111111111111111111111111111111";
 const sea = "0x2222222222222222222222222222222222222222";
@@ -18,11 +19,70 @@ const creator = "0x3333333333333333333333333333333333333333";
 const wallet = "0x4444444444444444444444444444444444444444";
 const other = "0x5555555555555555555555555555555555555555";
 
-test("main in cách dùng khi thiếu lệnh", async () => {
+test("chưa có notepad thì tạo file và dừng", async () => {
   const previous = process.exitCode;
-  await main([]);
+  const writes = [];
+  await main([], {
+    file: "nft.txt",
+    exists: () => false,
+    example: "chain=\n",
+    writeFile: (target, text) => writes.push({ target, text }),
+  });
   assert.equal(process.exitCode, 1);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].text, "chain=\n");
   process.exitCode = previous;
+});
+
+test("notepad đọc chain, gas, link và nhiều ví", () => {
+  const secret = `${"ab".repeat(32)}`;
+  const first = ethers.Wallet.createRandom();
+  const second = ethers.Wallet.createRandom();
+  const config = parseNotepad(`
+    # ghi chú
+    chain=base
+    gas=12
+    gas_limit=400000
+    qty=3
+    max_price=0.05
+    dry_run=false
+    link=https://mint.example/drop
+    key=${first.privateKey}
+    ${second.privateKey}
+  `);
+  assert.equal(config.chain, "base");
+  assert.equal(config.gas, "12");
+  assert.equal(config.gasLimit, 400000);
+  assert.equal(config.qty, 3);
+  assert.equal(config.maxPrice, "0.05");
+  assert.equal(config.dryRun, false);
+  assert.equal(config.links.length, 1);
+  assert.equal(config.keys.length, 2);
+  assert.throws(() => parseNotepad(`chain=base\nlink=https://a.example\nkey=${secret}zz`), /dòng/);
+  let leaked = false;
+  try {
+    parseNotepad(`chain=base\nlink=https://a.example\nkey=super-secret-not-a-key`);
+  } catch (error) {
+    leaked = error.message.includes("super-secret");
+    assert.match(error.message, /dòng 3/);
+  }
+  assert.equal(leaked, false);
+  assert.throws(() => parseNotepad(`chain=base\nlink=https://a.example\nkey=${first.privateKey}\nkey=${first.privateKey}`), /Trùng ví/);
+});
+
+test("báo cáo chain, ví thành công và số NFT", () => {
+  const text = formatReport(
+    [
+      { wallet, sent: true, ok: true, quantity: 2 },
+      { wallet: other, sent: false, ok: false, quantity: 0, reason: `revert 0x${"aa".repeat(32)}` },
+    ],
+    "base",
+  );
+  assert.match(text, /Kết quả \| chain base/);
+  assert.match(text, new RegExp(`${shortAddress(wallet)} \\| chain base \\| thành công \\| 2 NFT`));
+  assert.match(text, /thất bại \| 0 NFT/);
+  assert.equal(text.includes("aa".repeat(32)), false);
+  assert.match(text, /Thành công 1\/2 ví, tổng 2 NFT/);
 });
 
 test("đọc cờ gas và số lượng", () => {
@@ -239,4 +299,100 @@ test("dry run canh public khi ví không có allowlist", async () => {
   assert.equal(result.tx.maxPriorityFeePerGas, ethers.parseUnits("9", "gwei"));
   assert.ok(logs.some((line) => line.includes("Chọn round public")));
   assert.ok(logs.some((line) => line.includes("Chưa mở")));
+});
+
+test("nhiều ví trong notepad mint cùng lúc và báo số lượng", async () => {
+  const now = 1_700_000_000;
+  const routes = new Map();
+  const add = (to, iface, fn, values) => {
+    routes.set(`${to.toLowerCase()}:${iface.getFunction(fn).selector.toLowerCase()}`, iface.encodeFunctionResult(fn, values));
+  };
+  add(nft, nftIface, "getAllowedSeaDrop", [[sea]]);
+  add(sea, seaDropIface, "getPublicDrop", [ethers.parseEther("0.01"), now + 3600, now + 7200, 2, 0, false]);
+  add(sea, seaDropIface, "getCreatorPayoutAddress", [creator]);
+  add(sea, seaDropIface, "getAllowedFeeRecipients", [[]]);
+  add(sea, seaDropIface, "getAllowListMerkleRoot", [ethers.ZeroHash]);
+  add(nft, nftIface, "getMintStats", [0, 0, 1000]);
+  add(sea, seaDropIface, "getTokenGatedAllowedTokens", [[]]);
+  const provider = {
+    async getCode() {
+      return "0x60016000";
+    },
+    async getBlock() {
+      return { timestamp: now };
+    },
+    async getBalance() {
+      return ethers.parseEther("1");
+    },
+    async call({ to, data }) {
+      const key = `${to.toLowerCase()}:${data.slice(0, 10).toLowerCase()}`;
+      const result = routes.get(key);
+      if (!result) throw new Error(`missing ${key}`);
+      return result;
+    },
+    async destroy() {},
+  };
+  const first = ethers.Wallet.createRandom();
+  const second = ethers.Wallet.createRandom();
+  const logs = [];
+  const reports = await main([], {
+    exists: () => true,
+    readFile: () =>
+      [
+        "chain=base",
+        "gas=9",
+        "qty=5",
+        "max_price=0.2",
+        "dry_run=true",
+        `link=https://mint.example/base/${nft}`,
+        `key=${first.privateKey}`,
+        `key=${second.privateKey}`,
+      ].join("\n"),
+    env: {},
+    listen: false,
+    log: (message) => logs.push(message),
+    fetch: async () => ({ ok: true, text: async () => "<html>mint</html>" }),
+    providerFactory: () => provider,
+  });
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].chain, "base");
+  assert.equal(reports[0].rows.length, 2);
+  assert.equal(reports[0].rows.every((row) => row.ok && row.quantity === 2 && row.sent === false), true);
+  assert.match(reports[0].text, /Kết quả \| chain base/);
+  assert.match(reports[0].text, /Sẵn sàng 2\/2 ví, tổng sẽ mint 4 NFT/);
+  assert.match(reports[0].text, new RegExp(shortAddress(first.address)));
+  assert.match(reports[0].text, new RegExp(shortAddress(second.address)));
+  assert.equal(reports[0].text.includes(first.privateKey.slice(2)), false);
+  assert.ok(logs.some((line) => line.includes("chain base") && line.includes("2 ví") && line.includes("gas 9")));
+
+  const failed = await runMintWallets(
+    {
+      url: "https://mint.example/missing",
+      quantity: 1,
+      gasGwei: "5",
+      gasLimit: 500_000,
+      maxPrice: ethers.parseEther("0.2"),
+      chain: resolveNftChain("base"),
+      rpc: "",
+      apiKey: "",
+      dryRun: true,
+      wallet: null,
+      signer: null,
+    },
+    [
+      { address: first.address, signer: null },
+      { address: second.address, signer: null },
+    ],
+    {
+      listen: false,
+      log: () => {},
+      fetch: async () => {
+        throw new Error("không tải được trang");
+      },
+      providerFactory: () => provider,
+    },
+  );
+  assert.match(failed.text, /Thành công 0\/2 ví, tổng 0 NFT/);
+  assert.match(failed.text, /chain base/);
+  assert.match(failed.text, /thất bại \| 0 NFT/);
 });

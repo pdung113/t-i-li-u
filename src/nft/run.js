@@ -6,6 +6,7 @@ import { identifyContract, readRounds } from "./read.js";
 import { formatRound, selectRound } from "./rounds.js";
 import { fetchFulfillment, fetchListings, resolveCollection } from "./opensea.js";
 import { pickCheapest } from "./listings.js";
+import { formatReport, safeReason, shortAddress } from "./notepad.js";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -235,7 +236,7 @@ export async function runMint(options, deps = {}) {
       throw new Error("Không thấy địa chỉ contract trên trang. Dán link có 0x, hoặc thêm OPENSEA_API_KEY với link collection OpenSea.");
     }
     log(
-      `Mint | số lượng ${options.quantity} | gas ${options.gasGwei} gwei | trần ${ethers.formatEther(options.maxPrice)} | ${options.dryRun ? "DRY RUN" : "MINT THẬT"}`,
+      `Mint | chain ${options.chain?.name || "tự nhận"} | số lượng ${options.quantity} | gas ${options.gasGwei} gwei | trần ${ethers.formatEther(options.maxPrice)} | ${options.dryRun ? "DRY RUN" : "MINT THẬT"}`,
     );
     const hits = await findHits(page, options, providers);
     if (!hits.length) throw new Error("Trang có địa chỉ nhưng không phải NFT mint (SeaDrop, thirdweb, hoặc mint public).");
@@ -265,7 +266,14 @@ export async function runMint(options, deps = {}) {
       const tx = applyGas(chosen.round, chosen.hit.chain, options.gasGwei, options.gasLimit);
       log(`DRY RUN: sẽ mint ${chosen.round.quantity} NFT, value ${ethers.formatEther(tx.value)} ${symbol}, gas ${options.gasGwei} gwei.`);
       if (chosen.round.start > nowSec()) log(`Chưa mở. Tới ${new Date(chosen.round.start * 1000).toISOString()} thì lệnh thật sẽ tự gửi.`);
-      return { round: chosen.round, tx, sent: false };
+      return {
+        round: chosen.round,
+        tx,
+        sent: false,
+        chain: chosen.hit.chain.name,
+        quantity: chosen.round.quantity,
+        wallet: options.wallet,
+      };
     }
     if (!options.signer) throw new Error("Đặt PRIVATE_KEY trong .env, hoặc giữ DRY_RUN=true.");
     if (chosen.round.start > nowSec()) await waitForStart(chosen.round, nowSec, log, () => stopped);
@@ -290,12 +298,61 @@ export async function runMint(options, deps = {}) {
       const receipt = await sent.wait();
       if (receipt?.status !== 1) throw new Error("Giao dịch mint revert.");
       log(`Mint thành công ${again.round.quantity} NFT.`);
-      return { round: again.round, tx, sent: true, hash: sent.hash };
+      return {
+        round: again.round,
+        tx,
+        sent: true,
+        hash: sent.hash,
+        chain: again.hit.chain.name,
+        quantity: again.round.quantity,
+        wallet: options.wallet,
+      };
     }
     throw new Error("Round chưa nhận lệnh mint.");
   } finally {
     await providers.destroy();
   }
+}
+
+export async function runMintWallets(options, wallets, deps = {}) {
+  const log = deps.log || defaultLog;
+  const chainLabel = options.chain?.name || "tự nhận";
+  log(`Bắt đầu mint | chain ${chainLabel} | ${wallets.length} ví | gas ${options.gasGwei} gwei | số lượng ${options.quantity}`);
+  const rows = await Promise.all(
+    wallets.map(async (entry) => {
+      const tag = shortAddress(entry.address);
+      const childLog = (message) => log(`${tag} | ${message}`);
+      try {
+        const result = await runMint(
+          { ...options, wallet: entry.address, signer: entry.signer },
+          { ...deps, log: childLog, listen: false },
+        );
+        return {
+          ok: true,
+          sent: Boolean(result.sent),
+          quantity: result.quantity,
+          wallet: entry.address,
+          chain: result.chain,
+          reason: "",
+        };
+      } catch (error) {
+        const reason = safeReason(error.message || error);
+        childLog(reason);
+        return {
+          ok: false,
+          sent: false,
+          quantity: 0,
+          wallet: entry.address,
+          chain: options.chain?.name || "",
+          reason,
+        };
+      }
+    }),
+  );
+  const chainName = rows.find((row) => row.chain)?.chain || chainLabel;
+  const text = formatReport(rows, chainName);
+  log(text);
+  return { rows, text, chain: chainName };
 }
 
 export async function runBuy(options, deps = {}) {

@@ -1,0 +1,17 @@
+# Notepad mint NFT. Copy thành nft.txt, sửa bằng Notepad, rồi chạy: npm run nft
+# Chain: eth | base | polygon | arbitrum | optimism | bsc
+# dry_run=true chỉ xem trước. Đổi thành false khi muốn mint thật.
+# Không đưa nft.txt lên git sau khi đã dán private key.
+
+chain=base
+gas=5
+gas_limit=500000
+qty=1
+max_price=0.2
+dry_run=true
+
+link=
+
+# Mỗi ví một dòng. Nhiều ví sẽ mint cùng lúc.
+key=
+key=
