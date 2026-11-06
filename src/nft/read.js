@@ -1,0 +1,365 @@
+import { ethers } from "ethers";
+import {
+  ALLOW_BOOL_FNS,
+  ALLOW_MINT_FNS,
+  ALLOW_START_FNS,
+  ERC1155_ID,
+  ERC721_ID,
+  MAX_FNS,
+  MINTED_FNS,
+  PRICE_FNS,
+  PUBLIC_MINT_FNS,
+  PUBLIC_START_FNS,
+  ZERO,
+  dropIface,
+  nftIface,
+  seaDropIface,
+  plainList,
+  selectorOf,
+} from "./abi.js";
+import { capQuantity, chooseFeeRecipient, genericRounds, seaDropAllowRound, seaDropPublicRound, thirdwebRound } from "./rounds.js";
+
+export async function tryCall(provider, to, iface, name, args = []) {
+  try {
+    const data = iface.encodeFunctionData(name, args);
+    const raw = await provider.call({ to, data });
+    if (raw == null || raw === "0x") return null;
+    const decoded = iface.decodeFunctionResult(name, raw);
+    return decoded.length === 1 ? decoded[0] : decoded;
+  } catch {
+    return null;
+  }
+}
+
+async function firstCall(provider, address, names, args = []) {
+  for (const name of names) {
+    const value = await tryCall(provider, address, nftIface, name, args);
+    if (value != null) return { name, value };
+  }
+  return null;
+}
+
+function hasSelector(code, name) {
+  return String(code || "").toLowerCase().includes(selectorOf(nftIface, name));
+}
+
+function isMinimalProxy(code) {
+  return String(code || "").toLowerCase().includes("363d3d373d3d3d363d73");
+}
+
+export function exposes(code, name) {
+  return isMinimalProxy(code) || hasSelector(code, name);
+}
+
+async function probeWrite(provider, to, name, from) {
+  try {
+    await provider.call({ from, to, data: nftIface.encodeFunctionData(name, [1]), value: 0n });
+    return true;
+  } catch (error) {
+    const message = String(error.shortMessage || error.message || "");
+    if (/missing revert data|function selector was not recognized|function does not exist|no data present/i.test(message)) return false;
+    const data = error.data;
+    if (data == null || data === "0x") return false;
+    return true;
+  }
+}
+
+async function findWrite(provider, nft, code, names, from, erc721) {
+  const visible = names.find((name) => hasSelector(code, name));
+  if (visible) return visible;
+  if (!erc721 && !isMinimalProxy(code)) return null;
+  for (const name of names) {
+    if (await probeWrite(provider, nft, name, from)) return name;
+  }
+  return null;
+}
+
+export async function identifyContract(provider, address) {
+  const code = await provider.getCode(address);
+  if (!code || code === "0x") return null;
+  const seaDrops = plainList(await tryCall(provider, address, nftIface, "getAllowedSeaDrop"));
+  if (seaDrops.length > 0) return { type: "seadrop", seaDrops, code };
+  const claim = await tryCall(provider, address, dropIface, "claimCondition");
+  if (claim && BigInt(claim[1] ?? 0) > 0n) return { type: "thirdweb", code };
+  const erc1155 = await tryCall(provider, address, nftIface, "supportsInterface", [ERC1155_ID]);
+  const erc721 = await tryCall(provider, address, nftIface, "supportsInterface", [ERC721_ID]);
+  if (erc1155 === true && erc721 !== true) return { type: "erc1155", code };
+  const hasMint = PUBLIC_MINT_FNS.some((name) => exposes(code, name));
+  if (erc721 === true || hasMint) return { type: "generic", code, erc721: erc721 === true };
+  if (!isMinimalProxy(code)) return null;
+  for (const name of PRICE_FNS) {
+    const price = await tryCall(provider, address, nftIface, name);
+    if (price != null) return { type: "generic", code, erc721: false };
+  }
+  return null;
+}
+
+function emptyRound(nft, reason) {
+  return {
+    id: "none",
+    label: "public",
+    kind: "public",
+    standard: "unknown",
+    start: 0,
+    end: 0,
+    price: 0n,
+    quantity: 0,
+    eligible: false,
+    reason,
+    to: nft,
+    data: "0x",
+    value: 0n,
+  };
+}
+
+async function ownedIds(provider, token, wallet, limit) {
+  if (!wallet) return { balance: 0n, ids: [], enumerable: false };
+  const balance = await tryCall(provider, token, nftIface, "balanceOf", [wallet]);
+  if (balance == null || BigInt(balance) === 0n) return { balance: balance ?? 0n, ids: [], enumerable: true };
+  const ids = [];
+  const count = Math.min(Number(balance), limit);
+  for (let index = 0; index < count; index += 1) {
+    const id = await tryCall(provider, token, nftIface, "tokenOfOwnerByIndex", [wallet, index]);
+    if (id == null) return { balance: BigInt(balance), ids, enumerable: false };
+    ids.push(BigInt(id));
+  }
+  return { balance: BigInt(balance), ids, enumerable: true };
+}
+
+export async function readRounds(provider, address, identity, context) {
+  if (identity.type === "seadrop") return readSeaDrop(provider, address, identity, context);
+  if (identity.type === "thirdweb") return readThirdweb(provider, address, context);
+  if (identity.type === "erc1155") return [emptyRound(address, "ERC1155 chưa được mint tự động")];
+  return readGeneric(provider, address, identity, context);
+}
+
+async function readSeaDrop(provider, nft, identity, context) {
+  const seaDrop = identity.seaDrops[0];
+  const drop = await tryCall(provider, seaDrop, seaDropIface, "getPublicDrop", [nft]);
+  const creator = await tryCall(provider, seaDrop, seaDropIface, "getCreatorPayoutAddress", [nft]);
+  const allowed = plainList(await tryCall(provider, seaDrop, seaDropIface, "getAllowedFeeRecipients", [nft]));
+  const root = await tryCall(provider, seaDrop, seaDropIface, "getAllowListMerkleRoot", [nft]);
+  const stats = context.wallet
+    ? await tryCall(provider, nft, nftIface, "getMintStats", [context.wallet])
+    : null;
+  const minted = stats ? BigInt(stats[0]) : 0n;
+  const rounds = [];
+  if (drop) {
+    const feeRecipient = chooseFeeRecipient({
+      restrict: Boolean(drop.restrictFeeRecipients ?? drop[5]),
+      allowed,
+      creator,
+    });
+    const round = seaDropPublicRound({
+      drop: {
+        mintPrice: drop.mintPrice ?? drop[0],
+        startTime: drop.startTime ?? drop[1],
+        endTime: drop.endTime ?? drop[2],
+        maxTotalMintableByWallet: drop.maxTotalMintableByWallet ?? drop[3],
+      },
+      minted,
+      balance: context.balance,
+      limits: context.limits,
+      feeRecipient,
+      nft,
+      seaDrop,
+    });
+    if (round) rounds.push(round);
+  }
+
+  if (root && root !== ethers.ZeroHash) {
+    let matched = null;
+    for (const entry of context.allowInfo?.entries || []) {
+      if (context.wallet && entry.address !== context.wallet.toLowerCase()) continue;
+      matched = seaDropAllowRound({
+        root,
+        entry,
+        minted,
+        balance: context.balance,
+        limits: context.limits,
+        feeRecipient: chooseFeeRecipient({ restrict: Boolean(entry.restrictFeeRecipients), allowed, creator }),
+        nft,
+        seaDrop,
+        wallet: context.wallet,
+      });
+      if (matched) break;
+    }
+    rounds.push(
+      matched || {
+        ...emptyRound(seaDrop, "ví không có proof allowlist khớp merkle"),
+        id: "seadrop-allowlist",
+        label: "allowlist",
+        kind: "allowlist",
+        standard: "seadrop",
+      },
+    );
+  }
+
+  const gatedTokens = plainList(await tryCall(provider, seaDrop, seaDropIface, "getTokenGatedAllowedTokens", [nft]));
+  for (const gated of gatedTokens) {
+    const stage = await tryCall(provider, seaDrop, seaDropIface, "getTokenGatedDrop", [nft, gated]);
+    if (!stage || Number(stage.startTime ?? stage[2] ?? 0) === 0) continue;
+    const owned = await ownedIds(provider, gated, context.wallet, context.limits.quantity);
+    if (!owned.enumerable) {
+      rounds.push({
+        ...emptyRound(seaDrop, "ví có token gate nhưng contract không liệt kê token id"),
+        id: `seadrop-token-${gated}`,
+        label: "token-gated",
+        kind: "token-gated",
+        standard: "seadrop",
+        start: Number(stage.startTime ?? stage[2]),
+        end: Number(stage.endTime ?? stage[3]),
+        price: BigInt(stage.mintPrice ?? stage[0]),
+      });
+      continue;
+    }
+    const fresh = [];
+    for (const tokenId of owned.ids) {
+      const redeemed = await tryCall(provider, seaDrop, seaDropIface, "getAllowedNftTokenIdIsRedeemed", [nft, gated, tokenId]);
+      if (redeemed !== true) fresh.push(tokenId);
+    }
+    const feeRecipient = chooseFeeRecipient({
+      restrict: Boolean(stage.restrictFeeRecipients ?? stage[7]),
+      allowed,
+      creator,
+    });
+    const price = BigInt(stage.mintPrice ?? stage[0]);
+    const start = Number(stage.startTime ?? stage[2]);
+    const end = Number(stage.endTime ?? stage[3]);
+    const maxWallet = stage.maxTotalMintableByWallet ?? stage[1];
+    const quantity = Math.min(fresh.length, capQuantity(context.limits.quantity, maxWallet, 0, false));
+    if (!feeRecipient || quantity === 0) {
+      rounds.push({
+        ...emptyRound(seaDrop, fresh.length === 0 ? "ví không giữ token của round này" : "thiếu fee recipient"),
+        id: `seadrop-token-${gated}`,
+        label: "token-gated",
+        kind: "token-gated",
+        standard: "seadrop",
+        start,
+        end,
+        price,
+      });
+      continue;
+    }
+    const ids = fresh.slice(0, quantity);
+    const data = seaDropIface.encodeFunctionData("mintAllowedTokenHolder", [nft, feeRecipient, ZERO, [gated, ids]]);
+    const ended = context.limits.now > end;
+    const cost = price * BigInt(ids.length);
+    const enough = context.balance == null || context.balance >= cost + (context.limits.gasWei ?? 0n);
+    rounds.push({
+      id: `seadrop-token-${gated}`,
+      label: "token-gated",
+      kind: "token-gated",
+      standard: "seadrop",
+      start,
+      end,
+      price,
+      quantity: ended || price > context.limits.maxPrice || !enough ? 0 : ids.length,
+      eligible: !ended && price <= context.limits.maxPrice && enough && ids.length > 0,
+      reason: ended
+        ? "round đã kết thúc"
+        : price > context.limits.maxPrice
+          ? "giá cao hơn trần"
+          : !enough
+            ? "ví không đủ số dư"
+            : "ví đủ điều kiện",
+      to: seaDrop,
+      data,
+      value: cost,
+    });
+  }
+  return rounds;
+}
+
+function asCondition(raw) {
+  const condition = raw?.length === 1 ? raw[0] : raw;
+  return {
+    startTimestamp: BigInt(condition.startTimestamp ?? condition[0] ?? 0),
+    maxClaimableSupply: BigInt(condition.maxClaimableSupply ?? condition[1] ?? 0),
+    supplyClaimed: BigInt(condition.supplyClaimed ?? condition[2] ?? 0),
+    quantityLimitPerWallet: BigInt(condition.quantityLimitPerWallet ?? condition[3] ?? 0),
+    merkleRoot: condition.merkleRoot ?? condition[4] ?? ethers.ZeroHash,
+    pricePerToken: BigInt(condition.pricePerToken ?? condition[5] ?? 0),
+    currency: condition.currency ?? condition[6] ?? ZERO,
+  };
+}
+
+async function readThirdweb(provider, nft, context) {
+  const head = await tryCall(provider, nft, dropIface, "claimCondition");
+  if (!head) return [];
+  const startId = Number(head[0]);
+  const count = Math.min(Number(head[1]), 12);
+  const rounds = [];
+  for (let index = 0; index < count; index += 1) {
+    const id = startId + index;
+    const raw = await tryCall(provider, nft, dropIface, "getClaimConditionById", [id]);
+    if (!raw) continue;
+    const condition = asCondition(raw);
+    if (condition.startTimestamp === 0n && condition.maxClaimableSupply === 0n) continue;
+    const claimed = context.wallet
+      ? await tryCall(provider, nft, dropIface, "getSupplyClaimedByWallet", [id, context.wallet])
+      : 0n;
+    rounds.push(
+      thirdwebRound({
+        condition,
+        id,
+        claimed: BigInt(claimed || 0),
+        balance: context.balance,
+        limits: context.limits,
+        nft,
+        wallet: context.wallet,
+        allowInfo: context.allowInfo,
+      }),
+    );
+  }
+  return rounds;
+}
+
+async function readGeneric(provider, nft, identity, context) {
+  const code = identity.code || "";
+  const namesOf = (names) => (identity.erc721 ? names : names.filter((name) => exposes(code, name)));
+  const priceHit = await firstCall(provider, nft, namesOf(PRICE_FNS));
+  const startHit = await firstCall(provider, nft, namesOf(PUBLIC_START_FNS));
+  const allowStartHit = await firstCall(provider, nft, namesOf(ALLOW_START_FNS));
+  const maxHit = await firstCall(provider, nft, namesOf(MAX_FNS));
+  const paused = namesOf(["paused"]).length ? await tryCall(provider, nft, nftIface, "paused") : null;
+  let saleActive = null;
+  for (const name of namesOf(["publicSaleActive", "saleActive", "mintEnabled"])) {
+    saleActive = await tryCall(provider, nft, nftIface, name);
+    if (saleActive != null) break;
+  }
+  let minted = 0n;
+  let allowlisted = null;
+  if (context.wallet) {
+    const mintedHit = await firstCall(
+      provider,
+      nft,
+      namesOf(MINTED_FNS),
+      [context.wallet],
+    );
+    if (mintedHit) minted = BigInt(mintedHit.value);
+    for (const name of namesOf(ALLOW_BOOL_FNS)) {
+      allowlisted = await tryCall(provider, nft, nftIface, name, [context.wallet]);
+      if (allowlisted != null) break;
+    }
+  }
+  const from = context.wallet || ZERO;
+  const publicFn = await findWrite(provider, nft, code, PUBLIC_MINT_FNS, from, identity.erc721);
+  const allowFn = await findWrite(provider, nft, code, ALLOW_MINT_FNS, from, identity.erc721);
+  return genericRounds({
+    price: priceHit ? BigInt(priceHit.value) : null,
+    publicStart: startHit ? Number(startHit.value) : null,
+    allowStart: allowStartHit ? Number(allowStartHit.value) : null,
+    maxPerWallet: maxHit ? BigInt(maxHit.value) : null,
+    minted,
+    allowlisted: allowlisted == null ? null : Boolean(allowlisted),
+    balance: context.balance,
+    limits: context.limits,
+    nft,
+    paused: paused === true,
+    publicFn,
+    allowFn,
+    saleActive: saleActive == null ? null : Boolean(saleActive),
+    openIfMintable: Boolean(publicFn),
+  });
+}

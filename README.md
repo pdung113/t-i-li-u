@@ -1,5 +1,7 @@
 # X snipe
 
+Có hai tool tách nhau. `npm start` mua token trên pool V2. `npm run nft` mint hoặc mua NFT, không đụng đường mua token.
+
 Dán link X của dự án. Khi tài khoản đó đăng contract, tool mô phỏng mua và bán trên pool V2. Tax còn trong ngưỡng thì gửi lệnh mua ngay. Tax cao hơn ngưỡng, hoặc không bán được, thì bỏ qua.
 
 Pool hỗ trợ: PancakeSwap V2 (BSC) và Uniswap V2 (Ethereum, Base, Robinhood Chain). Chọn chain lúc chạy:
@@ -61,3 +63,29 @@ Phần chờ tweet xuất hiện phụ thuộc API đọc timeline (thường v�
 Token chỉ có pool V3, hoặc đang nằm trên bonding curve (Four.meme, pump.fun), sẽ không được mua.
 
 Mô phỏng bán dùng một ví sạch và nhích thời gian 3 phút để né cooldown cùng block. Token cố tình chặn hợp đồng lúc bán có thể bị bỏ qua dù ví thường vẫn bán được. Một số honeypot chỉ hiện sau khi mua thật; mô phỏng không bắt hết.
+
+## NFT
+
+Tool riêng. Dán link OpenSea, link chợ có địa chỉ contract, hoặc link web mint của dự án. Tool đọc contract trên trang, xem ví đủ round nào, rồi mint đúng round đó.
+
+```bash
+npm run nft -- mint https://mint.du-an.xyz
+npm run nft -- mint https://opensea.io/item/base/0xabc.../1 --qty 2 --gas 20 --max-price 0.05
+npm run nft -- buy https://opensea.io/collection/ten-bo-suu-tap --qty 1 --max-price 0.2
+```
+
+`mint` kiểm tra lần lượt allowlist, token-gated và public:
+
+- Round chưa mở mà ví đủ điều kiện thì canh đúng giờ mở rồi gửi một giao dịch.
+- Ví có proof allowlist khớp merkle, hoặc đang giữ token của round token-gated, thì chọn round đó nếu nó mở trước public.
+- Ví không đủ allowlist thì bỏ round đó và canh public.
+- Round chữ ký server không có chữ ký trên trang thì bỏ qua. Tool không tự tạo chữ ký.
+- Giá mỗi NFT cao hơn trần, hoặc số dư không đủ giá cộng gas, thì không mint.
+
+Số lượng và gas sửa trong `src/nft/settings.js`, hoặc ghi đè một lần bằng `--qty`, `--gas`, `--gas-limit`, `--max-price`. Chain lấy từ link hoặc từ trang. Khi trang không ghi chain, thêm `--chain eth`. Chain hỗ trợ: `eth`, `base`, `polygon`, `arbitrum`, `optimism`, `bsc`.
+
+`DRY_RUN` mặc định bật: in round, giờ mở và giao dịch, không gửi. Muốn mint thật thì `DRY_RUN=false` và điền `PRIVATE_KEY`. Dùng ví riêng, chỉ nạp số chấp nhận mất.
+
+`buy` lấy listing đang rẻ nhất dưới trần giá. Cần `OPENSEA_API_KEY`. Link collection OpenSea cũng cần key này nếu trang không hiện địa chỉ contract. Link đã có `0x` thì mint không cần key.
+
+Trang mint phải để contract trong HTML, JSON hoặc file script của trang. Contract lạ không có SeaDrop, claim condition của thirdweb, hoặc hàm `mint(uint256)` thì tool dừng và nói rõ. ERC1155 không được mint tự động.
