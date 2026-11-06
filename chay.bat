@@ -6,7 +6,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-if not exist node_modules call npm install
+if not exist node_modules call npm install --ignore-scripts
 node src/follow-alert.js
 echo.
 echo Tool da dung.

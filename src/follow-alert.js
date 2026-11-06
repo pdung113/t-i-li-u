@@ -1,5 +1,4 @@
-import "dotenv/config";
-import { readFile } from "node:fs/promises";
+import { chmod, readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { log } from "./log.js";
 import { parseTwitterTarget } from "./twitter.js";
@@ -55,6 +54,52 @@ export async function readWatchList(listPath = WATCH_LIST) {
   }
 }
 
+const FOLLOW_ENV_KEYS = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "FOLLOW_POLL_MS"];
+
+/** Chỉ lấy khóa Telegram. Khóa ví trong .env không được đưa vào tiến trình. */
+export function readFollowEnv(text) {
+  const out = {};
+  const lines = String(text || "").replace(/^\uFEFF/, "").split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq < 1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    if (!FOLLOW_ENV_KEYS.includes(key)) continue;
+    let value = trimmed.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+export async function loadRuntimeEnv(deps = {}) {
+  if (deps.env) return deps.env;
+  delete process.env.PRIVATE_KEY;
+  const envPath = deps.envPath || ".env";
+  let text = deps.fileText;
+  if (text == null) {
+    try {
+      text = await readFile(envPath, "utf8");
+      await chmod(envPath, 0o600).catch(() => {});
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      text = "";
+    }
+  }
+  const fileEnv = readFollowEnv(text);
+  for (const key of FOLLOW_ENV_KEYS) {
+    if (process.env[key]) fileEnv[key] = process.env[key];
+  }
+  return fileEnv;
+}
+
 export function loadAlertConfig(env = process.env) {
   const token = String(env.TELEGRAM_BOT_TOKEN || "").trim();
   const chatId = String(env.TELEGRAM_CHAT_ID || "").trim();
@@ -96,7 +141,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     return;
   }
 
-  const env = deps.env || process.env;
+  const env = await loadRuntimeEnv(deps);
   let config;
   try {
     config = loadAlertConfig(env);
@@ -157,6 +202,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  console.log("Tool chỉ gọi API X và Telegram. Không mở cổng vào máy, không đọc khóa ví.");
   main().catch((error) => {
     console.error(error.message || error);
     process.exitCode = 1;

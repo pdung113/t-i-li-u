@@ -3,9 +3,10 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadAlertConfig, main, parseWatchList } from "../src/follow-alert.js";
+import { loadAlertConfig, loadRuntimeEnv, main, parseWatchList, readFollowEnv } from "../src/follow-alert.js";
 import {
   FollowError,
+  assertAllowedApiUrl,
   createXClient,
   enrichFollowed,
   extractContracts,
@@ -423,6 +424,7 @@ test("API follow hay 404 vẫn đọc được sau khi thử lại", async () =>
     const href = String(url);
     calls.push(href);
     assert.equal(init.headers["user-agent"], "x-snipe/1.0");
+    assert.equal(init.redirect, "error");
     if (calls.length === 1) {
       return jsonResponse({ code: 404, message: "User not found" }, 404);
     }
@@ -479,7 +481,7 @@ test("Telegram nhận đúng chat và không lộ token khi lỗi", async () => 
   const token = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef";
   let sent;
   const fetchImpl = async (url, init) => {
-    sent = { url, body: JSON.parse(init.body) };
+    sent = { url, body: JSON.parse(init.body), redirect: init.redirect };
     return jsonResponse({ ok: false, description: `bad ${token}` }, 401);
   };
   await assert.rejects(sendTelegram({ token, chatId: "-100", text: "ping", fetchImpl }), (error) => {
@@ -491,6 +493,7 @@ test("Telegram nhận đúng chat và không lộ token khi lỗi", async () => 
   assert.equal(sent.body.chat_id, "-100");
   assert.equal(sent.body.text, "ping");
   assert.equal(sent.body.disable_web_page_preview, true);
+  assert.equal(sent.redirect, "error");
 
   await assert.rejects(
     sendTelegram({
@@ -507,6 +510,27 @@ test("Telegram nhận đúng chat và không lộ token khi lỗi", async () => 
       return true;
     },
   );
+});
+
+test("tiến trình follow không nhận khóa ví", async () => {
+  process.env.PRIVATE_KEY = "0xsecret";
+  const env = await loadRuntimeEnv({
+    fileText: "PRIVATE_KEY=0xfromfile\nTELEGRAM_BOT_TOKEN=123:abc\nTELEGRAM_CHAT_ID=5\nOTHER=no\n",
+  });
+  assert.equal(env.TELEGRAM_BOT_TOKEN, "123:abc");
+  assert.equal(env.TELEGRAM_CHAT_ID, "5");
+  assert.equal(env.PRIVATE_KEY, undefined);
+  assert.equal(env.OTHER, undefined);
+  assert.equal(process.env.PRIVATE_KEY, undefined);
+  assert.deepEqual(readFollowEnv("TELEGRAM_BOT_TOKEN=\"123:abc\"\n"), { TELEGRAM_BOT_TOKEN: "123:abc" });
+});
+
+test("không gọi trang web lạ", () => {
+  assert.throws(() => assertAllowedApiUrl("http://api.fxtwitter.com/2/profile/a"), /HTTPS/);
+  assert.throws(() => assertAllowedApiUrl("https://evil.example/steal"), /Telegram/);
+  assert.throws(() => assertAllowedApiUrl("https://user:pass@api.telegram.org/bot"), /mật khẩu/);
+  assertAllowedApiUrl("https://api.fxtwitter.com/2/profile/vladtenev");
+  assertAllowedApiUrl("https://api.telegram.org/bot123:abc/sendMessage");
 });
 
 test("thiếu token hoặc chat id thì không chạy", () => {

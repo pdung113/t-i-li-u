@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 
 const API = "https://api.fxtwitter.com";
 const USER_AGENT = "x-snipe/1.0";
+const ALLOWED_API_HOSTS = new Set(["api.fxtwitter.com", "api.telegram.org"]);
 
 export class FollowError extends Error {
   /**
@@ -257,13 +258,28 @@ async function withRetry(fn, { retries, sleep, signal }) {
   throw last;
 }
 
+export function assertAllowedApiUrl(url) {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:") {
+    throw new FollowError("Tool chỉ gọi HTTPS tới API X và Telegram", "blocked");
+  }
+  if (!ALLOWED_API_HOSTS.has(parsed.hostname.toLowerCase())) {
+    throw new FollowError("Tool chỉ gọi API X và Telegram", "blocked");
+  }
+  if (parsed.username || parsed.password) {
+    throw new FollowError("URL API không được kèm mật khẩu", "blocked");
+  }
+}
+
 async function requestJson(url, { fetchImpl, signal }) {
+  assertAllowedApiUrl(url);
   const timeout = AbortSignal.timeout(12_000);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
   let response;
   try {
     response = await fetchImpl(url, {
       signal: combined,
+      redirect: "error",
       headers: { accept: "application/json", "user-agent": USER_AGENT },
     });
   } catch (error) {
@@ -474,15 +490,19 @@ export function fileStore(file) {
 }
 
 export async function sendTelegram({ token, chatId, text, fetchImpl = globalThis.fetch, signal }) {
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  assertAllowedApiUrl(url);
+  const safeText = String(text || "").slice(0, 4000);
   let response;
   try {
-    response = await fetchImpl(`https://api.telegram.org/bot${token}/sendMessage`, {
+    response = await fetchImpl(url, {
       method: "POST",
       signal,
+      redirect: "error",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text,
+        text: safeText,
         disable_web_page_preview: true,
         link_preview_options: { is_disabled: true },
       }),

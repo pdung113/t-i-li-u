@@ -80,4 +80,6 @@ Tool đang chạy sẽ đọc lại `theo-doi.txt` mỗi vòng. Thêm người r
 
 Tài khoản khoá không theo dõi được, vì danh sách follow không công khai. Token Telegram nằm trong `.env`, không ghi vào `theo-doi.txt`.
 
+Lệnh `npm run follow` chỉ gọi `api.fxtwitter.com` và `api.telegram.org`. Nó không mở cổng vào máy và không đọc `PRIVATE_KEY`. File `.env` không được gửi cho người khác. Token bot đã dán trong chat thì vào @BotFather, chọn bot, lấy token mới, rồi sửa dòng `TELEGRAM_BOT_TOKEN` trong `.env`. Không gửi token mới vào chat.
+
 Follow đã báo được lưu trong `data/follows/`. Xoá file của username đó nếu muốn lập mốc lại từ đầu.
