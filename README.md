@@ -61,3 +61,34 @@ Phần chờ tweet xuất hiện phụ thuộc API đọc timeline (thường v�
 Token chỉ có pool V3, hoặc đang nằm trên bonding curve (Four.meme, pump.fun), sẽ không được mua.
 
 Mô phỏng bán dùng một ví sạch và nhích thời gian 3 phút để né cooldown cùng block. Token cố tình chặn hợp đồng lúc bán có thể bị bỏ qua dù ví thường vẫn bán được. Một số honeypot chỉ hiện sau khi mua thật; mô phỏng không bắt hết.
+
+## Báo follow mới qua Telegram
+
+Tool đọc danh sách follow công khai của một tài khoản X. Lần chạy đầu chỉ ghi nhớ những người họ đang follow, không gửi tin. Những lần sau, follow mới được gửi qua Telegram.
+
+Tài khoản khoá không dùng được, vì danh sách follow không công khai.
+
+```bash
+cp .env.example .env
+npm run follow -- https://x.com/username
+```
+
+Trong `.env`:
+
+- `TELEGRAM_BOT_TOKEN`: nhắn @BotFather lệnh `/newbot`, dán token.
+- `TELEGRAM_CHAT_ID`: nhắn Start cho bot, mở `https://api.telegram.org/bot<token>/getUpdates`, lấy `message.chat.id`.
+- `FOLLOW_POLL_MS`: khoảng cách giữa hai lần hỏi, mili giây. Mặc định `3000`.
+
+Thử bot mà chưa theo dõi ai:
+
+```bash
+npm run follow -- --test-telegram
+```
+
+Chạy một vòng rồi thoát:
+
+```bash
+npm run follow -- --once https://x.com/username
+```
+
+Follow đã có từ trước khi bật tool không được báo lại. Tool nhớ các id đã thấy trong `data/follows/`. Xoá file đó nếu muốn lập mốc lại từ đầu.
