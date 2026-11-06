@@ -310,6 +310,89 @@ test("dry run canh public khi ví không có allowlist", async () => {
   assert.notEqual(mintArgs[1], ethers.ZeroAddress);
   assert.ok(logs.some((line) => line.includes("Chọn round public")));
   assert.ok(logs.some((line) => line.includes("Chưa mở")));
+  assert.ok(logs.some((line) => line.includes("gửi liên tục")));
+});
+
+test("sát giờ mở thì gọi lại đến khi mint được", async () => {
+  const now = 1_700_000_000;
+  const routes = new Map();
+  const add = (to, iface, fn, values) => {
+    routes.set(`${to.toLowerCase()}:${iface.getFunction(fn).selector.toLowerCase()}`, iface.encodeFunctionResult(fn, values));
+  };
+  add(nft, nftIface, "getAllowedSeaDrop", [[sea]]);
+  add(sea, seaDropIface, "getPublicDrop", [ethers.parseEther("0.01"), now, now + 3600, 1, 0, false]);
+  add(sea, seaDropIface, "getCreatorPayoutAddress", [creator]);
+  add(sea, seaDropIface, "getAllowedFeeRecipients", [[]]);
+  add(sea, seaDropIface, "getAllowListMerkleRoot", [ethers.ZeroHash]);
+  add(nft, nftIface, "getMintStats", [0, 0, 1000]);
+  add(sea, seaDropIface, "getTokenGatedAllowedTokens", [[]]);
+  const mintSelector = seaDropIface.getFunction("mintPublic").selector.toLowerCase();
+  let mintCalls = 0;
+  const sends = [];
+  const provider = {
+    async getCode() {
+      return "0x60016000";
+    },
+    async getBlock() {
+      return { timestamp: now };
+    },
+    async getBalance() {
+      return ethers.parseEther("1");
+    },
+    async call({ to, data }) {
+      const selector = data.slice(0, 10).toLowerCase();
+      if (selector === mintSelector) {
+        mintCalls += 1;
+        if (mintCalls < 4) {
+          const error = new Error("PublicDropNotStarted");
+          error.shortMessage = "PublicDropNotStarted";
+          throw error;
+        }
+        return "0x";
+      }
+      const result = routes.get(`${to.toLowerCase()}:${selector}`);
+      if (!result) throw new Error(`missing ${selector}`);
+      return result;
+    },
+    async destroy() {},
+  };
+  const logs = [];
+  const result = await runMint(
+    {
+      url: `https://mint.example/base/${nft}`,
+      quantity: 1,
+      gasGwei: "9",
+      gasLimit: 400_000,
+      maxPrice: ethers.parseEther("0.2"),
+      chain: null,
+      rpc: "",
+      apiKey: "",
+      dryRun: false,
+      wallet,
+      signer: {
+        address: wallet,
+        connect() {
+          return this;
+        },
+        async sendTransaction(tx) {
+          sends.push(tx);
+          return { hash: `0x${"ab".repeat(32)}`, async wait() { return { status: 1 }; } };
+        },
+      },
+    },
+    {
+      listen: false,
+      log: (message) => logs.push(message),
+      fetch: async () => ({ ok: true, text: async () => "<html>mint</html>" }),
+      providerFactory: () => provider,
+    },
+  );
+  assert.equal(result.sent, true);
+  assert.equal(sends.length, 1);
+  assert.ok(mintCalls >= 4);
+  assert.equal(sends[0].value, ethers.parseEther("0.01"));
+  assert.ok(logs.some((line) => line.includes("Gửi lại liên tục")));
+  assert.ok(logs.some((line) => line.includes("Mint thành công")));
 });
 
 test("nhiều ví trong notepad mint cùng lúc và báo số lượng", async () => {

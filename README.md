@@ -117,7 +117,7 @@ Thành công 1/2 ví, tổng 1 NFT.
 
 Link nhận được: trang mint của dự án, OpenSea collection hoặc item, và link chợ đã có địa chỉ `0x` trong URL.
 
-Mint xem ví đủ round nào. Allowlist chỉ chạy khi ví có proof khớp merkle trên trang. Token-gated chỉ chạy khi ví đang giữ token của round đó. Không đủ thì canh public. Round chưa mở thì tool đứng chờ và gửi một giao dịch đúng giờ. Round chữ ký server không có sẵn chữ ký trên trang thì bỏ qua. Giá cao hơn `max_price`, hoặc ví không đủ tiền cộng gas, thì không mint.
+Mint xem ví đủ round nào. Allowlist chỉ chạy khi ví có proof khớp merkle trên trang. Token-gated chỉ chạy khi ví đang giữ token của round đó. Không đủ thì canh public. Round chưa mở thì tool đứng chờ, 1,5 giây cuối kiểm mỗi 5ms. Đúng giờ mở thì gọi mint liên tục, contract nhận lệnh thì gửi ngay, và gửi lại đến khi một giao dịch thành công hoặc hết 120 giây. Trước giờ mở không gửi, để lệnh revert không tốn gas. Round chữ ký server không có sẵn chữ ký trên trang thì bỏ qua. Giá cao hơn `max_price`, hoặc ví không đủ tiền cộng gas, thì không mint.
 
 Mua giá thấp nhất:
 

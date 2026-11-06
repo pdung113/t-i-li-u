@@ -13,10 +13,12 @@ function sleep(ms) {
 }
 
 export function isNotStarted(message) {
-  return /not active|not started|hasn.t started|has not started|cant claim yet|can.t claim|sale is not|salenotactive|notactive|too soon|minting (is )?not|not open/i.test(
+  return /not ?active|not ?started|hasn.t started|has not started|cant claim yet|can.t claim|sale is not|too soon|minting (is )?not|not ?open|not ?live/i.test(
     String(message || ""),
   );
 }
+
+const SPAM_WINDOW_MS = 120_000;
 
 export function applyGas(tx, chain, gasGwei, gasLimit) {
   const gas = ethers.parseUnits(String(gasGwei), "gwei");
@@ -172,7 +174,7 @@ async function chooseHit(hits, context, nowSec, log) {
     if (!round) continue;
     if (context.wallet && round.start <= nowSec) {
       const state = await callState(hit.provider, context.wallet, round);
-      if (state !== "ok") {
+      if (state !== "ok" && state !== "wait") {
         log(`${hit.address} round ${round.label} chưa gọi được: ${state}`);
         continue;
       }
@@ -201,23 +203,80 @@ function printRounds(rounds, symbol, log) {
   for (const round of rounds) log(formatRound(round, symbol));
 }
 
-async function syncNow(provider) {
+async function syncClock(provider) {
+  const sampledAt = Date.now();
   const block = await provider.getBlock("latest");
-  const offset = Number(block.timestamp) - Math.floor(Date.now() / 1000);
-  return () => Math.floor(Date.now() / 1000) + offset;
+  const offset = Number(block.timestamp) * 1000 - sampledAt;
+  const nowMs = () => Date.now() + offset;
+  return {
+    nowMs,
+    nowSec: () => Math.floor(nowMs() / 1000),
+  };
 }
 
-async function waitForStart(round, nowSec, log, shouldStop) {
+async function waitUntil(targetMs, clock, log, label, shouldStop, refresh) {
   let lastLog = 0;
-  while (nowSec() < round.start) {
+  let refreshed = false;
+  while (clock.nowMs() < targetMs) {
     if (shouldStop()) throw new Error("Dừng.");
-    const remain = round.start - nowSec();
+    const remain = targetMs - clock.nowMs();
+    if (!refreshed && refresh && remain < 15_000 && remain > 1_000) {
+      refreshed = true;
+      try {
+        const next = await refresh();
+        if (next) clock = next;
+      } catch (error) {
+        log(`Không đọc lại giờ chain: ${error.message || error}`);
+      }
+      continue;
+    }
     if (Date.now() - lastLog > 15_000) {
-      log(`Canh round ${round.label}. Tự mint khi mở, còn ${remain}s.`);
+      log(`Canh round ${label}. Tự mint khi mở, còn ${Math.max(1, Math.ceil(remain / 1000))}s.`);
       lastLog = Date.now();
     }
-    await sleep(Math.min(Math.max(remain * 1000, 20), 1000));
+    const slice = remain > 1_500 ? Math.min(remain - 1_500, 1_000) : Math.min(remain, 5);
+    await sleep(Math.max(0, slice));
   }
+  return clock;
+}
+
+function retryableSend(message) {
+  return isNotStarted(message) || /timeout|timed out|econnreset|socket hang up|429|502|503|504|temporarily unavailable|missing response|failed to fetch|network error/i.test(String(message || ""));
+}
+
+async function spamMint({ wallet, provider, round, chain, gasGwei, gasLimit, nowMs, log, shouldStop }) {
+  const tx = applyGas(round, chain, gasGwei, gasLimit);
+  const openedAt = nowMs();
+  let attempt = 0;
+  let lastLog = 0;
+  while (nowMs() - openedAt < SPAM_WINDOW_MS) {
+    if (shouldStop()) throw new Error("Dừng.");
+    attempt += 1;
+    const state = await callState(provider, wallet.address, round);
+    if (state === "wait") {
+      if (Date.now() - lastLog > 1_000) {
+        log(`Chưa mở trên chain. Gửi lại liên tục, lần ${attempt}.`);
+        lastLog = Date.now();
+      }
+      continue;
+    }
+    if (state !== "ok") throw new Error(state);
+    let sent;
+    try {
+      sent = await wallet.sendTransaction(tx);
+    } catch (error) {
+      const message = error.shortMessage || error.reason || error.message || "";
+      if (!retryableSend(message)) throw error;
+      continue;
+    }
+    log(`Đã gửi ${sent.hash} (lần ${attempt}).`);
+    const receipt = await sent.wait();
+    if (receipt?.status === 1) return { hash: sent.hash, tx, attempt };
+    const after = await callState(provider, wallet.address, round);
+    if (after !== "ok" && after !== "wait") throw new Error(after);
+    log("Giao dịch revert, gửi lại.");
+  }
+  throw new Error("Hết 120s sau giờ mở mà chưa mint được.");
 }
 
 export async function runMint(options, deps = {}) {
@@ -250,14 +309,14 @@ export async function runMint(options, deps = {}) {
         now: 0,
       },
     };
-    let nowSec = await syncNow(hits[0].provider);
-    contextBase.limits.now = nowSec();
-    let chosen = await chooseHit(hits, contextBase, nowSec(), log);
+    let clock = await syncClock(hits[0].provider);
+    contextBase.limits.now = clock.nowSec();
+    let chosen = await chooseHit(hits, contextBase, clock.nowSec(), log);
     if (!chosen?.round) {
       printRounds(chosen?.rounds || [], hits[0].chain.nativeSymbol, log);
       throw new Error("Không có round nào ví đủ điều kiện.");
     }
-    nowSec = await syncNow(chosen.hit.provider);
+    clock = await syncClock(chosen.hit.provider);
     const symbol = chosen.hit.chain.nativeSymbol;
     log(`Contract ${chosen.hit.address} trên ${chosen.hit.chain.name} (${chosen.hit.identity.type}).`);
     printRounds(chosen.rounds, symbol, log);
@@ -265,7 +324,9 @@ export async function runMint(options, deps = {}) {
     if (options.dryRun) {
       const tx = applyGas(chosen.round, chosen.hit.chain, options.gasGwei, options.gasLimit);
       log(`DRY RUN: sẽ mint ${chosen.round.quantity} NFT, value ${ethers.formatEther(tx.value)} ${symbol}, gas ${options.gasGwei} gwei.`);
-      if (chosen.round.start > nowSec()) log(`Chưa mở. Tới ${new Date(chosen.round.start * 1000).toISOString()} thì lệnh thật sẽ tự gửi.`);
+      if (chosen.round.start * 1000 > clock.nowMs()) {
+        log(`Chưa mở. Tới ${new Date(chosen.round.start * 1000).toISOString()} thì lệnh thật gửi liên tục đến khi mint được.`);
+      }
       return {
         round: chosen.round,
         tx,
@@ -276,39 +337,33 @@ export async function runMint(options, deps = {}) {
       };
     }
     if (!options.signer) throw new Error("Đặt PRIVATE_KEY trong .env, hoặc giữ DRY_RUN=true.");
-    if (chosen.round.start > nowSec()) await waitForStart(chosen.round, nowSec, log, () => stopped);
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      contextBase.limits.now = nowSec();
-      const again = await chooseHit(hits, contextBase, nowSec(), log);
-      if (!again?.round) throw new Error("Tới giờ mở nhưng ví không còn đủ điều kiện.");
-      if (again.round.start > nowSec()) {
-        await sleep(200);
-        continue;
-      }
-      const wallet = options.signer.connect(again.hit.provider);
-      const state = await callState(again.hit.provider, wallet.address, again.round);
-      if (state === "wait") {
-        await sleep(250);
-        continue;
-      }
-      if (state !== "ok") throw new Error(state);
-      const tx = applyGas(again.round, again.hit.chain, options.gasGwei, options.gasLimit);
-      const sent = await wallet.sendTransaction(tx);
-      log(`Đã gửi ${sent.hash}`);
-      const receipt = await sent.wait();
-      if (receipt?.status !== 1) throw new Error("Giao dịch mint revert.");
-      log(`Mint thành công ${again.round.quantity} NFT.`);
-      return {
-        round: again.round,
-        tx,
-        sent: true,
-        hash: sent.hash,
-        chain: again.hit.chain.name,
-        quantity: again.round.quantity,
-        wallet: options.wallet,
-      };
+    const targetMs = chosen.round.start * 1000;
+    if (targetMs > clock.nowMs()) {
+      log(`Canh sát ${new Date(targetMs).toISOString()}. Đúng giờ thì gửi liên tục đến khi mint được.`);
+      clock = await waitUntil(targetMs, clock, log, chosen.round.label, () => stopped, () => syncClock(chosen.hit.provider));
     }
-    throw new Error("Round chưa nhận lệnh mint.");
+    const wallet = options.signer.connect(chosen.hit.provider);
+    const fired = await spamMint({
+      wallet,
+      provider: chosen.hit.provider,
+      round: chosen.round,
+      chain: chosen.hit.chain,
+      gasGwei: options.gasGwei,
+      gasLimit: options.gasLimit,
+      nowMs: clock.nowMs,
+      log,
+      shouldStop: () => stopped,
+    });
+    log(`Mint thành công ${chosen.round.quantity} NFT.`);
+    return {
+      round: chosen.round,
+      tx: fired.tx,
+      sent: true,
+      hash: fired.hash,
+      chain: chosen.hit.chain.name,
+      quantity: chosen.round.quantity,
+      wallet: options.wallet,
+    };
   } finally {
     await providers.destroy();
   }
