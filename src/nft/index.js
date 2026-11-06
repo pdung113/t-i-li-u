@@ -83,11 +83,11 @@ export function loadNftOptions(argv = [], env = process.env) {
 function usage() {
   return [
     "Cách dùng:",
-    "  npm run nft",
+    "  node nft",
     "Sửa chain, gas, link và private key trong nft.txt. Nhiều dòng key thì mint cùng lúc.",
     "Lệnh lẻ vẫn chạy được:",
-    "  npm run nft -- mint https://mint.du-an.xyz --qty 2 --gas 20 --max-price 0.05",
-    "  npm run nft -- buy https://opensea.io/collection/ten-drop --qty 1 --max-price 0.2",
+    "  node nft mint https://mint.du-an.xyz --qty 2 --gas 20 --max-price 0.05",
+    "  node nft buy https://opensea.io/collection/ten-drop --qty 1 --max-price 0.2",
   ].join("\n");
 }
 

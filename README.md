@@ -1,6 +1,6 @@
 # X snipe
 
-Có hai tool tách nhau. `npm start` mua token trên pool V2. `npm run nft` mint hoặc mua NFT, không đụng đường mua token.
+Có hai tool tách nhau. `npm start` mua token trên pool V2. `node nft` mint hoặc mua NFT, không đụng đường mua token.
 
 Dán link X của dự án. Khi tài khoản đó đăng contract, tool mô phỏng mua và bán trên pool V2. Tax còn trong ngưỡng thì gửi lệnh mua ngay. Tax cao hơn ngưỡng, hoặc không bán được, thì bỏ qua.
 
@@ -72,10 +72,10 @@ Trong thư mục project:
 
 ```bash
 npm install
-npm run nft
+node nft
 ```
 
-Lần đầu chưa có `nft.txt`, lệnh tạo file đó từ `nft.example.txt` rồi dừng. Mở `nft.txt` bằng Notepad, điền xong, chạy lại `npm run nft`.
+Lần đầu chưa có `nft.txt`, lệnh tạo file đó từ `nft.example.txt` rồi dừng. Mở `nft.txt` bằng Notepad, điền xong, chạy lại `node nft`. `npm run nft` vẫn là cùng một lệnh.
 
 ```
 chain=base
@@ -122,7 +122,7 @@ Mint xem ví đủ round nào. Allowlist chỉ chạy khi ví có proof khớp m
 Mua giá thấp nhất:
 
 ```bash
-npm run nft -- buy https://opensea.io/collection/ten-drop --qty 1 --max-price 0.2
+node nft buy https://opensea.io/collection/ten-drop --qty 1 --max-price 0.2
 ```
 
 Cần `OPENSEA_API_KEY` trong `.env`. Tool lấy ask rẻ nhất còn dưới trần giá rồi tạo giao dịch mua. `dry_run` vẫn lấy từ `nft.txt` hoặc `DRY_RUN` trong `.env`.
