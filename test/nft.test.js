@@ -11,7 +11,7 @@ import { contractsFromCollection } from "../src/nft/opensea.js";
 import { chainHintsFromText, collectAllowInfo, extractCandidates, parseMarketUrl } from "../src/nft/parse.js";
 import { capQuantity, chooseFeeRecipient, genericRounds, selectRound, thirdwebRound } from "../src/nft/rounds.js";
 import { exposes } from "../src/nft/read.js";
-import { runMint, runMintWallets } from "../src/nft/run.js";
+import { runBuy, runMint, runMintWallets } from "../src/nft/run.js";
 
 const nft = "0x1111111111111111111111111111111111111111";
 const sea = "0x2222222222222222222222222222222222222222";
@@ -109,6 +109,12 @@ test("parse link OpenSea, chợ có contract, và trang mint", () => {
   assert.equal(item.chain, "base");
   assert.equal(item.contract, ethers.getAddress(nft));
   assert.equal(item.tokenId, "15");
+
+  const assets = parseMarketUrl(`https://opensea.io/assets/ethereum/${nft}/7`);
+  assert.equal(assets.kind, "item");
+  assert.equal(assets.chain, "eth");
+  assert.equal(assets.contract, ethers.getAddress(nft));
+  assert.equal(assets.tokenId, "7");
 
   const market = parseMarketUrl(`https://blur.io/eth/collection/${nft}`);
   assert.equal(market.contract, ethers.getAddress(nft));
@@ -297,6 +303,11 @@ test("dry run canh public khi ví không có allowlist", async () => {
   assert.equal(result.tx.value, ethers.parseEther("0.02"));
   assert.equal(result.tx.maxFeePerGas, ethers.parseUnits("9", "gwei"));
   assert.equal(result.tx.maxPriorityFeePerGas, ethers.parseUnits("9", "gwei"));
+  assert.equal(result.tx.data.slice(0, 10), seaDropIface.getFunction("mintPublic").selector);
+  const mintArgs = seaDropIface.decodeFunctionData("mintPublic", result.tx.data);
+  assert.equal(mintArgs[0], ethers.getAddress(nft));
+  assert.equal(mintArgs[3], 2n);
+  assert.notEqual(mintArgs[1], ethers.ZeroAddress);
   assert.ok(logs.some((line) => line.includes("Chọn round public")));
   assert.ok(logs.some((line) => line.includes("Chưa mở")));
 });
@@ -395,4 +406,67 @@ test("nhiều ví trong notepad mint cùng lúc và báo số lượng", async (
   assert.match(failed.text, /Thành công 0\/2 ví, tổng 0 NFT/);
   assert.match(failed.text, /chain base/);
   assert.match(failed.text, /thất bại \| 0 NFT/);
+});
+
+test("mua ask rẻ nhất dưới trần và không gửi khi dry run", async () => {
+  const protocol = "0x0000000000000068F116a894984e2DB1123eB395";
+  const cheap = `0x${"22".repeat(32)}`;
+  const calls = [];
+  const fetchImpl = async (url, opts = {}) => {
+    calls.push({ url: String(url), method: opts.method || "GET", body: opts.body });
+    const href = String(url);
+    if (href.includes("/collections/")) {
+      return { ok: true, json: async () => ({ contracts: [{ address: nft, chain: "ethereum" }] }) };
+    }
+    if (href.includes("/orders/")) {
+      return {
+        ok: true,
+        json: async () => ({
+          orders: [
+            { order_hash: `0x${"11".repeat(32)}`, protocol_address: protocol, price: { current: { value: "50000000000000000" } }, tokenId: "2" },
+            { order_hash: cheap, protocol_address: protocol, price: { current: { value: "10000000000000000" } }, tokenId: "1" },
+            { order_hash: `0x${"33".repeat(32)}`, protocol_address: protocol, price: { current: { value: "900000000000000000" } }, tokenId: "3" },
+          ],
+        }),
+      };
+    }
+    if (href.includes("fulfillment_data")) {
+      return {
+        ok: true,
+        json: async () => ({
+          fulfillment_data: { transaction: { to: protocol, input_data: "0xabcd", value: "10000000000000000" } },
+        }),
+      };
+    }
+    return { ok: false, status: 404 };
+  };
+  const result = await runBuy(
+    {
+      url: "https://opensea.io/collection/cool-cats",
+      quantity: 1,
+      gasGwei: "5",
+      gasLimit: 500_000,
+      maxPrice: ethers.parseEther("0.2"),
+      chain: resolveNftChain("eth"),
+      rpc: "",
+      apiKey: "test-key",
+      dryRun: true,
+      wallet,
+      signer: null,
+    },
+    {
+      listen: false,
+      log: () => {},
+      fetch: fetchImpl,
+      providerFactory: () => ({ async destroy() {} }),
+    },
+  );
+  assert.equal(result.sent, false);
+  assert.equal(result.listings.length, 1);
+  assert.equal(result.listings[0].tokenId, "1");
+  assert.equal(result.listings[0].price, 10_000_000_000_000_000n);
+  const posted = calls.find((call) => call.method === "POST");
+  assert.match(posted.url, /\/listings\/fulfillment_data$/);
+  assert.equal(JSON.parse(posted.body).listing.hash, cheap);
+  assert.equal(JSON.parse(posted.body).fulfiller.address, ethers.getAddress(wallet));
 });
