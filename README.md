@@ -64,33 +64,20 @@ Mô phỏng bán dùng một ví sạch và nhích thời gian 3 phút để né
 
 ## Báo follow mới qua Telegram
 
-Tool đọc danh sách follow công khai của một tài khoản X. Lần chạy đầu chỉ ghi nhớ những người họ đang follow, không gửi tin. Những lần sau, follow mới được gửi qua Telegram, kèm link X của người đó.
+Mở `theo-doi.txt` bằng Notepad. Mỗi dòng là một tài khoản X. @vladtenev đã có sẵn. Muốn theo dõi thêm ai thì thêm một dòng, ví dụ `https://x.com/ten_khac` hoặc `@ten_khac`, rồi lưu.
 
-Nếu người vừa được follow để contract trong bio hoặc bài viết gần đây, tin nhắn thêm dòng `Contract: 0x...` và link bài đó. Những người đã báo được lưu trong `data/follows/`, gồm link và contract.
-
-Tài khoản khoá không dùng được, vì danh sách follow không công khai.
+Chạy:
 
 ```bash
-cp .env.example .env
-npm run follow -- https://x.com/vladtenev
+npm run follow
 ```
 
-Trong `.env`:
+Trên Windows có thể double-click `chay.bat`.
 
-- `TELEGRAM_BOT_TOKEN`: nhắn @BotFather lệnh `/newbot`, dán token.
-- `TELEGRAM_CHAT_ID`: nhắn Start cho bot, mở `https://api.telegram.org/bot<token>/getUpdates`, lấy `message.chat.id`.
-- `FOLLOW_POLL_MS`: khoảng cách giữa hai lần hỏi, mili giây. Mặc định `3000`.
+Lần chạy đầu chỉ nhớ follow hiện tại của từng người, không gửi tin cũ. Follow mới sau đó được gửi qua Telegram, kèm link X. Nếu tài khoản vừa được follow để contract trong bio hoặc bài viết, tin thêm dòng `Contract: 0x...`.
 
-Thử bot mà chưa theo dõi ai:
+Tool đang chạy sẽ đọc lại `theo-doi.txt` mỗi vòng. Thêm người rồi lưu file là đủ, không cần tắt tool.
 
-```bash
-npm run follow -- --test-telegram
-```
+Tài khoản khoá không theo dõi được, vì danh sách follow không công khai. Token Telegram nằm trong `.env`, không ghi vào `theo-doi.txt`.
 
-Chạy một vòng rồi thoát:
-
-```bash
-npm run follow -- --once https://x.com/vladtenev
-```
-
-Follow đã có từ trước khi bật tool không được báo lại. File `data/follows/<username>.json` nhớ id đã thấy và danh sách `people` (link X, contract). Xoá file đó nếu muốn lập mốc lại từ đầu.
+Follow đã báo được lưu trong `data/follows/`. Xoá file của username đó nếu muốn lập mốc lại từ đầu.

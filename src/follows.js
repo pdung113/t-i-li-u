@@ -525,6 +525,35 @@ export async function sendTelegram({ token, chatId, text, fetchImpl = globalThis
  *   maxPages?: number,
  * }} opts
  */
+export async function runCycle(opts) {
+  const log = opts.log || (() => {});
+  const wasReady = opts.state.bootstrapped;
+  const result = await pollFollows({
+    client: opts.client,
+    handle: opts.handle,
+    state: opts.state,
+    maxPages: opts.maxPages,
+  });
+  if (!wasReady || result.kind === "baseline") {
+    await opts.store.save(opts.state);
+    log(`Đã nhớ ${result.seeded} follow gần nhất của @${result.handle}. Follow mới sẽ báo qua Telegram.`);
+  }
+  for (const user of result.alerts) {
+    const enriched = await enrichFollowed(opts.client, user);
+    await opts.notify(formatFollowAlert(result.handle, enriched));
+    opts.state.seen.add(user.id);
+    opts.state.emptyOk = false;
+    rememberPerson(opts.state, enriched);
+    await opts.store.save(opts.state);
+    const contractNote = enriched.contracts.length ? ` | ${enriched.contracts.join(", ")}` : "";
+    log(`@${result.handle} follow @${enriched.handle}${contractNote}`);
+  }
+  if (result.truncated) {
+    log(`@${result.handle} follow quá nhiều người trong một lúc. Một số follow cũ hơn trong khoảng trống có thể chưa được báo.`);
+  }
+  return result.handle;
+}
+
 export async function watch(opts) {
   const log = opts.log || (() => {});
   const sleep = opts.sleep || delay;
@@ -542,31 +571,7 @@ export async function watch(opts) {
   while (cycles < maxCycles) {
     cycles += 1;
     try {
-      const wasReady = state.bootstrapped;
-      const result = await pollFollows({
-        client: opts.client,
-        handle: canonical,
-        state,
-        maxPages: opts.maxPages,
-      });
-      canonical = result.handle;
-      if (!wasReady || result.kind === "baseline") {
-        await opts.store.save(state);
-        log(`Đã nhớ ${result.seeded} follow gần nhất của @${canonical}. Follow mới sẽ báo qua Telegram.`);
-      }
-      for (const user of result.alerts) {
-        const enriched = await enrichFollowed(opts.client, user);
-        await opts.notify(formatFollowAlert(canonical, enriched));
-        state.seen.add(user.id);
-        state.emptyOk = false;
-        rememberPerson(state, enriched);
-        await opts.store.save(state);
-        const contractNote = enriched.contracts.length ? ` | ${enriched.contracts.join(", ")}` : "";
-        log(`@${canonical} follow @${enriched.handle}${contractNote}`);
-      }
-      if (result.truncated) {
-        log(`@${canonical} follow quá nhiều người trong một lúc. Một số follow cũ hơn trong khoảng trống có thể chưa được báo.`);
-      }
+      canonical = await runCycle({ ...opts, handle: canonical, state, log });
     } catch (error) {
       const blocked = error?.code === "private" || (error?.code === "not_found" && !state.bootstrapped);
       if (blocked) throw error;
@@ -575,6 +580,94 @@ export async function watch(opts) {
     if (cycles >= maxCycles) break;
     if (Date.now() - lastBeat > 60_000) {
       log(`Vẫn đang theo dõi @${canonical}.`);
+      lastBeat = Date.now();
+    }
+    await sleep(pollMs);
+  }
+}
+
+/**
+ * @param {{
+ *   loadHandles: () => Promise<{ handles: string[], errors?: string[] } | string[]>,
+ *   storeFor: (handle: string) => { load: Function, save: Function },
+ *   client: { profile: Function, following: Function },
+ *   notify: (text: string) => Promise<void>,
+ *   pollMs?: number,
+ *   sleep?: typeof delay,
+ *   log?: (message: string) => void,
+ *   maxCycles?: number,
+ *   maxPages?: number,
+ * }} opts
+ */
+export async function watchAll(opts) {
+  const log = opts.log || (() => {});
+  const sleep = opts.sleep || delay;
+  const pollMs = opts.pollMs ?? 3000;
+  const maxCycles = opts.maxCycles ?? Infinity;
+  /** @type {Map<string, { store: { load: Function, save: Function }, state: ReturnType<typeof freshState>, handle: string, complained: boolean }>} */
+  const slots = new Map();
+  const loggedErrors = new Set();
+  let lastBeat = Date.now();
+  let cycles = 0;
+  let loggedEmpty = false;
+
+  while (cycles < maxCycles) {
+    cycles += 1;
+    const loaded = await opts.loadHandles();
+    const handles = Array.isArray(loaded) ? loaded : loaded.handles;
+    const errors = Array.isArray(loaded) ? [] : loaded.errors || [];
+    for (const message of errors) {
+      if (loggedErrors.has(message)) continue;
+      loggedErrors.add(message);
+      log(message);
+    }
+    if (handles.length === 0) {
+      if (!loggedEmpty) {
+        log("File theo-doi.txt chưa có tài khoản. Thêm mỗi người một dòng rồi lưu.");
+        loggedEmpty = true;
+      }
+    } else {
+      loggedEmpty = false;
+    }
+
+    for (const handle of handles) {
+      const key = handle.toLowerCase();
+      let slot = slots.get(key);
+      if (!slot) {
+        const store = opts.storeFor(handle);
+        let state = await store.load();
+        if (state.corrupt) {
+          log(`File trạng thái của @${handle} hỏng. Nhớ lại follow hiện tại, không báo follow cũ.`);
+          state = freshState();
+        }
+        slot = { store, state, handle, complained: false };
+        slots.set(key, slot);
+      }
+      try {
+        slot.handle = await runCycle({
+          client: opts.client,
+          handle: slot.handle,
+          state: slot.state,
+          store: slot.store,
+          notify: opts.notify,
+          log,
+          maxPages: opts.maxPages,
+        });
+        slot.complained = false;
+      } catch (error) {
+        const blocked = error?.code === "private" || (error?.code === "not_found" && !slot.state.bootstrapped);
+        if (blocked && !slot.complained) {
+          log(error.message);
+          slot.complained = true;
+          continue;
+        }
+        if (!blocked) log(error?.message || String(error));
+      }
+    }
+
+    if (cycles >= maxCycles) break;
+    if (handles.length > 0 && Date.now() - lastBeat > 60_000) {
+      log(`Vẫn đang theo dõi ${handles.map((handle) => `@${handle}`).join(", ")}.`);
       lastBeat = Date.now();
     }
     await sleep(pollMs);

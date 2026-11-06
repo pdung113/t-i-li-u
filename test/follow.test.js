@@ -3,8 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { main } from "../src/follow-alert.js";
-import { loadAlertConfig } from "../src/follow-alert.js";
+import { loadAlertConfig, main, parseWatchList } from "../src/follow-alert.js";
 import {
   FollowError,
   createXClient,
@@ -19,6 +18,7 @@ import {
   sendTelegram,
   serializeState,
   watch,
+  watchAll,
 } from "../src/follows.js";
 
 function user(id, handle, extra = {}) {
@@ -64,6 +64,49 @@ function jsonResponse(body, status = 200) {
     headers: { "content-type": "application/json" },
   });
 }
+
+test("file notepad đọc link, @username, và bỏ dòng ghi chú", () => {
+  const parsed = parseWatchList(
+    "\uFEFF# ghi chú\r\n\r\nhttps://x.com/vladtenev\r\n@VladTenev\n@someone\nkhông phải link\n",
+  );
+  assert.deepEqual(parsed.handles, ["vladtenev", "someone"]);
+  assert.equal(parsed.errors.length, 1);
+});
+
+test("thêm người vào notepad ở vòng sau thì được theo dõi", async () => {
+  let text = "https://x.com/vladtenev\n";
+  const notes = [];
+  const stores = new Map();
+  await watchAll({
+    loadHandles: async () => parseWatchList(text),
+    storeFor(handle) {
+      const key = handle.toLowerCase();
+      if (!stores.has(key)) stores.set(key, memoryStore());
+      return stores.get(key);
+    },
+    client: {
+      async profile(handle) {
+        return profile(handle, { id: handle === "other" ? 8 : 9, following: 1, name: handle });
+      },
+      async following(handle) {
+        return { users: [user(handle === "other" ? 80 : 90, `${handle}pal`)], cursor: null };
+      },
+    },
+    notify: async () => {
+      throw new Error("không được báo follow cũ");
+    },
+    log: (message) => notes.push(message),
+    sleep: async () => {
+      text = "# thêm người\nhttps://x.com/vladtenev\nhttps://x.com/other\n";
+    },
+    maxCycles: 2,
+  });
+  assert.match(notes[0], /@vladtenev/);
+  assert.match(notes.join("\n"), /@other/);
+  assert.equal(stores.get("vladtenev").get().bootstrapped, true);
+  assert.equal(stores.get("other").get().bootstrapped, true);
+  assert.equal(stores.get("vladtenev").get().seen.has("90"), true);
+});
 
 test("tin Telegram ghi tên và link", () => {
   assert.equal(

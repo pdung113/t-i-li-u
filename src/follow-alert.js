@@ -1,19 +1,59 @@
 import "dotenv/config";
+import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { log } from "./log.js";
 import { parseTwitterTarget } from "./twitter.js";
-import { createXClient, fileStore, sendTelegram, statePath, watch } from "./follows.js";
+import { createXClient, fileStore, sendTelegram, statePath, watch, watchAll } from "./follows.js";
+
+export const WATCH_LIST = "theo-doi.txt";
 
 const USAGE = `Cách dùng:
-  node src/follow-alert.js https://x.com/username
-  node src/follow-alert.js @username
-  node src/follow-alert.js --once https://x.com/username
+  npm run follow
+  node src/follow-alert.js
+  node src/follow-alert.js --once
   node src/follow-alert.js --test-telegram
 
-Điền TELEGRAM_BOT_TOKEN và TELEGRAM_CHAT_ID trong .env.
+Danh sách người cần theo dõi nằm trong file theo-doi.txt.
+Mỗi dòng một link X hoặc @username. Lưu file là tool nhận người mới.
 Chỉ đọc follow công khai. Lần chạy đầu nhớ danh sách hiện tại, không gửi tin.
 Sau đó mỗi follow mới được báo qua Telegram, kèm link X.
 Nếu người đó đăng contract trong bio hoặc bài viết, contract được thêm vào tin.`;
+
+/**
+ * @param {string} text
+ * @returns {{ handles: string[], errors: string[] }}
+ */
+export function parseWatchList(text) {
+  const handles = [];
+  const seen = new Set();
+  const errors = [];
+  const lines = String(text || "").replace(/^\uFEFF/, "").split(/\r?\n/);
+  for (const line of lines) {
+    const raw = line.trim();
+    if (!raw || raw.startsWith("#")) continue;
+    try {
+      const { handle } = parseTwitterTarget(raw);
+      const key = handle.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      handles.push(handle);
+    } catch (error) {
+      errors.push(`${raw}: ${error.message}`);
+    }
+  }
+  return { handles, errors };
+}
+
+export async function readWatchList(listPath = WATCH_LIST) {
+  try {
+    return parseWatchList(await readFile(listPath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return { handles: [], errors: [`Chưa có file ${listPath}`] };
+    }
+    throw error;
+  }
+}
 
 export function loadAlertConfig(env = process.env) {
   const token = String(env.TELEGRAM_BOT_TOKEN || "").trim();
@@ -45,6 +85,9 @@ export function loadAlertConfig(env = process.env) {
  *   log?: (message: string) => void,
  *   sleep?: (ms: number) => Promise<void>,
  *   maxCycles?: number,
+ *   listPath?: string,
+ *   loadHandles?: () => Promise<{ handles: string[], errors?: string[] } | string[]>,
+ *   storeFor?: (handle: string) => { load: Function, save: Function },
  * }} [deps]
  */
 export async function main(argv = process.argv.slice(2), deps = {}) {
@@ -78,14 +121,27 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     if (arg === "--once") skip.add(index);
   });
   const targetArg = argv.find((arg, index) => !arg.startsWith("--") && !skip.has(index));
+  const client = deps.client || createXClient();
+  const once = argv.includes("--once") ? 1 : deps.maxCycles;
+  const logFn = deps.log || log;
+
   if (!targetArg) {
-    console.log(USAGE);
-    process.exitCode = 1;
+    const listPath = deps.listPath || WATCH_LIST;
+    await watchAll({
+      loadHandles: deps.loadHandles || (() => readWatchList(listPath)),
+      storeFor: deps.storeFor || ((handle) => fileStore(statePath(handle))),
+      client,
+      notify,
+      pollMs: config.pollMs,
+      sleep: deps.sleep,
+      log: logFn,
+      maxCycles: once,
+      maxPages: deps.maxPages,
+    });
     return;
   }
 
   const target = parseTwitterTarget(targetArg);
-  const client = deps.client || createXClient();
   const store = deps.store || fileStore(statePath(target.handle));
   await watch({
     handle: target.handle,
@@ -94,8 +150,8 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     notify,
     pollMs: config.pollMs,
     sleep: deps.sleep,
-    log: deps.log || log,
-    maxCycles: argv.includes("--once") ? 1 : deps.maxCycles,
+    log: logFn,
+    maxCycles: once,
     maxPages: deps.maxPages,
   });
 }
