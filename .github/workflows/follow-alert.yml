@@ -2,15 +2,21 @@ name: Theo doi follow
 
 on:
   schedule:
+    # GitHub không mở phiên mới nhanh hơn 5 phút. Phiên đang chạy tự hỏi tiếp.
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: theo-doi-follow
+  cancel-in-progress: false
+
 jobs:
   watch:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,22 +31,45 @@ jobs:
 
       - name: Bao mot lan la tool dang chay
         run: |
+          set -euo pipefail
           mkdir -p data/follows
           if [ ! -f data/follows/watcher-on ]; then
             node src/follow-alert.js --online
             touch data/follows/watcher-on
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -f data/follows/watcher-on
+            git commit -m "Ghi nhan tool dang chay"
+            git push origin HEAD:cursor/follow-alert-telegram-1060
           fi
 
-      - name: Kiem tra follow moi
-        run: node src/follow-alert.js --once
-
-      - name: Luu danh sach da thay
+      - name: Kiem tra lien tuc
         run: |
+          set -uo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f data/follows
-          if git diff --cached --quiet; then
-            exit 0
-          fi
-          git commit -m "Nho danh sach follow da thay"
-          git push origin HEAD:cursor/follow-alert-telegram-1060
+          end=$(( $(date +%s) + 345 * 60 ))
+          pending_push=0
+          save_state() {
+            git add -f data/follows
+            if ! git diff --cached --quiet; then
+              git commit -m "Nho danh sach follow da thay" || true
+              pending_push=1
+            fi
+            if [ "$pending_push" -eq 0 ]; then
+              return 0
+            fi
+            git fetch origin cursor/follow-alert-telegram-1060
+            if ! git rebase FETCH_HEAD; then
+              git rebase --abort || true
+              return 0
+            fi
+            if git push origin HEAD:cursor/follow-alert-telegram-1060; then
+              pending_push=0
+            fi
+          }
+          while [ "$(date +%s)" -lt "$end" ]; do
+            node src/follow-alert.js --once || true
+            save_state
+            sleep 15
+          done
