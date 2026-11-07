@@ -1,5 +1,7 @@
 # X snipe
 
+Có hai tool tách nhau. `npm start` mua token trên pool V2. `node nft` mint hoặc mua NFT, không đụng đường mua token.
+
 Dán link X của dự án. Khi tài khoản đó đăng contract, tool mô phỏng mua và bán trên pool V2. Tax còn trong ngưỡng thì gửi lệnh mua ngay. Tax cao hơn ngưỡng, hoặc không bán được, thì bỏ qua.
 
 Pool hỗ trợ: PancakeSwap V2 (BSC) và Uniswap V2 (Ethereum, Base, Robinhood Chain). Chọn chain lúc chạy:
@@ -61,3 +63,77 @@ Phần chờ tweet xuất hiện phụ thuộc API đọc timeline (thường v�
 Token chỉ có pool V3, hoặc đang nằm trên bonding curve (Four.meme, pump.fun), sẽ không được mua.
 
 Mô phỏng bán dùng một ví sạch và nhích thời gian 3 phút để né cooldown cùng block. Token cố tình chặn hợp đồng lúc bán có thể bị bỏ qua dù ví thường vẫn bán được. Một số honeypot chỉ hiện sau khi mua thật; mô phỏng không bắt hết.
+
+## NFT
+
+### Cách dùng
+
+Trong thư mục project:
+
+```bash
+npm install
+node nft
+```
+
+Lần đầu chưa có `nft.txt`, lệnh tạo file đó từ `nft.example.txt` rồi dừng. Mở `nft.txt` bằng Notepad, điền xong, chạy lại `node nft`. `npm run nft` vẫn là cùng một lệnh.
+
+```
+chain=base
+gas=5
+gas_limit=500000
+qty=1
+max_price=0.2
+dry_run=true
+
+link=https://opensea.io/collection/ten-drop
+
+key=
+key=
+```
+
+| Dòng | Ý nghĩa |
+| --- | --- |
+| `chain` | `eth`, `base`, `polygon`, `arbitrum`, `optimism`, hoặc `bsc` |
+| `gas` | Gas price, đơn vị gwei. Mạng tắc thì tăng |
+| `gas_limit` | Trần gas. Lệnh bị out-of-gas thì tăng, ví dụ `800000` |
+| `qty` | Số NFT mỗi ví |
+| `max_price` | Trần giá mỗi NFT, tính bằng coin của chain |
+| `dry_run` | `true` chỉ xem. `false` mới gửi giao dịch |
+| `link` | Một hoặc nhiều link, mỗi link một dòng |
+| `key` | Private key mỗi ví một dòng. Nhiều ví mint cùng lúc |
+
+Chạy thử trước. `dry_run=true` in round, giờ mở và giao dịch, không trừ tiền. Thấy đúng ví và đúng số lượng thì đổi `dry_run=false`, chạy lại. Dùng ví riêng, chỉ nạp số chấp nhận mất. Không đưa `nft.txt` lên git sau khi đã dán key.
+
+Kết quả có chain, từng ví, và tổng:
+
+```
+Kết quả | chain base
+1. 0x1234...abcd | chain base | thành công | 1 NFT
+2. 0xabcd...9999 | chain base | thất bại | 0 NFT | ví không đủ điều kiện
+Thành công 1/2 ví, tổng 1 NFT.
+```
+
+`dry_run=true` thì dòng ví ghi `chưa gửi`, không ghi `thành công`.
+
+Link nhận được: trang mint của dự án, OpenSea collection hoặc item, và link chợ đã có địa chỉ `0x` trong URL.
+
+Mint xem ví đủ round nào. Allowlist chỉ chạy khi ví có proof khớp merkle trên trang. Token-gated chỉ chạy khi ví đang giữ token của round đó. Không đủ thì canh public. Round chưa mở thì tool đứng chờ, 1,5 giây cuối kiểm mỗi 5ms. Đúng giờ mở thì gọi mint liên tục, contract nhận lệnh thì gửi ngay, và gửi lại đến khi một giao dịch thành công hoặc hết 120 giây. Trước giờ mở không gửi, để lệnh revert không tốn gas. Round chữ ký server không có sẵn chữ ký trên trang thì bỏ qua. Giá cao hơn `max_price`, hoặc ví không đủ tiền cộng gas, thì không mint.
+
+Mua giá thấp nhất:
+
+```bash
+node nft buy https://opensea.io/collection/ten-drop --qty 1 --max-price 0.2
+```
+
+Cần `OPENSEA_API_KEY` trong `.env`. Tool lấy ask rẻ nhất còn dưới trần giá rồi tạo giao dịch mua. `dry_run` vẫn lấy từ `nft.txt` hoặc `DRY_RUN` trong `.env`.
+
+### Khi trang mint đổi API
+
+Mint không gọi API riêng của từng trang. Tool lấy địa chỉ contract trên link hoặc trong HTML, rồi đọc round trực tiếp trên chuỗi: SeaDrop, claim condition của thirdweb, hoặc hàm `mint(uint256)`. Trang đổi đường dẫn API mà contract và giờ mở round trên chuỗi không đổi thì lần chạy sau vẫn mint được, không cần sửa code.
+
+Hai chỗ không tự đổi theo trang:
+
+- Trang không còn hiện địa chỉ contract ở đâu cả, contract chỉ nằm sau API mới. Lúc đó dán link item có `0x`, hoặc link `https://.../0xabc...`.
+- Mua trên OpenSea đi qua API v2 cố định (`OPENSEA_API_KEY`). OpenSea đổi đường dẫn thì lệnh mua báo lỗi, phần mint trên chuỗi vẫn chạy.
+
+Contract không có các hàm trên, hoặc là ERC1155, thì tool dừng và ghi lý do. `src/nft/settings.js` chỉ là mặc định khi chạy lệnh lẻ, không qua `nft.txt`.
