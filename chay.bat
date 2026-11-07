@@ -7,6 +7,8 @@ if errorlevel 1 (
   exit /b 1
 )
 if not exist node_modules call npm install --ignore-scripts
+echo De cua so nay MO. Tat cua so la tool tren may dung.
+echo Chua co follow moi thi man hinh van in dong trang thai. Tool dang chay.
 node src/follow-alert.js
 echo.
 echo Tool da dung.

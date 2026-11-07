@@ -557,6 +557,8 @@ export async function runCycle(opts) {
   if (!wasReady || result.kind === "baseline") {
     await opts.store.save(opts.state);
     log(`Đã nhớ ${result.seeded} follow gần nhất của @${result.handle}. Follow mới sẽ báo qua Telegram.`);
+  } else if (result.alerts.length === 0) {
+    log(`@${result.handle} chưa follow ai mới. Đang nhớ ${opts.state.seen.size} người.`);
   }
   for (const user of result.alerts) {
     const enriched = await enrichFollowed(opts.client, user);
@@ -587,6 +589,7 @@ export async function watch(opts) {
   let canonical = opts.handle;
   let lastBeat = Date.now();
   let cycles = 0;
+  log(`Đang theo dõi @${opts.handle}. Hỏi mỗi ${Math.round(pollMs / 1000)} giây. Cửa sổ này phải để mở.`);
 
   while (cycles < maxCycles) {
     cycles += 1;
@@ -648,6 +651,11 @@ export async function watchAll(opts) {
       }
     } else {
       loggedEmpty = false;
+      if (cycles === 1) {
+        log(
+          `Đang theo dõi ${handles.map((handle) => `@${handle}`).join(", ")}. Hỏi mỗi ${Math.round(pollMs / 1000)} giây. Cửa sổ này phải để mở.`,
+        );
+      }
     }
 
     for (const handle of handles) {

@@ -78,7 +78,7 @@ Chạy thêm trên máy của bạn, nếu muốn:
 npm run follow
 ```
 
-Trên Windows có thể double-click `chay.bat`.
+Trên Windows có thể double-click `chay.bat`. Cửa sổ đen phải để mở. Sau mỗi lần hỏi, cửa sổ in một dòng. Chưa có follow mới thì dòng đó nói đang nhớ bao nhiêu người. Tắt cửa sổ là bản trên máy dừng.
 
 Lần chạy đầu chỉ nhớ follow hiện tại của từng người, không gửi tin cũ. Follow mới sau đó được gửi qua Telegram, kèm link X. Nếu tài khoản vừa được follow để contract trong bio hoặc bài viết, tin thêm dòng `Contract: 0x...`.
 

@@ -574,7 +574,8 @@ test("lệnh chạy một vòng với link X và không gửi follow cũ", async
     store: memoryStore(),
   });
   assert.deepEqual(sent, []);
-  assert.match(notes[0], /Đã nhớ 1 follow/);
+  assert.match(notes.join("\n"), /Đã nhớ 1 follow/);
+  assert.match(notes[0], /Cửa sổ này phải để mở/);
 
   let testText = "";
   await main(["--test-telegram"], {
