@@ -66,7 +66,9 @@ Mô phỏng bán dùng một ví sạch và nhích thời gian 3 phút để né
 
 Mở `theo-doi.txt` bằng Notepad. Mỗi dòng là một tài khoản X. @vladtenev đã có sẵn. Muốn theo dõi thêm ai thì thêm một dòng, ví dụ `https://x.com/ten_khac` hoặc `@ten_khac`, rồi lưu.
 
-GitHub chạy tool khoảng 5 phút một lần, kể cả khi máy tính đang tắt. Tin vẫn tới Telegram. Lịch này do GitHub quyết, có lúc chậm hơn 5 phút.
+GitHub giữ một phiên chạy và hỏi follow mới khoảng 15 giây một lần, kể cả khi máy tính đang tắt. GitHub không cho mở phiên mới nhanh hơn 5 phút, nên mỗi phiên ngồi khoảng 6 tiếng rồi phiên sau nối tiếp. Lúc đổi phiên, hoặc lúc GitHub khởi động chậm, tin có thể tới sau khoảng một phút.
+
+Chạy thêm `chay.bat` trên máy thì tin tới khoảng 3 giây. Cùng một follow có thể thành hai tin: một từ máy, một từ GitHub.
 
 Người được theo dõi là những dòng trong `theo-doi.txt` trên GitHub. Hiện có @vladtenev. Sửa file trên máy không đổi bản GitHub đang chạy.
 
