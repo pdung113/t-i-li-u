@@ -1,0 +1,6 @@
+﻿# Mỗi dòng là một người trên X cần theo dõi.
+# Viết link hoặc @username, rồi lưu file.
+# Tool đang chạy sẽ nhận người mới ở vòng hỏi sau.
+# Dòng bắt đầu bằng # là ghi chú, không bị theo dõi.
+
+https://x.com/vladtenev
