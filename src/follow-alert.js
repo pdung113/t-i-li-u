@@ -161,6 +161,12 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     return;
   }
 
+  if (argv.includes("--online")) {
+    await notify("Tool đang chạy trên GitHub. Tắt máy tính vẫn nhận tin khi người trong theo-doi.txt follow ai mới.");
+    (deps.log || log)("Đã báo tool đang chạy trên GitHub.");
+    return;
+  }
+
   const skip = new Set();
   argv.forEach((arg, index) => {
     if (arg === "--once") skip.add(index);

@@ -66,7 +66,11 @@ Mô phỏng bán dùng một ví sạch và nhích thời gian 3 phút để né
 
 Mở `theo-doi.txt` bằng Notepad. Mỗi dòng là một tài khoản X. @vladtenev đã có sẵn. Muốn theo dõi thêm ai thì thêm một dòng, ví dụ `https://x.com/ten_khac` hoặc `@ten_khac`, rồi lưu.
 
-Chạy:
+GitHub chạy tool khoảng 5 phút một lần, kể cả khi máy tính đang tắt. Tin vẫn tới Telegram. Lịch này do GitHub quyết, có lúc chậm hơn 5 phút.
+
+Người được theo dõi là những dòng trong `theo-doi.txt` trên GitHub. Hiện có @vladtenev. Sửa file trên máy không đổi bản GitHub đang chạy.
+
+Chạy thêm trên máy của bạn, nếu muốn:
 
 ```bash
 npm run follow
@@ -75,8 +79,6 @@ npm run follow
 Trên Windows có thể double-click `chay.bat`.
 
 Lần chạy đầu chỉ nhớ follow hiện tại của từng người, không gửi tin cũ. Follow mới sau đó được gửi qua Telegram, kèm link X. Nếu tài khoản vừa được follow để contract trong bio hoặc bài viết, tin thêm dòng `Contract: 0x...`.
-
-Tool đang chạy sẽ đọc lại `theo-doi.txt` mỗi vòng. Thêm người rồi lưu file là đủ, không cần tắt tool.
 
 Tài khoản khoá không theo dõi được, vì danh sách follow không công khai. Token Telegram nằm trong `.env`, không ghi vào `theo-doi.txt`.
 

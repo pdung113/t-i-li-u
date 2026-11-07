@@ -585,4 +585,14 @@ test("lệnh chạy một vòng với link X và không gửi follow cũ", async
     },
   });
   assert.match(testText, /Kết nối Telegram/);
+
+  let onlineText = "";
+  await main(["--online"], {
+    env: { TELEGRAM_BOT_TOKEN: "123:abc", TELEGRAM_CHAT_ID: "42" },
+    log() {},
+    notify: async (text) => {
+      onlineText = text;
+    },
+  });
+  assert.match(onlineText, /Tắt máy tính vẫn nhận tin/);
 });
