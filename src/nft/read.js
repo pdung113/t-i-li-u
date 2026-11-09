@@ -17,6 +17,7 @@ import {
   plainList,
   selectorOf,
 } from "./abi.js";
+import { fetchKalosEligibility } from "./kalos.js";
 import { capQuantity, chooseFeeRecipient, genericRounds, seaDropAllowRound, seaDropPublicRound, thirdwebRound } from "./rounds.js";
 
 export async function tryCall(provider, to, iface, name, args = []) {
@@ -127,6 +128,7 @@ async function ownedIds(provider, token, wallet, limit) {
 }
 
 export async function readRounds(provider, address, identity, context) {
+  if (identity.type === "kalos") return readKalos(provider, address, identity, context);
   if (identity.type === "seadrop") return readSeaDrop(provider, address, identity, context);
   if (identity.type === "thirdweb") return readThirdweb(provider, address, context);
   if (identity.type === "erc1155") return [emptyRound(address, "ERC1155 chưa được mint tự động")];
@@ -269,6 +271,36 @@ async function readSeaDrop(provider, nft, identity, context) {
     });
   }
   return rounds;
+}
+
+async function readKalos(provider, nft, identity, context) {
+  const rounds = await readSeaDrop(provider, nft, identity, context);
+  if (!context.wallet || !context.fetch || !identity.slug) return rounds;
+  const entries = await fetchKalosEligibility(identity.slug, context.wallet, context.fetch);
+  if (!entries.length) return rounds;
+  const seaDrop = identity.seaDrops[0];
+  const creator = await tryCall(provider, seaDrop, seaDropIface, "getCreatorPayoutAddress", [nft]);
+  const allowed = plainList(await tryCall(provider, seaDrop, seaDropIface, "getAllowedFeeRecipients", [nft]));
+  const root = await tryCall(provider, seaDrop, seaDropIface, "getAllowListMerkleRoot", [nft]);
+  const stats = await tryCall(provider, nft, nftIface, "getMintStats", [context.wallet]);
+  const minted = stats ? BigInt(stats[0]) : 0n;
+  const kept = rounds.filter((round) => round.id !== "seadrop-allowlist");
+  for (const entry of entries) {
+    const round = seaDropAllowRound({
+      root,
+      entry,
+      minted,
+      balance: context.balance,
+      limits: context.limits,
+      feeRecipient: chooseFeeRecipient({ restrict: entry.restrictFeeRecipients, allowed, creator }),
+      nft,
+      seaDrop,
+      wallet: context.wallet,
+    });
+    if (!round) continue;
+    kept.push({ ...round, id: `kalos-allow-${entry.stageIndex}`, label: entry.name || "allowlist" });
+  }
+  return kept.length ? kept : rounds;
 }
 
 function asCondition(raw) {

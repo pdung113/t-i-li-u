@@ -6,6 +6,7 @@ import { identifyContract, readRounds } from "./read.js";
 import { eligibleRounds, formatRound, selectRound } from "./rounds.js";
 import { fetchFulfillment, fetchListings, resolveCollection } from "./opensea.js";
 import { pickCheapest } from "./listings.js";
+import { loadKalosPage } from "./kalos.js";
 import { formatReport, safeReason, shortAddress } from "./notepad.js";
 
 function sleep(ms) {
@@ -83,6 +84,7 @@ function chainNameOf(value) {
 
 export async function loadPage(url, fetchImpl) {
   const parsed = parseMarketUrl(url);
+  if (parsed.kind === "kalos") return loadKalosPage(parsed, fetchImpl);
   let html = "";
   try {
     html = await fetchText(parsed.href, fetchImpl);
@@ -118,7 +120,7 @@ export async function loadPage(url, fetchImpl) {
 }
 
 async function attachCollection(page, apiKey, fetchImpl, log) {
-  if (!page.parsed.slug || !apiKey) return page;
+  if (!page.parsed.slug || !apiKey || page.parsed.kind === "kalos") return page;
   try {
     const found = await resolveCollection(page.parsed.slug, apiKey, fetchImpl);
     for (const item of found) {
@@ -158,16 +160,27 @@ async function findHits(page, options, providers) {
   const hits = [];
   const ranked = page.candidates.slice().sort((a, b) => b.score - a.score).slice(0, 8);
   for (const cand of ranked) {
-    const chains = options.chain
-      ? [options.chain]
-      : cand.chain
-        ? [resolveNftChain(cand.chain)]
-        : probeOrder(page.hints);
+    const kalosHit = page.kalos && cand.address.toLowerCase() === page.kalos.address.toLowerCase();
+    const chains = kalosHit
+      ? [resolveNftChain("elysium")]
+      : options.chain
+        ? [options.chain]
+        : cand.chain
+          ? [resolveNftChain(cand.chain)]
+          : probeOrder(page.hints);
     for (const chain of chains) {
-      const rpc = options.rpc && (options.chain || cand.chain || page.hints.length === 1) ? options.rpc : chain.rpc;
+      const rpc = kalosHit
+        ? options.chain?.name === "elysium" && options.rpc
+          ? options.rpc
+          : chain.rpc
+        : options.rpc && (options.chain || cand.chain || page.hints.length === 1)
+          ? options.rpc
+          : chain.rpc;
       const provider = providers.get(chain, rpc);
-      const identity = await identifyContract(provider, cand.address);
-      if (!identity) continue;
+      const identity = kalosHit
+        ? { type: "kalos", seaDrops: [page.kalos.seaDrop], slug: page.kalos.slug, code: await provider.getCode(cand.address) }
+        : await identifyContract(provider, cand.address);
+      if (!identity || identity.code === "0x") continue;
       hits.push({ ...cand, chain, provider, identity });
       break;
     }
@@ -317,6 +330,10 @@ export async function runMint(options, deps = {}) {
   }
   try {
     const page = await attachCollection(await loadPage(options.url, fetchImpl), options.apiKey, fetchImpl, log);
+    if (page.kalos) {
+      if (options.chain && options.chain.name !== "elysium") options.rpc = "";
+      options.chain = resolveNftChain("elysium");
+    }
     if (!page.candidates.length) {
       throw new Error("Không thấy địa chỉ contract trên trang. Dán link có 0x, hoặc thêm OPENSEA_API_KEY với link collection OpenSea.");
     }
@@ -328,6 +345,7 @@ export async function runMint(options, deps = {}) {
     const contextBase = {
       wallet: options.wallet,
       allowInfo: collectAllowInfo(page.html, options.wallet),
+      fetch: fetchImpl,
       limits: {
         quantity: options.quantity,
         maxPrice: options.maxPrice,

@@ -148,11 +148,13 @@ Cần `OPENSEA_API_KEY` trong `.env`. Tool lấy ask rẻ nhất còn dưới tr
 
 ### Khi trang mint đổi API
 
-Mint không gọi API riêng của từng trang. Tool lấy địa chỉ contract trên link hoặc trong HTML, rồi đọc round trực tiếp trên chuỗi: SeaDrop, claim condition của thirdweb, hoặc hàm `mint(uint256)`. Trang đổi đường dẫn API mà contract và giờ mở round trên chuỗi không đổi thì lần chạy sau vẫn mint được, không cần sửa code.
+Tool lấy địa chỉ contract trên link hoặc trong HTML, rồi đọc round trực tiếp trên chuỗi: SeaDrop, claim condition của thirdweb, hoặc hàm `mint(uint256)`. Trang đổi đường dẫn API mà contract và giờ mở round trên chuỗi không đổi thì lần chạy sau vẫn mint được, không cần sửa code.
+
+Link `kalos.fun/mint/...` là ngoại lệ: trang không ghi contract trong HTML, nên tool đọc API Kalos để lấy SeaDrop trên Elysium. Allowlist chỉ chạy khi Kalos xác nhận ví nằm trong danh sách. Public vẫn canh đúng giờ mở.
 
 Hai chỗ không tự đổi theo trang:
 
-- Trang không còn hiện địa chỉ contract ở đâu cả, contract chỉ nằm sau API mới. Lúc đó dán link item có `0x`, hoặc link `https://.../0xabc...`.
+- Trang khác không còn hiện địa chỉ contract ở đâu cả, contract chỉ nằm sau API mới. Lúc đó dán link item có `0x`, hoặc link `https://.../0xabc...`.
 - Mua trên OpenSea đi qua API v2 cố định (`OPENSEA_API_KEY`). OpenSea đổi đường dẫn thì lệnh mua báo lỗi, phần mint trên chuỗi vẫn chạy.
 
 Contract không có các hàm trên, hoặc là ERC1155, thì tool dừng và ghi lý do. `src/nft/settings.js` chỉ là mặc định khi chạy lệnh lẻ, không qua `nft.txt`.

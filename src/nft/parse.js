@@ -47,6 +47,10 @@ export function parseMarketUrl(input) {
   const addressIndex = parts.findIndex((part) => /0x[a-fA-F0-9]{40}/.test(part));
   const tokenPart = addressIndex >= 0 && /^\d+$/.test(parts[addressIndex + 1] || "") ? parts[addressIndex + 1] : null;
 
+  if (host === "kalos.fun" && (parts[0] === "mint" || parts[0] === "drops") && parts[1]) {
+    return { kind: "kalos", slug: parts[1], chain: "elysium", contract: null, tokenId: null, href: url.href };
+  }
+
   if (host === "opensea.io" || host.endsWith(".opensea.io")) {
     if (parts[0] === "collection" && parts[1]) {
       return { kind: "collection", slug: parts[1], chain, contract: addresses[0] || null, tokenId: null, href: url.href };
