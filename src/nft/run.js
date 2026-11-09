@@ -98,7 +98,8 @@ export async function loadPage(url, fetchImpl) {
     for (const link of linkedResources(html, parsed.href)) {
       try {
         extras.push(await fetchText(link, fetchImpl));
-      } catch {
+      } catch (error) {
+        if (error?.message === "Dừng.") throw error;
         // script phụ không bắt buộc
       }
     }
@@ -139,18 +140,19 @@ async function attachCollection(page, apiKey, fetchImpl, log) {
       }
     }
   } catch (error) {
+    if (error?.message === "Dừng.") throw error;
     log(error.message);
   }
   return page;
 }
 
-function providerCache(factory) {
+function providerCache(factory, shouldStop) {
   const items = [];
   return {
     get(chain, rpc) {
       const found = items.find((item) => item.chainId === chain.chainId);
       if (found) return found.provider;
-      const provider = factory({ ...chain, rpc: rpc || chain.rpc });
+      const provider = stoppable(factory({ ...chain, rpc: rpc || chain.rpc }), shouldStop);
       items.push({ chainId: chain.chainId, provider });
       return provider;
     },
@@ -158,6 +160,31 @@ function providerCache(factory) {
       for (const item of items) await item.provider.destroy?.();
     },
   };
+}
+
+function raceStop(run, shouldStop) {
+  if (!shouldStop) return run();
+  let timer;
+  const stop = new Promise((_, reject) => {
+    timer = setInterval(() => {
+      if (shouldStop()) {
+        clearInterval(timer);
+        reject(new Error("Dừng."));
+      }
+    }, 40);
+  });
+  return Promise.race([run(), stop]).finally(() => clearInterval(timer));
+}
+
+function stoppable(provider, shouldStop) {
+  if (!shouldStop || !provider || typeof provider !== "object") return provider;
+  return new Proxy(provider, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== "function") return value;
+      return (...args) => raceStop(() => value.apply(target, args), shouldStop);
+    },
+  });
 }
 
 async function findHits(page, options, providers) {
@@ -279,7 +306,7 @@ async function waitUntil(targetMs, clock, log, label, shouldStop, refresh) {
       log(`Đang chờ tới giờ mint ${label}. Mở ${new Date(targetMs).toISOString()}. Còn ${Math.max(1, Math.ceil(remain / 1000))}s.`);
       lastLog = Date.now();
     }
-    const slice = remain > 1_500 ? Math.min(remain - 1_500, 1_000) : Math.min(remain, 5);
+    const slice = remain > 1_500 ? Math.min(remain - 1_500, 200) : Math.min(remain, 50);
     await sleep(Math.max(0, slice));
   }
   return clock;
@@ -330,16 +357,23 @@ async function spamMint({ wallet, provider, round, chain, gasGwei, gasLimit, now
 export async function runMint(options, deps = {}) {
   const log = deps.log || defaultLog;
   const fetchImpl = deps.fetch || fetch;
-  const providers = providerCache(deps.providerFactory || ((chain) => new ethers.JsonRpcProvider(chain.rpc, chain.chainId, { staticNetwork: true })));
   let stopped = false;
   const halt = () => stopped || Boolean(deps.shouldStop?.());
+  const fetchBound = (url, opts = {}) => {
+    if (halt()) throw new Error("Dừng.");
+    const signals = [AbortSignal.timeout(12_000)];
+    if (deps.signal) signals.push(deps.signal);
+    if (opts.signal) signals.push(opts.signal);
+    return raceStop(() => fetchImpl(url, { ...opts, signal: AbortSignal.any(signals) }), halt);
+  };
+  const providers = providerCache(deps.providerFactory || ((chain) => new ethers.JsonRpcProvider(chain.rpc, chain.chainId, { staticNetwork: true })), halt);
   if (deps.listen !== false) {
     process.once("SIGINT", () => {
       stopped = true;
     });
   }
   try {
-    const page = await attachCollection(await loadPage(options.url, fetchImpl), options.apiKey, fetchImpl, log);
+    const page = await attachCollection(await loadPage(options.url, fetchBound), options.apiKey, fetchBound, log);
     if (page.kalos) {
       if (options.chain && options.chain.name !== "elysium") options.rpc = "";
       options.chain = resolveNftChain("elysium");
@@ -359,7 +393,7 @@ export async function runMint(options, deps = {}) {
     const contextBase = {
       wallet: options.wallet,
       allowInfo: collectAllowInfo(page.html, options.wallet),
-      fetch: fetchImpl,
+      fetch: fetchBound,
       limits: {
         quantity: options.quantity,
         maxPrice: options.maxPrice,

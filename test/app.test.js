@@ -62,3 +62,39 @@ test("app local chạy nhiều dự án trên máy mình", async () => {
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test("bấm dừng thì thoát khỏi lượt đang tải", async () => {
+  const key = ethers.Wallet.createRandom().privateKey;
+  let release;
+  const hung = new Promise((resolve) => {
+    release = resolve;
+  });
+  const { server, url } = await startApp({
+    port: 0,
+    persist: false,
+    env: {},
+    fetch: () => hung,
+    providerFactory: () => ({ async destroy() {} }),
+  });
+  try {
+    const started = await fetch(`${url}/api/run`, {
+      method: "POST",
+      body: ["chain=base", "dry_run=true", "link=https://slow.example/drop", `key=${key}`].join("\n"),
+    });
+    assert.equal(started.status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal((await fetch(`${url}/api/stop`, { method: "POST" })).status, 200);
+    const began = Date.now();
+    let state = { running: true, logs: [], error: "" };
+    while (state.running && Date.now() - began < 1500) {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      state = await (await fetch(`${url}/api/state`)).json();
+    }
+    assert.equal(state.running, false);
+    assert.ok(Date.now() - began < 1500);
+    assert.match(`${state.error}\n${state.logs.join("\n")}`, /dừng/i);
+  } finally {
+    release({ ok: false, status: 499, text: async () => "" });
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

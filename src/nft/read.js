@@ -28,7 +28,8 @@ export async function tryCall(provider, to, iface, name, args = []) {
     if (raw == null || raw === "0x") return null;
     const decoded = iface.decodeFunctionResult(name, raw);
     return decoded.length === 1 ? decoded[0] : decoded;
-  } catch {
+  } catch (error) {
+    if (error?.message === "Dừng.") throw error;
     return null;
   }
 }
@@ -58,6 +59,7 @@ async function probeWrite(provider, to, name, from) {
     await provider.call({ from, to, data: nftIface.encodeFunctionData(name, [1]), value: 0n });
     return true;
   } catch (error) {
+    if (error?.message === "Dừng.") throw error;
     const message = String(error.shortMessage || error.message || "");
     if (/missing revert data|function selector was not recognized|function does not exist|no data present/i.test(message)) return false;
     const data = error.data;
@@ -294,7 +296,8 @@ async function readProof(schedule, wallet, fetchImpl) {
       const proof = Array.isArray(body?.proof) ? body.proof : Array.isArray(body?.merkleProof) ? body.merkleProof : [];
       if (!proof.length || !proof.every((item) => typeof item === "string" && /^0x[a-fA-F0-9]{64}$/.test(item))) continue;
       return { tier: body.tier ? String(body.tier) : "", proof };
-    } catch {
+    } catch (error) {
+      if (error?.message === "Dừng.") throw error;
       // thử đường proof tiếp theo
     }
   }

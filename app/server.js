@@ -70,6 +70,7 @@ export function createApp(deps = {}) {
     error: "",
     stopFlag: false,
     clients: new Set(),
+    signal: null,
   };
 
   function publish(event) {
@@ -83,6 +84,7 @@ export function createApp(deps = {}) {
     job.reports = null;
     job.error = "";
     job.stopFlag = false;
+    job.signal = new AbortController();
   }
 
   function writePrivate(text) {
@@ -220,6 +222,7 @@ export function createApp(deps = {}) {
         env: deps.env || {},
         password,
         shouldStop: () => job.stopFlag,
+        signal: job.signal?.signal,
         log: (message) => {
           const line = String(message);
           job.logs.push(line);
@@ -229,7 +232,7 @@ export function createApp(deps = {}) {
         .then((reports) => {
           job.running = false;
           job.reports = reports.map((item) => ({ chain: item.chain, text: item.text }));
-          publish({ type: "done", reports: job.reports, error: "" });
+          publish({ type: "done", reports: job.reports, error: job.stopFlag ? "Đã dừng." : "" });
         })
         .catch((error) => {
           job.running = false;
@@ -240,7 +243,8 @@ export function createApp(deps = {}) {
     }
     if (req.method === "POST" && url.pathname === "/api/stop") {
       job.stopFlag = true;
-      publish({ type: "log", line: "Đã nhận lệnh dừng. Lượt gọi mint hiện tại sẽ dừng." });
+      job.signal?.abort();
+      publish({ type: "log", line: "Đã nhận lệnh dừng." });
       sendJson(res, { ok: true });
       return;
     }

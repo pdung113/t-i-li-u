@@ -59,7 +59,8 @@ export async function fetchKalosEligibility(slug, wallet, fetchImpl) {
   const url = `${API}/v2/launch/drops/${encodeURIComponent(slug)}/eligibility/${ethers.getAddress(wallet)}`;
   try {
     return kalosAllowEntries(await readJson(url, fetchImpl));
-  } catch {
+  } catch (error) {
+    if (error?.message === "Dừng.") throw error;
     return [];
   }
 }

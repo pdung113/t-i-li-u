@@ -138,7 +138,8 @@ export async function scheduleFromPage(pageUrl, html, fetchImpl) {
       const body = await response.json();
       const found = scheduleFromData(body, pageUrl) || scheduleFromText(JSON.stringify(body), pageUrl);
       if (found) return found;
-    } catch {
+    } catch (error) {
+      if (error?.message === "Dừng.") throw error;
       // API này không có lịch mint
     }
   }
