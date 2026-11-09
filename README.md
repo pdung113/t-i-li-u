@@ -61,3 +61,29 @@ Phần chờ tweet xuất hiện phụ thuộc API đọc timeline (thường v�
 Token chỉ có pool V3, hoặc đang nằm trên bonding curve (Four.meme, pump.fun), sẽ không được mua.
 
 Mô phỏng bán dùng một ví sạch và nhích thời gian 3 phút để né cooldown cùng block. Token cố tình chặn hợp đồng lúc bán có thể bị bỏ qua dù ví thường vẫn bán được. Một số honeypot chỉ hiện sau khi mua thật; mô phỏng không bắt hết.
+
+## Báo follow mới qua Telegram
+
+Mở `theo-doi.txt` bằng Notepad. Mỗi dòng là một tài khoản X. @vladtenev đã có sẵn. Muốn theo dõi thêm ai thì thêm một dòng, ví dụ `https://x.com/ten_khac` hoặc `@ten_khac`, rồi lưu.
+
+GitHub giữ một phiên chạy và hỏi follow mới khoảng 15 giây một lần, kể cả khi máy tính đang tắt. GitHub không cho mở phiên mới nhanh hơn 5 phút, nên mỗi phiên ngồi khoảng 6 tiếng rồi phiên sau nối tiếp. Lúc đổi phiên, hoặc lúc GitHub khởi động chậm, tin có thể tới sau khoảng một phút.
+
+Chạy thêm `chay.bat` trên máy thì tin tới khoảng 3 giây. Cùng một follow có thể thành hai tin: một từ máy, một từ GitHub.
+
+Người được theo dõi là những dòng trong `theo-doi.txt` trên GitHub. Hiện có @vladtenev. Sửa file trên máy không đổi bản GitHub đang chạy.
+
+Chạy thêm trên máy của bạn, nếu muốn:
+
+```bash
+npm run follow
+```
+
+Trên Windows có thể double-click `chay.bat`. Cửa sổ đen phải để mở. Sau mỗi lần hỏi, cửa sổ in một dòng. Chưa có follow mới thì dòng đó nói đang nhớ bao nhiêu người. Tắt cửa sổ là bản trên máy dừng.
+
+Lần chạy đầu chỉ nhớ follow hiện tại của từng người, không gửi tin cũ. Follow mới sau đó được gửi qua Telegram, kèm link X. Nếu tài khoản vừa được follow để contract trong bio hoặc bài viết, tin thêm dòng `Contract: 0x...`.
+
+Tài khoản khoá không theo dõi được, vì danh sách follow không công khai. Token Telegram nằm trong `.env`, không ghi vào `theo-doi.txt`.
+
+Lệnh `npm run follow` chỉ gọi `api.fxtwitter.com` và `api.telegram.org`. Nó không mở cổng vào máy và không đọc `PRIVATE_KEY`. File `.env` không được gửi cho người khác. Token bot đã dán trong chat thì vào @BotFather, chọn bot, lấy token mới, rồi sửa dòng `TELEGRAM_BOT_TOKEN` trong `.env`. Không gửi token mới vào chat.
+
+Follow đã báo được lưu trong `data/follows/`. Xoá file của username đó nếu muốn lập mốc lại từ đầu.
