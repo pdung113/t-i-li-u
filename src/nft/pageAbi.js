@@ -51,6 +51,16 @@ function pathOf(text, word) {
   return match[1].replace(/\$\{[^}]+\}/g, "");
 }
 
+function apiPrefix(text) {
+  return /fetch\(\s*[`'"]\/api\$\{/.test(String(text || "")) ? "/api" : "";
+}
+
+function withApiPrefix(prefix, path) {
+  if (!path) return null;
+  if (!prefix || path === prefix || path.startsWith(`${prefix}/`) || path.startsWith(`${prefix}?`)) return path;
+  return `${prefix}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
 export function mintPlanFromText(text, pageUrl = "") {
   const functions = abiFunctions(text);
   const mint = functions.find((fn) => fn.name === "mint" && fn.inputs?.some((input) => input.type === "bytes"));
@@ -75,8 +85,8 @@ export function mintPlanFromText(text, pageUrl = "") {
     selector: ethers.id(signature).slice(0, 10),
     outputNames: info.outputs.map((output) => output.name || ""),
     views,
-    passPath: pathOf(text, "pass"),
-    checkPath: pathOf(text, "check"),
+    passPath: withApiPrefix(apiPrefix(text), pathOf(text, "pass")),
+    checkPath: withApiPrefix(apiPrefix(text), pathOf(text, "check")),
     pageUrl: pageUrl || "https://mint.local/",
     quantityIndex: Math.max(0, mint.inputs.findIndex((input) => input.type.startsWith("uint"))),
     bytesIndex: mint.inputs.findIndex((input) => input.type === "bytes"),

@@ -848,6 +848,9 @@ test("trang tự khai ABI thì chờ đúng phase, không cần code riêng cho 
   const plan = mintPlanFromText(html, "https://drop.example/mint");
   assert.equal(plan.passPath, "/pass?wallet=");
   assert.equal(plan.checkPath, "/check?wallet=");
+  const prefixed = mintPlanFromText(`${html} async function api(e){return fetch(\`/api\${e}\`)}`, "https://drop.example/mint");
+  assert.equal(prefixed.passPath, "/api/pass?wallet=");
+  assert.equal(prefixed.checkPath, "/api/check?wallet=");
   const info = plan.infoIface.encodeFunctionResult("info", [0, now + 3600, 3600, 1800, false, 0, 2222, 1000, 2000, 2, 5, 1500]);
   const code = `0x${plan.selector.slice(2)}6000`;
   const calls = [];

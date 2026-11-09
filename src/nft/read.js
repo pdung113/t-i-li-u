@@ -168,12 +168,15 @@ async function approvedOnPage(plan, wallet, fetchImpl) {
   const url = new URL(`${plan.checkPath}${wallet}`, plan.pageUrl).href;
   try {
     const response = await fetchImpl(url, { headers: { accept: "application/json" } });
-    if (!response.ok) return false;
+    if (!response.ok) return null;
     const body = await response.json();
-    return body?.status === "approved" || body?.eligible === true || body?.allow === true;
+    if (!body || typeof body !== "object") return null;
+    if (body.status === "approved" || body.eligible === true || body.allow === true) return true;
+    if ("status" in body || body.eligible === false || body.found === false) return false;
+    return null;
   } catch (error) {
     if (error?.message === "Dừng.") throw error;
-    return false;
+    return null;
   }
 }
 
@@ -274,7 +277,8 @@ async function readPlan(provider, nft, identity, context) {
     if (!start) round = { ...round, quantity: 0, eligible: false, reason: "trang chưa công bố giờ mở" };
     else if (paused) round = { ...round, quantity: 0, eligible: false, reason: "đang pause" };
     else if (left <= 0) round = { ...round, quantity: 0, eligible: false, reason: "đã hết NFT" };
-    else if (phase.pass && !approved) round = { ...round, quantity: 0, eligible: false, reason: "ví không có trong danh sách của trang" };
+    else if (phase.pass && approved === false) round = { ...round, quantity: 0, eligible: false, reason: "ví không có trong danh sách của trang" };
+    else if (phase.pass && approved == null) round = { ...round, quantity: 0, eligible: false, reason: "không đọc được danh sách của trang" };
     else if (phase.end && context.limits.now && context.limits.now >= phase.end) round = { ...round, quantity: 0, eligible: false, reason: "round đã kết thúc" };
     else if (quantity <= 0) round = { ...round, quantity: 0, eligible: false, reason: "đã hết suất của ví" };
     else if (price > context.limits.maxPrice) round = { ...round, quantity: 0, eligible: false, reason: "giá cao hơn trần" };

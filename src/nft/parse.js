@@ -126,7 +126,11 @@ export function chainHintsFromText(text) {
     if (found) counts.set(name, (counts.get(name) || 0) + found.length);
   }
   const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  if (ranked[0] && ranked[0][1] >= 8 && ranked[0][1] >= (ranked[1]?.[1] || 0) * 1.5) push(ranked[0][0]);
+  if (ranked[0] && ranked[0][1] >= 8 && ranked[0][1] >= (ranked[1]?.[1] || 0) * 1.5) {
+    const name = ranked[0][0];
+    const rest = hints.filter((item) => item !== name);
+    hints.splice(0, hints.length, name, ...rest);
+  }
   return hints;
 }
 
