@@ -128,7 +128,7 @@ export async function runFromNotepad(deps = {}) {
           gasLimit: config.gasLimit ?? settings.GAS_LIMIT,
           maxPrice: ethers.parseEther(config.maxPrice ?? settings.MAX_MINT_PRICE),
           chain,
-          rpc: (env.RPC_URL || "").trim(),
+          rpc: config.rpc || (env.RPC_URL || "").trim(),
           apiKey: (env.OPENSEA_API_KEY || "").trim(),
           dryRun,
           wallet: null,

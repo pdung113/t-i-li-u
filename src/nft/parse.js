@@ -16,6 +16,9 @@ const CHAIN_WORD = {
   op: "optimism",
   bsc: "bsc",
   bnb: "bsc",
+  elysium: "elysium",
+  elys: "elysium",
+  kinetiq: "elysium",
 };
 
 function checksum(address) {

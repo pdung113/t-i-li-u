@@ -1,5 +1,7 @@
 # Notepad mint NFT. Copy thành nft.txt, sửa bằng Notepad, rồi chạy: npm run nft
-# Chain: eth | base | polygon | arbitrum | optimism | bsc
+# Chain: eth | base | polygon | arbitrum | optimism | bsc | elysium
+# elysium là mainnet Kinetiq, chain id 99901, gas trả bằng HYPE.
+# RPC riêng, không bắt buộc: rpc=https://elysium-mainnet.g.alchemy.com/v2/KEY
 # dry_run=true chỉ xem trước. Đổi thành false khi muốn mint thật.
 # Không đưa nft.txt lên git sau khi đã dán private key.
 

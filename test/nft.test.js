@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ethers } from "ethers";
 import { nftIface, seaDropIface } from "../src/nft/abi.js";
-import { resolveNftChain } from "../src/nft/chains.js";
+import { chainFromId, resolveNftChain } from "../src/nft/chains.js";
 import { loadNftOptions, main } from "../src/nft/index.js";
 import { formatReport, parseNotepad, shortAddress } from "../src/nft/notepad.js";
 import { pickCheapest } from "../src/nft/listings.js";
@@ -58,6 +58,10 @@ test("notepad đọc chain, gas, link và nhiều ví", () => {
   assert.equal(config.dryRun, false);
   assert.equal(config.links.length, 1);
   assert.equal(config.keys.length, 2);
+  const elysium = parseNotepad(`chain=elysium\nrpc=https://rpc.example/elysium\nlink=https://mint.example/drop\nkey=${first.privateKey}`);
+  assert.equal(elysium.chain, "elysium");
+  assert.equal(elysium.rpc, "https://rpc.example/elysium");
+  assert.throws(() => parseNotepad(`chain=elysium\nrpc=not-a-url\nlink=https://mint.example/drop\nkey=${first.privateKey}`), /rpc dòng/);
   assert.throws(() => parseNotepad(`chain=base\nlink=https://a.example\nkey=${secret}zz`), /dòng/);
   let leaked = false;
   try {
@@ -97,6 +101,13 @@ test("đọc cờ gas và số lượng", () => {
   assert.equal(options.chain.name, "base");
   assert.equal(options.wallet, null);
   assert.equal(resolveNftChain("matic").chainId, 137);
+  const elysium = resolveNftChain("elysium");
+  assert.equal(elysium.chainId, 99901);
+  assert.equal(elysium.nativeSymbol, "HYPE");
+  assert.equal(elysium.eip1559, true);
+  assert.equal(elysium.opensea, null);
+  assert.equal(resolveNftChain("elys").name, "elysium");
+  assert.equal(chainFromId(99901).name, "elysium");
 });
 
 test("parse link OpenSea, chợ có contract, và trang mint", () => {
@@ -120,6 +131,10 @@ test("parse link OpenSea, chợ có contract, và trang mint", () => {
   assert.equal(market.contract, ethers.getAddress(nft));
   assert.equal(market.chain, "eth");
   assert.equal(market.tokenId, null);
+
+  const elysiumPage = parseMarketUrl(`https://mint.example/elysium/${nft}`);
+  assert.equal(elysiumPage.chain, "elysium");
+  assert.equal(elysiumPage.contract, ethers.getAddress(nft));
 
   const page = parseMarketUrl("https://mint.example/drop/2024");
   assert.equal(page.kind, "page");
@@ -489,6 +504,33 @@ test("nhiều ví trong notepad mint cùng lúc và báo số lượng", async (
   assert.match(failed.text, /Thành công 0\/2 ví, tổng 0 NFT/);
   assert.match(failed.text, /chain base/);
   assert.match(failed.text, /thất bại \| 0 NFT/);
+});
+
+test("mua OpenSea không chạy trên elysium", async () => {
+  await assert.rejects(
+    () =>
+      runBuy(
+        {
+          url: `https://mint.example/elysium/${nft}`,
+          quantity: 1,
+          gasGwei: "5",
+          gasLimit: 500_000,
+          maxPrice: ethers.parseEther("0.2"),
+          chain: resolveNftChain("elysium"),
+          rpc: "",
+          apiKey: "test",
+          dryRun: true,
+          wallet: null,
+          signer: null,
+        },
+        {
+          log: () => {},
+          fetch: async () => ({ ok: true, text: async () => "<html>mint</html>" }),
+          providerFactory: () => ({ async destroy() {} }),
+        },
+      ),
+    /OpenSea chưa có chain elysium/,
+  );
 });
 
 test("mua ask rẻ nhất dưới trần và không gửi khi dry run", async () => {

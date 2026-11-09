@@ -41,6 +41,13 @@ export const NFT_CHAINS = {
     rpc: "https://bsc-dataseed.binance.org",
     opensea: "bsc",
   },
+  elysium: {
+    chainId: 99901,
+    nativeSymbol: "HYPE",
+    eip1559: true,
+    rpc: "https://rpc.elysp.com",
+    opensea: null,
+  },
 };
 
 const CHAIN_ALIASES = {
@@ -58,6 +65,9 @@ const CHAIN_ALIASES = {
   bsc: "bsc",
   bnb: "bsc",
   binance: "bsc",
+  elysium: "elysium",
+  elys: "elysium",
+  kinetiq: "elysium",
 };
 
 const CHAIN_IDS = {
@@ -67,13 +77,14 @@ const CHAIN_IDS = {
   42161: "arbitrum",
   10: "optimism",
   56: "bsc",
+  99901: "elysium",
 };
 
 export function resolveNftChain(name) {
   const key = CHAIN_ALIASES[String(name || "").toLowerCase()];
   const chain = key ? NFT_CHAINS[key] : null;
   if (!chain) {
-    throw new Error(`Chain không hỗ trợ: ${name}. Dùng eth, base, polygon, arbitrum, optimism, hoặc bsc.`);
+    throw new Error(`Chain không hỗ trợ: ${name}. Dùng eth, base, polygon, arbitrum, optimism, bsc, hoặc elysium.`);
   }
   return { name: key, ...chain };
 }

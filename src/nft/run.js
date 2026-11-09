@@ -420,6 +420,7 @@ export async function runBuy(options, deps = {}) {
     const cand = page.candidates.slice().sort((a, b) => b.score - a.score)[0];
     if (!cand) throw new Error("Không thấy contract hoặc collection để mua.");
     const chain = options.chain || resolveNftChain(cand.chain || page.parsed.chain || page.hints[0] || "eth");
+    if (!chain.opensea) throw new Error(`OpenSea chưa có chain ${chain.name}. Mint trên chain này vẫn chạy.`);
     log(
       `Mua giá thấp | số lượng ${options.quantity} | gas ${options.gasGwei} gwei | trần ${ethers.formatEther(options.maxPrice)} ${chain.nativeSymbol} | ${options.dryRun ? "DRY RUN" : "MUA THẬT"}`,
     );

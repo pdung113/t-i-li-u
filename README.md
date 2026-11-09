@@ -93,7 +93,8 @@ key=
 
 | Dòng | Ý nghĩa |
 | --- | --- |
-| `chain` | `eth`, `base`, `polygon`, `arbitrum`, `optimism`, hoặc `bsc` |
+| `chain` | `eth`, `base`, `polygon`, `arbitrum`, `optimism`, `bsc`, hoặc `elysium` |
+| `rpc` | Không bắt buộc. RPC riêng khi RPC mặc định bị giới hạn |
 | `gas` | Gas price, đơn vị gwei. Mạng tắc thì tăng |
 | `gas_limit` | Trần gas. Lệnh bị out-of-gas thì tăng, ví dụ `800000` |
 | `qty` | Số NFT mỗi ví |
@@ -101,6 +102,8 @@ key=
 | `dry_run` | `true` chỉ xem. `false` mới gửi giao dịch |
 | `link` | Một hoặc nhiều link, mỗi link một dòng |
 | `key` | Private key mỗi ví một dòng. Nhiều ví mint cùng lúc |
+
+`chain=elysium` là mainnet Kinetiq, chain id `99901`. Giá và gas tính bằng HYPE. RPC mặc định là `https://rpc.elysp.com`. RPC này dễ bị giới hạn lúc nhiều người mint, nên điền `rpc=` bằng endpoint Alchemy hoặc Hypedexer nếu có. OpenSea không bán trên Elysium; lệnh mint vẫn chạy.
 
 Chạy thử trước. `dry_run=true` in round, giờ mở và giao dịch, không trừ tiền. Thấy đúng ví và đúng số lượng thì đổi `dry_run=false`, chạy lại. Dùng ví riêng, chỉ nạp số chấp nhận mất. Không đưa `nft.txt` lên git sau khi đã dán key.
 

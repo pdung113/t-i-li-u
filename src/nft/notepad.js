@@ -16,6 +16,9 @@ const NAMES = {
   dry_run: "dryRun",
   dryrun: "dryRun",
   link: "link",
+  rpc: "rpc",
+  rpc_url: "rpc",
+  rpcurl: "rpc",
   key: "key",
   vi: "key",
   private_key: "key",
@@ -47,6 +50,7 @@ export function parseNotepad(text) {
     maxPrice: null,
     dryRun: null,
     links: [],
+    rpc: null,
     keys: [],
   };
   const seen = new Set();
@@ -85,7 +89,10 @@ export function parseNotepad(text) {
     } else if (item.name === "dryRun") {
       config.dryRun = ["1", "true", "yes", "on"].includes(item.value.toLowerCase());
     } else if (item.name === "link") config.links.push(item.value);
-    else if (item.name === "key") {
+    else if (item.name === "rpc") {
+      if (!/^https?:\/\//i.test(item.value)) throw new Error(`rpc dòng ${lineNo} phải là link http hoặc https.`);
+      config.rpc = item.value;
+    } else if (item.name === "key") {
       const key = normalizeKey(item.value, lineNo);
       if (!key) continue;
       if (seen.has(key)) throw new Error(`Trùng ví ${shortAddress(new ethers.Wallet(key).address)}.`);
