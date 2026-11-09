@@ -2,7 +2,7 @@ import { ethers } from "ethers";
 import { chainFromId } from "./chains.js";
 
 const ADDR = /0x[a-fA-F0-9]{40}/g;
-const KEY = /["']?(?:contractAddress|contract_address|nftAddress|nftContract|collectionAddress|tokenAddress|mintContract|dropContract)["']?\s*[:=]\s*["'](0x[a-fA-F0-9]{40})["']/gi;
+const KEY = /["']?(?:contractAddress|contract_address|nftAddress|nftContract|collectionAddress|tokenAddress|mintContract|dropContract|contract|collection)["']?\s*[:=]\s*["'](0x[a-fA-F0-9]{40})["']/gi;
 const CHAIN_WORD = {
   ethereum: "eth",
   eth: "eth",
@@ -23,6 +23,11 @@ const CHAIN_WORD = {
 
 function checksum(address) {
   return ethers.getAddress(address);
+}
+
+function repeatingAddress(address) {
+  const hex = address.slice(2).toLowerCase();
+  return /^(f|e)\1+$/.test(hex);
 }
 
 export function parseMarketUrl(input) {
@@ -82,7 +87,7 @@ export function extractCandidates(html) {
     } catch {
       return;
     }
-    if (key === ethers.ZeroAddress) return;
+    if (key === ethers.ZeroAddress || repeatingAddress(key)) return;
     scores.set(key, Math.max(scores.get(key) || 0, score));
   };
 
@@ -114,7 +119,49 @@ export function chainHintsFromText(text) {
     const name = CHAIN_WORD[match[1].toLowerCase()];
     if (name) push(name);
   }
+  const counts = new Map();
+  for (const [word, name] of Object.entries(CHAIN_WORD)) {
+    if (word.length < 6) continue;
+    const found = String(text || "").match(new RegExp(`\\b${word}\\b`, "gi"));
+    if (found) counts.set(name, (counts.get(name) || 0) + found.length);
+  }
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  if (ranked[0] && ranked[0][1] >= 8 && ranked[0][1] >= (ranked[1]?.[1] || 0) * 1.5) push(ranked[0][0]);
   return hints;
+}
+
+export function contractUnpublished(text) {
+  const source = String(text || "");
+  const empty = /["']?(?:contract|contractAddress|nftAddress|collection)["']?\s*:\s*(?:void 0|undefined|null|""|'')/.test(source);
+  if (!empty) return false;
+  return /mint/i.test(source);
+}
+
+export function scriptChunks(text, pageUrl) {
+  const links = [];
+  let base;
+  try {
+    base = new URL(pageUrl);
+  } catch {
+    return links;
+  }
+  const push = (raw) => {
+    try {
+      let url;
+      if (raw.startsWith("./") || raw.startsWith("../")) url = new URL(raw, base);
+      else if (raw.startsWith("http://") || raw.startsWith("https://")) url = new URL(raw);
+      else url = new URL(raw.startsWith("/") ? raw : `/${raw}`, `${base.origin}/`);
+      if (url.protocol !== "http:" && url.protocol !== "https:") return;
+      if (!url.pathname.endsWith(".js")) return;
+      if (url.origin !== base.origin && !/mint|drop|nft|launch/i.test(url.href)) return;
+      if (links.includes(url.href)) return;
+      links.push(url.href);
+    } catch {
+      // đường js hỏng
+    }
+  };
+  for (const match of String(text || "").matchAll(/["'`]([^"'`]+\.js)["'`]/g)) push(match[1]);
+  return links;
 }
 
 function asAddress(value) {

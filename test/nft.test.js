@@ -9,9 +9,10 @@ import { pickCheapest } from "../src/nft/listings.js";
 import { proofFromLeaves, thirdwebLeaf, verifyProof } from "../src/nft/merkle.js";
 import { contractsFromCollection } from "../src/nft/opensea.js";
 import { chainHintsFromText, collectAllowInfo, extractCandidates, parseMarketUrl } from "../src/nft/parse.js";
+import { mintPlanFromText } from "../src/nft/pageAbi.js";
 import { capQuantity, chooseFeeRecipient, eligibleRounds, genericRounds, selectRound, thirdwebRound } from "../src/nft/rounds.js";
 import { exposes } from "../src/nft/read.js";
-import { runBuy, runMint, runMintWallets } from "../src/nft/run.js";
+import { loadPage, runBuy, runMint, runMintWallets } from "../src/nft/run.js";
 
 const nft = "0x1111111111111111111111111111111111111111";
 const sea = "0x2222222222222222222222222222222222222222";
@@ -780,4 +781,120 @@ test("hai dự án cùng chain không gửi trùng nonce của một ví", async
   const results = await Promise.all([runMint(options, deps), runMint({ ...options }, deps)]);
   assert.equal(results.every((result) => result.sent), true);
   assert.deepEqual(nonces.slice().sort((a, b) => a - b), [4, 5]);
+});
+
+test("contract nằm trong file js của trang thì vẫn lấy được", async () => {
+  const html = `<script type="module" src="/assets/index-aaa.js"></script>`;
+  const index = `const files=["assets/Mint-bbb.js","assets/Other-ccc.js"]`;
+  const mintJs = `contract:"${nft}",chainId:99901`;
+  const seen = [];
+  const page = await loadPage("https://drop.example/mint", async (url) => {
+    const href = String(url);
+    seen.push(href);
+    if (href.endsWith("/mint")) return { ok: true, text: async () => html };
+    if (href.endsWith("index-aaa.js")) return { ok: true, text: async () => index };
+    if (href.endsWith("Mint-bbb.js")) return { ok: true, text: async () => mintJs };
+    return { ok: false, status: 404, text: async () => "", json: async () => ({}) };
+  });
+  assert.equal(page.candidates[0].address, ethers.getAddress(nft));
+  assert.ok(page.hints.includes("elysium"));
+  assert.ok(seen.some((href) => href.endsWith("/assets/Mint-bbb.js")));
+});
+
+test("trang để contract trống thì báo chưa công bố, không hỏi sửa code", async () => {
+  const html = `<script type="module" src="/app.js"></script>`;
+  const js = `function setup(){return {contract:void 0,ready:false}} function mint(){return "mint"}`;
+  await assert.rejects(
+    () =>
+      runMint(
+        {
+          url: "https://rektsouls.example/mint",
+          quantity: 1,
+          gasGwei: "1",
+          gasLimit: 300_000,
+          maxPrice: ethers.parseEther("1"),
+          chain: resolveNftChain("base"),
+          rpc: "",
+          apiKey: "",
+          dryRun: true,
+          wallet,
+          signer: null,
+        },
+        {
+          listen: false,
+          log: () => {},
+          fetch: async (url) => {
+            const href = String(url);
+            if (href.endsWith("/app.js")) return { ok: true, text: async () => js, json: async () => ({}) };
+            if (href.endsWith("/mint")) return { ok: true, text: async () => html, json: async () => ({}) };
+            return { ok: false, status: 404, text: async () => "", json: async () => ({}) };
+          },
+          providerFactory: () => ({ async destroy() {} }),
+        },
+      ),
+    /chưa công bố contract/,
+  );
+});
+
+test("trang tự khai ABI thì chờ đúng phase, không cần code riêng cho web đó", async () => {
+  const now = 1_700_000_000;
+  const abi = [
+    '{type:"function",name:"mint",stateMutability:"payable",inputs:[{name:"quantity",type:"uint256"},{name:"allowance",type:"uint16"},{name:"pass",type:"bytes"}],outputs:[]}',
+    '{type:"function",name:"info",stateMutability:"view",inputs:[],outputs:[{name:"p",type:"uint8"},{name:"start",type:"uint64"},{name:"frLen",type:"uint32"},{name:"rushLen",type:"uint32"},{name:"isPaused",type:"bool"},{name:"minted",type:"uint256"},{name:"supply",type:"uint256"},{name:"frPrice",type:"uint256"},{name:"pubPrice",type:"uint256"},{name:"frCap",type:"uint16"},{name:"pubCap",type:"uint16"},{name:"rPrice",type:"uint256"}]}',
+    '{type:"function",name:"frontRowMinted",stateMutability:"view",inputs:[{type:"address"}],outputs:[{type:"uint256"}]}',
+    '{type:"function",name:"publicMinted",stateMutability:"view",inputs:[{type:"address"}],outputs:[{type:"uint256"}]}',
+  ].join(",");
+  const html = `<script>const contract="${nft}"; chainId:99901; ${abi}; const pass=\`/pass?wallet=\${n}\`; const check=\`/check?wallet=\${n}\`;</script>`;
+  const plan = mintPlanFromText(html, "https://drop.example/mint");
+  assert.equal(plan.passPath, "/pass?wallet=");
+  assert.equal(plan.checkPath, "/check?wallet=");
+  const info = plan.infoIface.encodeFunctionResult("info", [0, now + 3600, 3600, 1800, false, 0, 2222, 1000, 2000, 2, 5, 1500]);
+  const code = `0x${plan.selector.slice(2)}6000`;
+  const calls = [];
+  const logs = [];
+  const result = await runMint(
+    {
+      url: "https://drop.example/mint",
+      quantity: 1,
+      gasGwei: "1",
+      gasLimit: 300_000,
+      maxPrice: ethers.parseEther("1"),
+      chain: resolveNftChain("base"),
+      rpc: "https://base.example",
+      apiKey: "",
+      dryRun: true,
+      wallet,
+      signer: null,
+    },
+    {
+      listen: false,
+      log: (message) => logs.push(message),
+      fetch: async (url) => {
+        const href = String(url);
+        calls.push(href);
+        if (href.includes("/check")) return { ok: true, json: async () => ({ status: "approved" }), text: async () => "" };
+        return { ok: true, text: async () => html, json: async () => ({}) };
+      },
+      providerFactory: (chain) => ({
+        async getCode() {
+          return chain.name === "elysium" ? code : "0x";
+        },
+        async call(tx) {
+          if (String(tx.data).toLowerCase() === plan.infoData.toLowerCase()) return info;
+          return ethers.AbiCoder.defaultAbiCoder().encode(["uint256"], [0]);
+        },
+        async getBlock() {
+          return { timestamp: now };
+        },
+        async getBalance() {
+          return ethers.parseEther("1");
+        },
+        async destroy() {},
+      }),
+    },
+  );
+  assert.equal(result.chain, "elysium");
+  assert.equal(result.rounds[0].label, "Front Row");
+  assert.match(logs.join("\n"), /Đang chờ tới giờ mint Front Row/);
+  assert.equal(calls.some((href) => href.includes("/pass")), false);
 });

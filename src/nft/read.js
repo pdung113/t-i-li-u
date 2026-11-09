@@ -19,6 +19,7 @@ import {
 } from "./abi.js";
 import { fetchKalosEligibility } from "./kalos.js";
 import { proofCovers, proofUrls } from "./schedule.js";
+import { encodePlanMint } from "./pageAbi.js";
 import { capQuantity, chooseFeeRecipient, genericRounds, seaDropAllowRound, seaDropPublicRound, thirdwebRound } from "./rounds.js";
 
 export async function tryCall(provider, to, iface, name, args = []) {
@@ -131,12 +132,158 @@ async function ownedIds(provider, token, wallet, limit) {
 }
 
 export async function readRounds(provider, address, identity, context) {
+  if (identity.type === "plan") return readPlan(provider, address, identity, context);
   if (identity.type === "kalos") return readKalos(provider, address, identity, context);
   if (identity.type === "timed") return readTimed(identity, context);
   if (identity.type === "seadrop") return readSeaDrop(provider, address, identity, context);
   if (identity.type === "thirdweb") return readThirdweb(provider, address, context);
   if (identity.type === "erc1155") return [emptyRound(address, "ERC1155 chưa được mint tự động")];
   return readGeneric(provider, address, identity, context);
+}
+
+function namedOutputs(names, decoded) {
+  const out = {};
+  names.forEach((name, index) => {
+    if (name) out[name] = decoded[index];
+  });
+  return out;
+}
+
+async function viewCount(provider, nft, plan, name, wallet) {
+  const iface = plan.views?.[name];
+  if (!iface || !wallet) return 0;
+  try {
+    const data = iface.encodeFunctionData(name, [wallet]);
+    const raw = await provider.call({ to: nft, data });
+    if (!raw || raw === "0x") return 0;
+    return Number(iface.decodeFunctionResult(name, raw)[0] || 0);
+  } catch (error) {
+    if (error?.message === "Dừng.") throw error;
+    return 0;
+  }
+}
+
+async function approvedOnPage(plan, wallet, fetchImpl) {
+  if (!plan.checkPath || !wallet) return true;
+  const url = new URL(`${plan.checkPath}${wallet}`, plan.pageUrl).href;
+  try {
+    const response = await fetchImpl(url, { headers: { accept: "application/json" } });
+    if (!response.ok) return false;
+    const body = await response.json();
+    return body?.status === "approved" || body?.eligible === true || body?.allow === true;
+  } catch (error) {
+    if (error?.message === "Dừng.") throw error;
+    return false;
+  }
+}
+
+async function readPlan(provider, nft, identity, context) {
+  const plan = identity.plan;
+  let named;
+  try {
+    const raw = await provider.call({ to: nft, data: plan.infoData });
+    const decoded = plan.infoIface.decodeFunctionResult(plan.infoName, raw);
+    named = namedOutputs(plan.outputNames, decoded);
+  } catch (error) {
+    if (error?.message === "Dừng.") throw error;
+    return [emptyRound(nft, "không đọc được lịch mint trên contract")];
+  }
+  const start = Number(named.start || 0);
+  const frLen = Number(named.frLen || 0);
+  const rushLen = Number(named.rushLen || 0);
+  const paused = named.isPaused === true;
+  const supply = Number(named.supply || 0);
+  const mintedTotal = Number(named.minted || 0);
+  const left = Math.max(0, supply - mintedTotal);
+  const approved = await approvedOnPage(plan, context.wallet, context.fetch || fetch);
+  const phases = [];
+  if (named.frPrice != null || named.frLen != null) {
+    phases.push({
+      id: "plan-front",
+      label: "Front Row",
+      kind: "allowlist",
+      start,
+      end: start && frLen ? start + frLen : 0,
+      price: BigInt(named.frPrice || 0),
+      cap: Number(named.frCap || 0),
+      mintedFn: "frontRowMinted",
+      pass: true,
+    });
+  }
+  if (named.rPrice != null || named.rushLen) {
+    phases.push({
+      id: "plan-rush",
+      label: "The Rush",
+      kind: "public",
+      start: start ? start + frLen : 0,
+      end: start ? start + frLen + rushLen : 0,
+      price: BigInt(named.rPrice || 0),
+      cap: Number(named.pubCap || 0),
+      mintedFn: "publicMinted",
+      pass: false,
+    });
+  }
+  phases.push({
+    id: "plan-public",
+    label: "Public",
+    kind: "public",
+    start: start ? start + frLen + rushLen : 0,
+    end: 0,
+    price: BigInt(named.pubPrice ?? 0),
+    cap: Number(named.pubCap || 0),
+    mintedFn: "publicMinted",
+    pass: false,
+  });
+  const rounds = [];
+  for (const phase of phases) {
+    const already = await viewCount(provider, nft, plan, phase.mintedFn, context.wallet);
+    const room = Math.max(0, phase.cap - already);
+    const quantity = Math.min(capQuantity(context.limits.quantity, room, 0, false), left);
+    const price = phase.price;
+    let round = {
+      id: phase.id,
+      label: phase.label,
+      kind: phase.kind,
+      standard: "plan",
+      start: phase.start,
+      end: phase.end,
+      price,
+      quantity,
+      to: nft,
+      data: encodePlanMint(plan, quantity || 1),
+      value: price * BigInt(quantity || 0),
+    };
+    if (phase.pass && plan.passPath && context.wallet) {
+      const wallet = context.wallet;
+      const fetchImpl = context.fetch || fetch;
+      round.prepare = async () => {
+        const url = new URL(`${plan.passPath}${wallet}`, plan.pageUrl).href;
+        const response = await fetchImpl(url, { headers: { accept: "application/json" } });
+        if (!response.ok) throw new Error("Trang không ký pass cho ví này.");
+        const body = await response.json();
+        const signature = body?.signature || body?.pass || body?.sig;
+        if (!signature) throw new Error("Trang không trả chữ ký mint.");
+        const nextQuantity = round.quantity || 1;
+        return {
+          ...round,
+          data: encodePlanMint(plan, nextQuantity, { allowance: body.allowance ?? body.allow ?? nextQuantity, signature }),
+          value: price * BigInt(nextQuantity),
+        };
+      };
+    }
+    if (!start) round = { ...round, quantity: 0, eligible: false, reason: "trang chưa công bố giờ mở" };
+    else if (paused) round = { ...round, quantity: 0, eligible: false, reason: "đang pause" };
+    else if (left <= 0) round = { ...round, quantity: 0, eligible: false, reason: "đã hết NFT" };
+    else if (phase.pass && !approved) round = { ...round, quantity: 0, eligible: false, reason: "ví không có trong danh sách của trang" };
+    else if (phase.end && context.limits.now && context.limits.now >= phase.end) round = { ...round, quantity: 0, eligible: false, reason: "round đã kết thúc" };
+    else if (quantity <= 0) round = { ...round, quantity: 0, eligible: false, reason: "đã hết suất của ví" };
+    else if (price > context.limits.maxPrice) round = { ...round, quantity: 0, eligible: false, reason: "giá cao hơn trần" };
+    else if (context.balance != null && context.balance < price * BigInt(quantity) + (context.limits.gasWei ?? 0n)) {
+      round = { ...round, quantity: 0, eligible: false, reason: "ví không đủ số dư" };
+    } else round = { ...round, eligible: true, reason: context.balance == null ? "ví đủ điều kiện (chưa kiểm số dư)" : "ví đủ điều kiện" };
+    rounds.push(round);
+  }
+  return rounds;
 }
 
 async function readSeaDrop(provider, nft, identity, context) {

@@ -1,7 +1,8 @@
 import { ethers } from "ethers";
 import { log as defaultLog } from "../log.js";
 import { probeOrder, resolveNftChain } from "./chains.js";
-import { collectAllowInfo, chainHintsFromText, extractCandidates, linkedResources, parseMarketUrl } from "./parse.js";
+import { collectAllowInfo, chainHintsFromText, contractUnpublished, extractCandidates, linkedResources, parseMarketUrl, scriptChunks } from "./parse.js";
+import { mintPlanFromText } from "./pageAbi.js";
 import { identifyContract, readRounds } from "./read.js";
 import { eligibleRounds, formatRound, selectRound } from "./rounds.js";
 import { fetchFulfillment, fetchListings, resolveCollection } from "./opensea.js";
@@ -93,17 +94,7 @@ export async function loadPage(url, fetchImpl) {
     if (!parsed.contract && !parsed.slug) throw error;
     html = "";
   }
-  const extras = [];
-  if (html) {
-    for (const link of linkedResources(html, parsed.href)) {
-      try {
-        extras.push(await fetchText(link, fetchImpl));
-      } catch (error) {
-        if (error?.message === "Dừng.") throw error;
-        // script phụ không bắt buộc
-      }
-    }
-  }
+  const extras = html ? await readScripts(html, parsed.href, fetchImpl) : [];
   const combined = [html, ...extras].join("\n");
   const schedule = await scheduleFromPage(parsed.href, combined, fetchImpl);
   const candidates = [];
@@ -115,13 +106,48 @@ export async function loadPage(url, fetchImpl) {
   if (parsed.contract) push(parsed.contract, 200, parsed.chain);
   if (schedule) push(schedule.collection, 400, schedule.chain);
   for (const item of extractCandidates(combined)) push(item.address, item.score, null);
+  const strong = candidates.some((item) => item.score >= 20);
+  const unpublished = !strong && contractUnpublished(combined);
+  if (unpublished) candidates.splice(0, candidates.length);
   return {
     parsed,
     html: combined,
     candidates,
     hints: [parsed.chain, schedule?.chain, ...chainHintsFromText(combined)].filter(Boolean),
     schedule,
+    plan: mintPlanFromText(combined, parsed.href),
+    unpublished,
   };
+}
+
+async function readScripts(html, pageUrl, fetchImpl) {
+  const extras = [];
+  const queue = [];
+  const seen = new Set();
+  const push = (link, first = false) => {
+    if (!link || seen.has(link) || seen.size >= 16) return;
+    seen.add(link);
+    if (first) queue.unshift(link);
+    else queue.push(link);
+  };
+  for (const link of linkedResources(html, pageUrl)) push(link);
+  while (queue.length && extras.length < 8) {
+    const link = queue.shift();
+    let body = "";
+    try {
+      body = await fetchText(link, fetchImpl);
+    } catch (error) {
+      if (error?.message === "Dừng.") throw error;
+      continue;
+    }
+    extras.push(body);
+    const next = scriptChunks(body, link);
+    for (const item of next) {
+      if (/mint|drop|launch|nft|sale|claim|contract|config/i.test(item)) push(item, true);
+    }
+    for (const item of next) push(item);
+  }
+  return extras;
 }
 
 async function attachCollection(page, apiKey, fetchImpl, log) {
@@ -197,18 +223,14 @@ async function findHits(page, options, providers) {
       ? [resolveNftChain("elysium")]
       : timedHit
         ? [resolveNftChain(page.schedule.chain || cand.chain || options.chain?.name || page.hints.find(Boolean) || "eth")]
-        : options.chain
-          ? [options.chain]
-          : cand.chain
-            ? [resolveNftChain(cand.chain)]
-            : probeOrder(page.hints);
+        : chainChoices(options, cand, page);
     for (const chain of chains) {
       const pinned = kalosHit || timedHit;
       const rpc = pinned
         ? options.chain?.name === chain.name && options.rpc
           ? options.rpc
           : chain.rpc
-        : options.rpc && (options.chain || cand.chain || page.hints.length === 1)
+        : options.rpc && options.chain?.name === chain.name
           ? options.rpc
           : chain.rpc;
       const provider = providers.get(chain, rpc);
@@ -216,7 +238,7 @@ async function findHits(page, options, providers) {
         ? { type: "kalos", seaDrops: [page.kalos.seaDrop], slug: page.kalos.slug, code: await provider.getCode(cand.address) }
         : timedHit
           ? { type: "timed", schedule: page.schedule, code: await provider.getCode(cand.address) }
-          : await identifyContract(provider, cand.address);
+          : (await planIdentity(provider, cand.address, page.plan)) || (await identifyContract(provider, cand.address));
       if (!identity || identity.code === "0x") continue;
       hits.push({ ...cand, chain, provider, identity });
       break;
@@ -224,6 +246,47 @@ async function findHits(page, options, providers) {
     if (hits.length >= 3) break;
   }
   return hits;
+}
+
+function chainChoices(options, cand, page) {
+  const list = [];
+  const add = (chain) => {
+    if (!chain || list.some((item) => item.name === chain.name)) return;
+    list.push(chain);
+  };
+  if (options.chain) add(options.chain);
+  if (cand.chain) {
+    try {
+      add(resolveNftChain(cand.chain));
+    } catch {
+      // chain ghi trên trang không hỗ trợ
+    }
+  }
+  for (const hint of page.hints || []) {
+    try {
+      add(resolveNftChain(hint));
+    } catch {
+      // bỏ hint lạ
+    }
+  }
+  if (!list.length) return probeOrder(page.hints);
+  return list.slice(0, 3);
+}
+
+async function planIdentity(provider, address, plan) {
+  if (!plan) return null;
+  const code = await provider.getCode(address);
+  if (!code || code === "0x") return null;
+  const proxy = code.toLowerCase().includes("363d3d373d3d3d363d73");
+  if (!proxy && !code.toLowerCase().includes(plan.selector.slice(2).toLowerCase())) return null;
+  try {
+    const raw = await provider.call({ to: address, data: plan.infoData });
+    if (!raw || raw === "0x") return null;
+    return { type: "plan", plan, code };
+  } catch (error) {
+    if (error?.message === "Dừng.") throw error;
+    return null;
+  }
 }
 
 function betterRound(next, current, nowSec) {
@@ -244,7 +307,7 @@ async function chooseHit(hits, context, nowSec, log) {
     if (!fallback && rounds.length) fallback = { hit, rounds, round: null };
     const round = selectRound(rounds, nowSec);
     if (!round) continue;
-    if (context.wallet && round.start <= nowSec) {
+    if (context.wallet && round.start <= nowSec && typeof round.prepare !== "function") {
       const state = await callState(hit.provider, context.wallet, round);
       if (state !== "ok" && state !== "wait") {
         log(`${hit.address} round ${round.label} chưa gọi được: ${state}`);
@@ -317,14 +380,16 @@ function retryableSend(message) {
 }
 
 async function spamMint({ wallet, provider, round, chain, gasGwei, gasLimit, nowMs, log, shouldStop }) {
-  const tx = applyGas(round, chain, gasGwei, gasLimit);
+  let active = round;
+  if (typeof round.prepare === "function") active = await round.prepare();
+  const tx = applyGas(active, chain, gasGwei, gasLimit);
   const openedAt = nowMs();
   let attempt = 0;
   let lastLog = 0;
   while (nowMs() - openedAt < SPAM_WINDOW_MS) {
     if (shouldStop()) throw new Error("Dừng.");
     attempt += 1;
-    const state = await callState(provider, wallet.address, round);
+    const state = await callState(provider, wallet.address, active);
     if (state === "wait") {
       if (Date.now() - lastLog > 1_000) {
         log(`Đang chờ tới giờ mint trên chain. Gửi lại liên tục, lần ${attempt}.`);
@@ -347,7 +412,7 @@ async function spamMint({ wallet, provider, round, chain, gasGwei, gasLimit, now
     log(`Đã gửi ${sent.hash} (lần ${attempt}).`);
     const receipt = await sent.wait();
     if (receipt?.status === 1) return { hash: sent.hash, tx, attempt };
-    const after = await callState(provider, wallet.address, round);
+    const after = await callState(provider, wallet.address, active);
     if (after !== "ok" && after !== "wait") throw new Error(after);
     log("Giao dịch revert, gửi lại.");
   }
@@ -383,6 +448,9 @@ export async function runMint(options, deps = {}) {
       options.chain = resolveNftChain(page.schedule.chain);
     }
     if (!page.candidates.length) {
+      if (page.unpublished) {
+        throw new Error("Trang mint chưa công bố contract. Web đang để địa chỉ trống. Khi họ gắn địa chỉ 0x lên trang, tool tự lấy, không cần sửa code cho từng web.");
+      }
       throw new Error("Không thấy địa chỉ contract trên trang. Dán link có 0x, hoặc thêm OPENSEA_API_KEY với link collection OpenSea.");
     }
     log(
