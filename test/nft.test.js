@@ -650,3 +650,134 @@ test("mua ask rẻ nhất dưới trần và không gửi khi dry run", async ()
   assert.equal(JSON.parse(posted.body).listing.hash, cheap);
   assert.equal(JSON.parse(posted.body).fulfiller.address, ethers.getAddress(wallet));
 });
+
+function openDropProvider(now, start = now + 3600) {
+  const routes = new Map();
+  const add = (to, iface, fn, values) => {
+    routes.set(`${to.toLowerCase()}:${iface.getFunction(fn).selector.toLowerCase()}`, iface.encodeFunctionResult(fn, values));
+  };
+  add(nft, nftIface, "getAllowedSeaDrop", [[sea]]);
+  add(sea, seaDropIface, "getPublicDrop", [ethers.parseEther("0.01"), start, now + 7200, 2, 0, false]);
+  add(sea, seaDropIface, "getCreatorPayoutAddress", [creator]);
+  add(sea, seaDropIface, "getAllowedFeeRecipients", [[]]);
+  add(sea, seaDropIface, "getAllowListMerkleRoot", [ethers.ZeroHash]);
+  add(nft, nftIface, "getMintStats", [0, 0, 1000]);
+  add(sea, seaDropIface, "getTokenGatedAllowedTokens", [[]]);
+  return {
+    async getCode() {
+      return "0x60016000";
+    },
+    async getBlock() {
+      return { timestamp: now };
+    },
+    async getBalance() {
+      return ethers.parseEther("1");
+    },
+    async call({ to, data }) {
+      const selector = data.slice(0, 10).toLowerCase();
+      if (selector === seaDropIface.getFunction("mintPublic").selector.toLowerCase()) return "0x";
+      const result = routes.get(`${to.toLowerCase()}:${selector}`);
+      if (!result) throw new Error("missing");
+      return result;
+    },
+    async destroy() {},
+  };
+}
+
+test("bốn dự án và ba ví chạy cùng lúc, một dự án lỗi không kéo cả đợt", async () => {
+  const now = 1_700_000_000;
+  const wallets = [ethers.Wallet.createRandom(), ethers.Wallet.createRandom(), ethers.Wallet.createRandom()];
+  let active = 0;
+  let maxActive = 0;
+  const logs = [];
+  const reports = await main([], {
+    exists: () => true,
+    readFile: () =>
+      [
+        "chain=base",
+        "gas=4",
+        "gas_x=3",
+        "qty=5",
+        "dry_run=true",
+        `link=https://one.example/base/${nft}`,
+        `link=elysium https://two.example/elysium/${nft}`,
+        `link=https://three.example/base/${nft}`,
+        "link=https://broken.example/drop",
+        ...wallets.map((item) => `key=${item.privateKey}`),
+      ].join("\n"),
+    env: {},
+    listen: false,
+    log: (message) => logs.push(message),
+    fetch: async (url) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      active -= 1;
+      if (String(url).includes("broken.example")) throw new Error("không tải được trang");
+      return { ok: true, text: async () => "<html>mint</html>" };
+    },
+    providerFactory: () => openDropProvider(now),
+  });
+  const joined = logs.join("\n");
+  assert.equal(reports.length, 4);
+  assert.deepEqual(
+    reports.map((report) => report.chain),
+    ["base", "elysium", "base", "base"],
+  );
+  for (const report of reports.slice(0, 3)) {
+    assert.equal(report.rows.length, 3);
+    assert.equal(report.rows.every((row) => row.ok && row.quantity === 2 && row.sent === false), true);
+    assert.match(report.text, /Sẵn sàng 3\/3 ví, tổng sẽ mint 6 NFT/);
+  }
+  assert.match(reports[3].text, /Thành công 0\/3 ví, tổng 0 NFT/);
+  assert.ok(maxActive >= 4);
+  assert.match(joined, /12 gwei \(4 x3\)/);
+  assert.ok(logs.some((line) => line.startsWith("1 one.example |")));
+  assert.ok(logs.some((line) => line.startsWith("2 two.example |")));
+  assert.ok(logs.some((line) => line.startsWith("3 three.example |")));
+  assert.ok(logs.some((line) => line.startsWith("4 broken.example |")));
+  for (const item of wallets) assert.equal(joined.includes(item.privateKey.slice(2)), false);
+});
+
+test("hai dự án cùng chain không gửi trùng nonce của một ví", async () => {
+  const now = 1_700_000_000;
+  const signerWallet = ethers.Wallet.createRandom();
+  let pending = 4;
+  const nonces = [];
+  const provider = openDropProvider(now, now);
+  provider.getTransactionCount = async () => pending;
+  const signer = {
+    address: signerWallet.address,
+    connect() {
+      return this;
+    },
+    async sendTransaction(tx) {
+      nonces.push(tx.nonce);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      pending += 1;
+      return { hash: `0x${"cd".repeat(32)}`, async wait() { return { status: 1 }; } };
+    },
+  };
+  const options = {
+    url: `https://mint.example/base/${nft}`,
+    quantity: 1,
+    gasGwei: "9",
+    gasLimit: 400_000,
+    maxPrice: ethers.parseEther("0.2"),
+    chain: resolveNftChain("base"),
+    rpc: "",
+    apiKey: "",
+    dryRun: false,
+    wallet: signerWallet.address,
+    signer,
+  };
+  const deps = {
+    listen: false,
+    log: () => {},
+    fetch: async () => ({ ok: true, text: async () => "<html>mint</html>" }),
+    providerFactory: () => provider,
+  };
+  const results = await Promise.all([runMint(options, deps), runMint({ ...options }, deps)]);
+  assert.equal(results.every((result) => result.sent), true);
+  assert.deepEqual(nonces.slice().sort((a, b) => a - b), [4, 5]);
+});

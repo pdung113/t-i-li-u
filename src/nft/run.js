@@ -19,6 +19,21 @@ export function isNotStarted(message) {
 }
 
 const SPAM_WINDOW_MS = 120_000;
+const sendLanes = new Map();
+
+function sendOnLane(chainId, address, task) {
+  const key = `${chainId}:${String(address).toLowerCase()}`;
+  const previous = sendLanes.get(key) || Promise.resolve();
+  const run = previous.then(task, task);
+  sendLanes.set(
+    key,
+    run.then(
+      () => {},
+      () => {},
+    ),
+  );
+  return run;
+}
 
 export function gasLabel(options) {
   if (options.gasX && Number(options.gasX) !== 1) {
@@ -270,7 +285,10 @@ async function spamMint({ wallet, provider, round, chain, gasGwei, gasLimit, now
     if (state !== "ok") throw new Error(state);
     let sent;
     try {
-      sent = await wallet.sendTransaction(tx);
+      sent = await sendOnLane(chain.chainId, wallet.address, async () => {
+        const nonce = provider.getTransactionCount ? await provider.getTransactionCount(wallet.address, "pending") : undefined;
+        return wallet.sendTransaction(nonce == null ? tx : { ...tx, nonce });
+      });
     } catch (error) {
       const message = error.shortMessage || error.reason || error.message || "";
       if (!retryableSend(message)) throw error;
