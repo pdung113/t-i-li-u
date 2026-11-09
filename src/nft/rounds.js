@@ -48,16 +48,20 @@ function finish(round, { price, quantity, balance, limits, ended, extraReason })
   };
 }
 
+export function eligibleRounds(rounds, nowSec) {
+  return (rounds || [])
+    .filter((round) => round.eligible && round.quantity > 0 && (round.end === 0 || nowSec <= round.end))
+    .sort((a, b) => a.start - b.start || (a.price < b.price ? -1 : a.price > b.price ? 1 : 0));
+}
+
 export function selectRound(rounds, nowSec) {
-  const eligible = (rounds || []).filter((round) => round.eligible && round.quantity > 0);
-  const active = eligible.filter((round) => round.start <= nowSec && (round.end === 0 || nowSec <= round.end));
+  const eligible = eligibleRounds(rounds, nowSec);
+  const active = eligible.filter((round) => round.start <= nowSec);
   if (active.length) {
     active.sort((a, b) => (a.price < b.price ? -1 : a.price > b.price ? 1 : a.start - b.start));
     return active[0];
   }
-  const upcoming = eligible.filter((round) => round.start > nowSec);
-  upcoming.sort((a, b) => a.start - b.start || (a.price < b.price ? -1 : a.price > b.price ? 1 : 0));
-  return upcoming[0] || null;
+  return eligible[0] || null;
 }
 
 export function seaDropPublicRound({ drop, minted, balance, limits, feeRecipient, nft, seaDrop }) {

@@ -9,7 +9,7 @@ import { pickCheapest } from "../src/nft/listings.js";
 import { proofFromLeaves, thirdwebLeaf, verifyProof } from "../src/nft/merkle.js";
 import { contractsFromCollection } from "../src/nft/opensea.js";
 import { chainHintsFromText, collectAllowInfo, extractCandidates, parseMarketUrl } from "../src/nft/parse.js";
-import { capQuantity, chooseFeeRecipient, genericRounds, selectRound, thirdwebRound } from "../src/nft/rounds.js";
+import { capQuantity, chooseFeeRecipient, eligibleRounds, genericRounds, selectRound, thirdwebRound } from "../src/nft/rounds.js";
 import { exposes } from "../src/nft/read.js";
 import { runBuy, runMint, runMintWallets } from "../src/nft/run.js";
 
@@ -61,6 +61,11 @@ test("notepad đọc chain, gas, link và nhiều ví", () => {
   const elysium = parseNotepad(`chain=elysium\nrpc=https://rpc.example/elysium\nlink=https://mint.example/drop\nkey=${first.privateKey}`);
   assert.equal(elysium.chain, "elysium");
   assert.equal(elysium.rpc, "https://rpc.example/elysium");
+  assert.equal(elysium.links[0].url, "https://mint.example/drop");
+  assert.equal(elysium.links[0].chain, null);
+  const mixed = parseNotepad(`chain=base\nlink=elysium https://two.example/drop\nkey=${first.privateKey}`);
+  assert.equal(mixed.links[0].chain, "elysium");
+  assert.equal(mixed.links[0].url, "https://two.example/drop");
   assert.throws(() => parseNotepad(`chain=elysium\nrpc=not-a-url\nlink=https://mint.example/drop\nkey=${first.privateKey}`), /rpc dòng/);
   assert.throws(() => parseNotepad(`chain=base\nlink=https://a.example\nkey=${secret}zz`), /dòng/);
   let leaked = false;
@@ -184,6 +189,11 @@ test("chọn round ví đủ điều kiện, public bị đẩy sau allowlist", 
 
   const tooCostly = genericRounds({ ...base, allowlisted: false, price: 5_000n });
   assert.equal(selectRound(tooCostly, 50), null);
+  const open = genericRounds({ ...base, allowlisted: true, allowStart: 40, publicStart: 40 });
+  assert.deepEqual(
+    eligibleRounds(open, 50).map((round) => round.label),
+    ["allowlist", "public"],
+  );
   assert.equal(capQuantity(4, 2, 0, false), 2);
   assert.equal(capQuantity(4, 0, 0, true), 4);
 });
@@ -504,6 +514,46 @@ test("nhiều ví trong notepad mint cùng lúc và báo số lượng", async (
   assert.match(failed.text, /Thành công 0\/2 ví, tổng 0 NFT/);
   assert.match(failed.text, /chain base/);
   assert.match(failed.text, /thất bại \| 0 NFT/);
+});
+
+test("nhiều dự án chạy cùng lúc", async () => {
+  const first = ethers.Wallet.createRandom();
+  let active = 0;
+  let maxActive = 0;
+  const logs = [];
+  const reports = await main([], {
+    exists: () => true,
+    readFile: () =>
+      [
+        "chain=base",
+        "dry_run=true",
+        `link=https://one.example/drop/${nft}`,
+        `link=elysium https://two.example/drop/${nft}`,
+        `key=${first.privateKey}`,
+      ].join("\n"),
+    env: {},
+    listen: false,
+    log: (message) => logs.push(message),
+    fetch: async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      active -= 1;
+      return { ok: true, text: async () => "<html>mint</html>" };
+    },
+    providerFactory: () => ({
+      async getCode() {
+        return "0x";
+      },
+      async destroy() {},
+    }),
+  });
+  assert.equal(reports.length, 2);
+  assert.equal(reports[0].chain, "base");
+  assert.equal(reports[1].chain, "elysium");
+  assert.ok(maxActive >= 2);
+  assert.ok(logs.some((line) => line.startsWith("1 one.example |")));
+  assert.ok(logs.some((line) => line.startsWith("2 two.example |")));
 });
 
 test("mua OpenSea không chạy trên elysium", async () => {

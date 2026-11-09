@@ -77,6 +77,15 @@ node nft
 
 Lần đầu chưa có `nft.txt`, lệnh tạo file đó từ `nft.example.txt` rồi dừng. Mở `nft.txt` bằng Notepad, điền xong, chạy lại `node nft`. `npm run nft` vẫn là cùng một lệnh.
 
+App trên máy mình, key không rời máy:
+
+```bash
+npm install
+node app/server.js
+```
+
+Rồi mở http://127.0.0.1:4173. Trên Windows có thể double-click `Mo-NFT.bat`. Tải mã về: trên GitHub bấm Code, Download ZIP, giải nén, rồi chạy lệnh trên.
+
 ```
 chain=base
 gas=5
@@ -100,7 +109,7 @@ key=
 | `qty` | Số NFT mỗi ví |
 | `max_price` | Trần giá mỗi NFT, tính bằng coin của chain |
 | `dry_run` | `true` chỉ xem. `false` mới gửi giao dịch |
-| `link` | Một hoặc nhiều link, mỗi link một dòng |
+| `link` | Mỗi dự án một dòng. Nhiều link chạy cùng lúc. Dòng `elysium https://...` dùng chain riêng |
 | `key` | Private key mỗi ví một dòng. Nhiều ví mint cùng lúc |
 
 `chain=elysium` là mainnet Kinetiq, chain id `99901`. Giá và gas tính bằng HYPE. RPC mặc định là `https://rpc.elysp.com`. RPC này dễ bị giới hạn lúc nhiều người mint, nên điền `rpc=` bằng endpoint Alchemy hoặc Hypedexer nếu có. OpenSea không bán trên Elysium; lệnh mint vẫn chạy.
@@ -120,7 +129,9 @@ Thành công 1/2 ví, tổng 1 NFT.
 
 Link nhận được: trang mint của dự án, OpenSea collection hoặc item, và link chợ đã có địa chỉ `0x` trong URL.
 
-Mint xem ví đủ round nào. Allowlist chỉ chạy khi ví có proof khớp merkle trên trang. Token-gated chỉ chạy khi ví đang giữ token của round đó. Không đủ thì canh public. Round chưa mở thì tool đứng chờ, 1,5 giây cuối kiểm mỗi 5ms. Đúng giờ mở thì gọi mint liên tục, contract nhận lệnh thì gửi ngay, và gửi lại đến khi một giao dịch thành công hoặc hết 120 giây. Trước giờ mở không gửi, để lệnh revert không tốn gas. Round chữ ký server không có sẵn chữ ký trên trang thì bỏ qua. Giá cao hơn `max_price`, hoặc ví không đủ tiền cộng gas, thì không mint.
+Nhiều dòng `link` chạy song song. Hai dự án mở cùng giờ thì cả hai cùng canh và cùng gửi, không đợi dự án kia xong. Một dòng có thể ghi chain riêng: `link=elysium https://trang-mint.example`.
+
+Mint xem ví đủ round nào. Allowlist chỉ chạy khi ví có proof khớp merkle trên trang. Token-gated chỉ chạy khi ví đang giữ token của round đó. Không đủ thì canh public. Ví đủ nhiều round thì mint lần lượt từng round, kể cả khi các round đã mở cùng lúc. Hết suất của một round thì bỏ round đó và mint round kế tiếp. Round chưa mở thì tool đứng chờ, 1,5 giây cuối kiểm mỗi 5ms. Đúng giờ mở thì gọi mint liên tục, contract nhận lệnh thì gửi ngay, và gửi lại đến khi một giao dịch thành công hoặc hết 120 giây. Trước giờ mở không gửi, để lệnh revert không tốn gas. Round chữ ký server không có sẵn chữ ký trên trang thì bỏ qua. Giá cao hơn `max_price`, hoặc ví không đủ tiền cộng gas, thì không mint.
 
 Mua giá thấp nhất:
 

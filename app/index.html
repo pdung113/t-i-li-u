@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mint NFT</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #121510;
+        --card: #1c2118;
+        --line: #343b2c;
+        --text: #f3f0e6;
+        --muted: #b7b29f;
+        --accent: #d6f25c;
+        --danger: #ff7a59;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 16px/1.45 "Segoe UI", sans-serif;
+      }
+      main {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 28px 20px 48px;
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: 18px;
+      }
+      h1 { margin: 0 0 6px; font-size: 32px; letter-spacing: -0.04em; }
+      p { margin: 0; color: var(--muted); }
+      form, .log {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 18px;
+      }
+      .span { grid-column: 1 / -1; }
+      label { display: block; margin: 12px 0 6px; color: var(--muted); font-size: 13px; }
+      input, select, textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        background: #10140e;
+        color: var(--text);
+        border-radius: 10px;
+        padding: 10px 12px;
+        font: inherit;
+      }
+      textarea { min-height: 96px; resize: vertical; }
+      .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+      .row { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 16px;
+        font: inherit;
+        cursor: pointer;
+      }
+      button.primary { background: var(--accent); color: #172000; font-weight: 700; }
+      button.quiet { background: transparent; color: var(--text); border: 1px solid var(--line); }
+      button.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+      .check { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+      .check input { width: auto; }
+      pre {
+        margin: 12px 0 0;
+        min-height: 280px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 13px/1.45 ui-monospace, monospace;
+      }
+      .status { min-height: 1.2em; margin-top: 8px; color: var(--accent); }
+      @media (max-width: 800px) {
+        main { grid-template-columns: 1fr; }
+        .grid { grid-template-columns: 1fr 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="span">
+        <h1>Mint NFT</h1>
+        <p>Nhiều dự án chạy cùng lúc. Key chỉ lưu trên máy này, app không mở ra internet.</p>
+      </header>
+      <form id="form">
+        <div class="grid">
+          <div>
+            <label for="chain">Chain</label>
+            <select id="chain"></select>
+          </div>
+          <div>
+            <label for="gas">Gas (gwei)</label>
+            <input id="gas" value="5" />
+          </div>
+          <div>
+            <label for="qty">Số lượng mỗi ví</label>
+            <input id="qty" value="1" />
+          </div>
+          <div>
+            <label for="price">Trần giá</label>
+            <input id="price" value="0.2" />
+          </div>
+        </div>
+        <label for="gasLimit">Trần gas</label>
+        <input id="gasLimit" value="500000" />
+        <label for="rpc">RPC riêng, bỏ trống nếu dùng RPC mặc định</label>
+        <input id="rpc" placeholder="https://..." />
+        <label for="links">Link dự án, mỗi dòng một link. Chain khác: elysium https://trang-mint.example</label>
+        <textarea id="links" placeholder="https://trang-mint-1.example&#10;elysium https://trang-mint-2.example"></textarea>
+        <label for="keys">Private key, mỗi ví một dòng</label>
+        <textarea id="keys" autocomplete="off" spellcheck="false"></textarea>
+        <label class="check"><input id="dry" type="checkbox" checked /> Chỉ xem trước, chưa gửi giao dịch</label>
+        <div class="row">
+          <button class="primary" type="submit">Chạy</button>
+          <button class="danger" id="stop" type="button">Dừng</button>
+          <button class="quiet" id="save" type="button">Lưu nft.txt</button>
+        </div>
+        <div class="status" id="status"></div>
+      </form>
+      <section class="log">
+        <strong>Nhật ký</strong>
+        <pre id="log">Chưa chạy.</pre>
+      </section>
+    </main>
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+      const log = $("log");
+      const status = $("status");
+
+      function build() {
+        const links = $("links").value.split(/\n/).map((line) => line.trim()).filter(Boolean);
+        const keys = $("keys").value.split(/\n/).map((line) => line.trim()).filter(Boolean);
+        return [
+          `chain=${$("chain").value}`,
+          $("rpc").value.trim() ? `rpc=${$("rpc").value.trim()}` : "",
+          `gas=${$("gas").value.trim()}`,
+          `gas_limit=${$("gasLimit").value.trim()}`,
+          `qty=${$("qty").value.trim()}`,
+          `max_price=${$("price").value.trim()}`,
+          `dry_run=${$("dry").checked}`,
+          "",
+          ...links.map((link) => `link=${link}`),
+          "",
+          ...keys.map((key) => `key=${key}`),
+          "",
+        ].filter((line) => line !== "").join("\n") + "\n";
+      }
+
+      function fill(text) {
+        const links = [];
+        const keys = [];
+        for (const raw of String(text || "").split(/\n/)) {
+          const line = raw.trim();
+          if (!line || line.startsWith("#")) continue;
+          const eq = line.indexOf("=");
+          if (eq === -1) {
+            if (/https?:\/\//i.test(line)) links.push(line);
+            else keys.push(line);
+            continue;
+          }
+          const name = line.slice(0, eq).trim().toLowerCase();
+          const value = line.slice(eq + 1).trim();
+          if (name === "chain" && [...$("chain").options].some((item) => item.value === value)) $("chain").value = value;
+          else if (name === "gas") $("gas").value = value;
+          else if (name === "gas_limit") $("gasLimit").value = value;
+          else if (name === "qty") $("qty").value = value;
+          else if (name === "max_price") $("price").value = value;
+          else if (name === "rpc") $("rpc").value = value;
+          else if (name === "dry_run") $("dry").checked = ["1", "true", "yes", "on"].includes(value.toLowerCase());
+          else if (name === "link" && value) links.push(value);
+          else if ((name === "key" || name === "private_key") && value) keys.push(value);
+        }
+        if (links.length) $("links").value = links.join("\n");
+        if (keys.length) $("keys").value = keys.join("\n");
+      }
+
+      async function post(path) {
+        const response = await fetch(path, { method: "POST", body: build() });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || "Lỗi.");
+        return body;
+      }
+
+      const source = new EventSource("/api/events");
+      source.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === "start") {
+          log.textContent = "";
+          status.textContent = "Đang chạy các dự án cùng lúc.";
+        }
+        if (data.type === "log") log.textContent += `${data.line}\n`;
+        if (data.type === "done") {
+          status.textContent = data.error || "Xong.";
+          if (data.error) log.textContent += `${data.error}\n`;
+        }
+      };
+
+      $("form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        status.textContent = "Đang gửi...";
+        try {
+          const body = await post("/api/run");
+          status.textContent = `Đang mint ${body.projects} dự án, ${body.wallets} ví.`;
+        } catch (error) {
+          status.textContent = error.message;
+        }
+      });
+      $("stop").addEventListener("click", async () => {
+        await fetch("/api/stop", { method: "POST" });
+        status.textContent = "Đang dừng.";
+      });
+      $("save").addEventListener("click", async () => {
+        try {
+          await post("/api/save");
+          status.textContent = "Đã lưu nft.txt trên máy này.";
+        } catch (error) {
+          status.textContent = error.message;
+        }
+      });
+
+      const meta = await fetch("/api/meta").then((response) => response.json());
+      $("chain").innerHTML = meta.chains.map((name) => `<option value="${name}">${name}</option>`).join("");
+      const saved = await fetch("/api/notepad").then((response) => response.json());
+      if (saved.text) fill(saved.text);
+    </script>
+  </body>
+</html>

@@ -3,7 +3,7 @@ import { log as defaultLog } from "../log.js";
 import { probeOrder, resolveNftChain } from "./chains.js";
 import { collectAllowInfo, chainHintsFromText, extractCandidates, linkedResources, parseMarketUrl } from "./parse.js";
 import { identifyContract, readRounds } from "./read.js";
-import { formatRound, selectRound } from "./rounds.js";
+import { eligibleRounds, formatRound, selectRound } from "./rounds.js";
 import { fetchFulfillment, fetchListings, resolveCollection } from "./opensea.js";
 import { pickCheapest } from "./listings.js";
 import { formatReport, safeReason, shortAddress } from "./notepad.js";
@@ -284,6 +284,7 @@ export async function runMint(options, deps = {}) {
   const fetchImpl = deps.fetch || fetch;
   const providers = providerCache(deps.providerFactory || ((chain) => new ethers.JsonRpcProvider(chain.rpc, chain.chainId, { staticNetwork: true })));
   let stopped = false;
+  const halt = () => stopped || Boolean(deps.shouldStop?.());
   if (deps.listen !== false) {
     process.once("SIGINT", () => {
       stopped = true;
@@ -320,49 +321,83 @@ export async function runMint(options, deps = {}) {
     const symbol = chosen.hit.chain.nativeSymbol;
     log(`Contract ${chosen.hit.address} trên ${chosen.hit.chain.name} (${chosen.hit.identity.type}).`);
     printRounds(chosen.rounds, symbol, log);
-    log(`Chọn round ${chosen.round.label}.`);
+    const planned = eligibleRounds(chosen.rounds, clock.nowSec());
+    const labels = planned.map((round) => round.label).join(", ");
+    log(planned.length === 1 ? `Chọn round ${labels}.` : `Chọn ${planned.length} round: ${labels}.`);
     if (options.dryRun) {
-      const tx = applyGas(chosen.round, chosen.hit.chain, options.gasGwei, options.gasLimit);
-      log(`DRY RUN: sẽ mint ${chosen.round.quantity} NFT, value ${ethers.formatEther(tx.value)} ${symbol}, gas ${options.gasGwei} gwei.`);
-      if (chosen.round.start * 1000 > clock.nowMs()) {
-        log(`Chưa mở. Tới ${new Date(chosen.round.start * 1000).toISOString()} thì lệnh thật gửi liên tục đến khi mint được.`);
+      const tx = applyGas(planned[0], chosen.hit.chain, options.gasGwei, options.gasLimit);
+      const quantity = planned.reduce((sum, round) => sum + round.quantity, 0);
+      log(`DRY RUN: sẽ mint ${quantity} NFT trên ${planned.length} round, gas ${options.gasGwei} gwei.`);
+      for (const round of planned) {
+        const preview = applyGas(round, chosen.hit.chain, options.gasGwei, options.gasLimit);
+        log(`DRY RUN round ${round.label}: ${round.quantity} NFT, value ${ethers.formatEther(preview.value)} ${symbol}.`);
+        if (round.start * 1000 > clock.nowMs()) {
+          log(`Chưa mở round ${round.label}. Tới ${new Date(round.start * 1000).toISOString()} thì lệnh thật gửi liên tục đến khi mint được.`);
+        }
       }
       return {
-        round: chosen.round,
+        round: planned[0],
+        rounds: planned,
         tx,
         sent: false,
         chain: chosen.hit.chain.name,
-        quantity: chosen.round.quantity,
+        quantity,
         wallet: options.wallet,
       };
     }
     if (!options.signer) throw new Error("Đặt PRIVATE_KEY trong .env, hoặc giữ DRY_RUN=true.");
-    const targetMs = chosen.round.start * 1000;
-    if (targetMs > clock.nowMs()) {
-      log(`Canh sát ${new Date(targetMs).toISOString()}. Đúng giờ thì gửi liên tục đến khi mint được.`);
-      clock = await waitUntil(targetMs, clock, log, chosen.round.label, () => stopped, () => syncClock(chosen.hit.provider));
-    }
     const wallet = options.signer.connect(chosen.hit.provider);
-    const fired = await spamMint({
-      wallet,
-      provider: chosen.hit.provider,
-      round: chosen.round,
-      chain: chosen.hit.chain,
-      gasGwei: options.gasGwei,
-      gasLimit: options.gasLimit,
-      nowMs: clock.nowMs,
-      log,
-      shouldStop: () => stopped,
-    });
-    log(`Mint thành công ${chosen.round.quantity} NFT.`);
+    const minted = [];
+    const problems = [];
+    let pending = planned;
+    while (pending.length) {
+      const target = pending[0];
+      pending = pending.slice(1);
+      clock = await syncClock(chosen.hit.provider);
+      contextBase.limits.now = clock.nowSec();
+      const latest = await readRounds(chosen.hit.provider, chosen.hit.address, chosen.hit.identity, contextBase);
+      const fresh = eligibleRounds(latest, clock.nowSec()).find((round) => round.id === target.id);
+      if (!fresh) {
+        log(`Bỏ round ${target.label}: không còn đủ điều kiện.`);
+        continue;
+      }
+      if (fresh.start * 1000 > clock.nowMs()) {
+        log(`Canh sát ${new Date(fresh.start * 1000).toISOString()} cho round ${fresh.label}.`);
+        clock = await waitUntil(fresh.start * 1000, clock, log, fresh.label, halt, () => syncClock(chosen.hit.provider));
+      }
+      try {
+        const fired = await spamMint({
+          wallet,
+          provider: chosen.hit.provider,
+          round: fresh,
+          chain: chosen.hit.chain,
+          gasGwei: options.gasGwei,
+          gasLimit: options.gasLimit,
+          nowMs: clock.nowMs,
+          log,
+          shouldStop: halt,
+        });
+        minted.push({ ...fired, quantity: fresh.quantity, round: fresh });
+        log(`Mint thành công round ${fresh.label}: ${fresh.quantity} NFT.`);
+      } catch (error) {
+        const message = error.message || String(error);
+        problems.push(`${fresh.label}: ${message}`);
+        log(`Round ${fresh.label} thất bại: ${message}`);
+      }
+    }
+    if (!minted.length) throw new Error(problems.join("; ") || "Không mint được round nào.");
+    const quantity = minted.reduce((sum, item) => sum + item.quantity, 0);
+    log(`Mint xong ${quantity} NFT trên ${minted.length} round.`);
     return {
-      round: chosen.round,
-      tx: fired.tx,
+      round: minted[0].round,
+      rounds: minted.map((item) => item.round),
+      tx: minted[0].tx,
       sent: true,
-      hash: fired.hash,
+      hash: minted.map((item) => item.hash).join(","),
       chain: chosen.hit.chain.name,
-      quantity: chosen.round.quantity,
+      quantity,
       wallet: options.wallet,
+      reason: problems.join("; "),
     };
   } finally {
     await providers.destroy();
@@ -388,7 +423,7 @@ export async function runMintWallets(options, wallets, deps = {}) {
           quantity: result.quantity,
           wallet: entry.address,
           chain: result.chain,
-          reason: "",
+          reason: result.reason || "",
         };
       } catch (error) {
         const reason = safeReason(error.message || error);

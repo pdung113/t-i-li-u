@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { ethers } from "ethers";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveNftChain } from "./chains.js";
+import { log as defaultLog } from "../log.js";
 import { parseNotepad } from "./notepad.js";
 import { runBuy, runMint, runMintWallets } from "./run.js";
 import * as settings from "./settings.js";
@@ -108,21 +109,43 @@ export async function runFromNotepad(deps = {}) {
     process.exitCode = 1;
     return null;
   }
-  const env = deps.env || process.env;
   const config = parseNotepad(read(file));
-  const chain = resolveNftChain(config.chain);
+  return runProjects(config, deps);
+}
+
+function projectLabel(url, index, total) {
+  let host = "du-an";
+  try {
+    host = new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    host = "du-an";
+  }
+  return total > 1 ? `${index + 1} ${host}` : host;
+}
+
+export async function runProjects(config, deps = {}) {
+  const env = deps.env || process.env;
   const dryRun = config.dryRun ?? envBool("DRY_RUN", settings.DRY_RUN, env);
   const wallets = config.keys.map((key) => {
     const signer = new ethers.Wallet(key);
     return { address: signer.address, signer };
   });
-  const reports = [];
-  for (const url of config.links) {
-    reports.push(
-      await runMintWallets(
+  let stopped = false;
+  if (deps.listen !== false) {
+    process.once("SIGINT", () => {
+      stopped = true;
+    });
+  }
+  const shouldStop = () => stopped || Boolean(deps.shouldStop?.());
+  const baseLog = deps.log || defaultLog;
+  return Promise.all(
+    config.links.map((link, index) => {
+      const chain = resolveNftChain(link.chain || config.chain);
+      const prefix = projectLabel(link.url, index, config.links.length);
+      return runMintWallets(
         {
           command: "mint",
-          url,
+          url: link.url,
           quantity: config.qty ?? settings.MINT_QUANTITY,
           gasGwei: String(config.gas ?? settings.GAS_GWEI),
           gasLimit: config.gasLimit ?? settings.GAS_LIMIT,
@@ -135,11 +158,15 @@ export async function runFromNotepad(deps = {}) {
           signer: null,
         },
         wallets,
-        deps,
-      ),
-    );
-  }
-  return reports;
+        {
+          ...deps,
+          listen: false,
+          shouldStop,
+          log: (message) => baseLog(`${prefix} | ${message}`),
+        },
+      );
+    }),
+  );
 }
 
 export async function main(argv = process.argv.slice(2), deps = {}) {

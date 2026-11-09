@@ -25,6 +25,19 @@ const NAMES = {
   privatekey: "key",
 };
 
+export function parseLinkValue(value) {
+  const text = String(value || "").trim();
+  const parts = text.split(/\s+/);
+  if (parts.length === 2 && /^https?:\/\//i.test(parts[1])) {
+    return { url: parts[1], chain: resolveNftChain(parts[0]).name };
+  }
+  if (parts.length === 2 && /^https?:\/\//i.test(parts[0]) && /^chain=/i.test(parts[1])) {
+    return { url: parts[0], chain: resolveNftChain(parts[1].slice("chain=".length)).name };
+  }
+  if (parts.length !== 1 || !/^https?:\/\//i.test(text)) throw new Error(`Link không hợp lệ: ${value}`);
+  return { url: text, chain: null };
+}
+
 function field(line) {
   const eq = line.indexOf("=");
   if (eq === -1) return null;
@@ -61,7 +74,10 @@ export function parseNotepad(text) {
     if (!line || line.startsWith("#") || line.startsWith("//")) continue;
     const item = field(line);
     if (!item) {
-      if (/^https?:\/\//i.test(line)) config.links.push(line);
+      if (/https?:\/\//i.test(line)) {
+        config.links.push(parseLinkValue(line));
+        continue;
+      }
       else if (/^(0x)?[a-fA-F0-9]{64}$/.test(line)) {
         const key = normalizeKey(line, lineNo);
         if (seen.has(key)) throw new Error(`Trùng ví ${shortAddress(new ethers.Wallet(key).address)}.`);
@@ -88,7 +104,7 @@ export function parseNotepad(text) {
       config.maxPrice = item.value;
     } else if (item.name === "dryRun") {
       config.dryRun = ["1", "true", "yes", "on"].includes(item.value.toLowerCase());
-    } else if (item.name === "link") config.links.push(item.value);
+    } else if (item.name === "link") config.links.push(parseLinkValue(item.value));
     else if (item.name === "rpc") {
       if (!/^https?:\/\//i.test(item.value)) throw new Error(`rpc dòng ${lineNo} phải là link http hoặc https.`);
       config.rpc = item.value;
@@ -103,7 +119,7 @@ export function parseNotepad(text) {
   if (!config.chain) throw new Error("Chưa điền chain. Ví dụ: chain=base");
   if (!config.links.length) throw new Error("Chưa điền link.");
   for (const link of config.links) {
-    if (!/^https?:\/\//i.test(link)) throw new Error(`Link không hợp lệ: ${link}`);
+    if (!/^https?:\/\//i.test(link.url)) throw new Error(`Link không hợp lệ: ${link.url}`);
   }
   if (!config.keys.length) throw new Error("Chưa điền private key.");
   if (config.gas != null) {
@@ -139,7 +155,8 @@ export function formatReport(rows, chainName) {
     if (row.sent) {
       sentWallets += 1;
       sentNfts += Number(row.quantity) || 0;
-      lines.push(`${index + 1}. ${name} | chain ${chainName} | thành công | ${row.quantity} NFT`);
+      const extra = row.reason ? ` | ${safeReason(row.reason)}` : "";
+      lines.push(`${index + 1}. ${name} | chain ${chainName} | thành công | ${row.quantity} NFT${extra}`);
     } else if (row.ok) {
       readyWallets += 1;
       readyNfts += Number(row.quantity) || 0;

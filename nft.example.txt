@@ -12,6 +12,8 @@ qty=1
 max_price=0.2
 dry_run=true
 
+# Mỗi dự án một dòng. Nhiều link chạy cùng lúc, kể cả khi cùng giờ mở.
+# Dự án khác chain: elysium https://trang-mint.example
 link=
 
 # Mỗi ví một dòng. Nhiều ví sẽ mint cùng lúc.
