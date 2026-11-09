@@ -1,12 +1,14 @@
 import "dotenv/config";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { stdin, stdout } from "node:process";
 import { dirname, resolve } from "node:path";
 import { ethers } from "ethers";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveNftChain } from "./chains.js";
 import { log as defaultLog } from "../log.js";
-import { parseNotepad } from "./notepad.js";
+import { multiplyGas, parseGasX, parseNotepad } from "./notepad.js";
 import { runBuy, runMint, runMintWallets } from "./run.js";
+import { decryptKeys } from "./vault.js";
 import * as settings from "./settings.js";
 
 function envBool(name, fallback, env) {
@@ -39,7 +41,7 @@ export function loadNftOptions(argv = [], env = process.env) {
       positional.push(arg);
       continue;
     }
-    if (!["--qty", "--gas", "--gas-limit", "--max-price", "--chain"].includes(arg)) {
+    if (!["--qty", "--gas", "--gas-x", "--gas-limit", "--max-price", "--chain"].includes(arg)) {
       throw new Error(`Cờ không biết: ${arg}.`);
     }
     flags[arg] = takeFlag(argv, index);
@@ -49,7 +51,9 @@ export function loadNftOptions(argv = [], env = process.env) {
   const url = positional[1];
   if (!command || !url || !["mint", "buy"].includes(command)) return null;
   const quantity = Number(flags["--qty"] ?? settings.MINT_QUANTITY);
-  const gasGwei = flags["--gas"] ?? settings.GAS_GWEI;
+  const gasBase = flags["--gas"] ?? settings.GAS_GWEI;
+  const gasX = flags["--gas-x"] ? parseGasX(flags["--gas-x"]) : 1;
+  const gasGwei = multiplyGas(gasBase, gasX);
   const gasLimit = Number(flags["--gas-limit"] ?? settings.GAS_LIMIT);
   const maxPriceText = flags["--max-price"] ?? (command === "buy" ? settings.MAX_BUY_PRICE : settings.MAX_MINT_PRICE);
   if (!Number.isInteger(quantity) || quantity < 1) throw new Error("--qty phải là số nguyên từ 1.");
@@ -70,6 +74,8 @@ export function loadNftOptions(argv = [], env = process.env) {
     url,
     quantity,
     gasGwei: String(gasGwei),
+    gasBase: String(gasBase),
+    gasX,
     gasLimit,
     maxPrice,
     chain,
@@ -110,7 +116,52 @@ export async function runFromNotepad(deps = {}) {
     return null;
   }
   const config = parseNotepad(read(file));
+  const env = deps.env || process.env;
+  if (config.keysEnc && !deps.password && !env.NFT_PASSWORD) {
+    deps = { ...deps, password: await promptPassword() };
+  }
   return runProjects(config, deps);
+}
+
+function promptPassword() {
+  if (!stdin.isTTY) throw new Error("Ví đang khóa. Đặt NFT_PASSWORD trong môi trường.");
+  return new Promise((resolvePassword) => {
+    stdout.write("Mật khẩu khóa ví: ");
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding("utf8");
+    let value = "";
+    const onData = (chunk) => {
+      if (chunk === "\n" || chunk === "\r" || chunk === "\u0004") {
+        stdin.setRawMode(false);
+        stdin.pause();
+        stdin.off("data", onData);
+        stdout.write("\n");
+        resolvePassword(value);
+        return;
+      }
+      if (chunk === "\u0003") process.exit(130);
+      if (chunk === "\u007f" || chunk === "\b") {
+        value = value.slice(0, -1);
+        return;
+      }
+      value += chunk;
+    };
+    stdin.on("data", onData);
+  });
+}
+
+function unlockWallets(config, password) {
+  let keys = config.keys;
+  if (config.keysEnc) {
+    if (!password) throw new Error("Ví đang khóa. Nhập mật khẩu.");
+    keys = decryptKeys(config.keysEnc, password);
+  }
+  if (!keys.length) throw new Error("Chưa điền private key.");
+  return keys.map((key) => {
+    const signer = new ethers.Wallet(key);
+    return { address: signer.address, signer };
+  });
 }
 
 function projectLabel(url, index, total) {
@@ -126,10 +177,7 @@ function projectLabel(url, index, total) {
 export async function runProjects(config, deps = {}) {
   const env = deps.env || process.env;
   const dryRun = config.dryRun ?? envBool("DRY_RUN", settings.DRY_RUN, env);
-  const wallets = config.keys.map((key) => {
-    const signer = new ethers.Wallet(key);
-    return { address: signer.address, signer };
-  });
+  const wallets = unlockWallets(config, deps.password || env.NFT_PASSWORD || "");
   let stopped = false;
   if (deps.listen !== false) {
     process.once("SIGINT", () => {
@@ -147,7 +195,9 @@ export async function runProjects(config, deps = {}) {
           command: "mint",
           url: link.url,
           quantity: config.qty ?? settings.MINT_QUANTITY,
-          gasGwei: String(config.gas ?? settings.GAS_GWEI),
+          gasGwei: multiplyGas(config.gas ?? settings.GAS_GWEI, config.gasX ?? 1),
+          gasBase: String(config.gas ?? settings.GAS_GWEI),
+          gasX: config.gasX ?? 1,
           gasLimit: config.gasLimit ?? settings.GAS_LIMIT,
           maxPrice: ethers.parseEther(config.maxPrice ?? settings.MAX_MINT_PRICE),
           chain,

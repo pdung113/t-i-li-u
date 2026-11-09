@@ -91,8 +91,14 @@
             <select id="chain"></select>
           </div>
           <div>
-            <label for="gas">Gas (gwei)</label>
+            <label for="gas">Gas thường (gwei)</label>
             <input id="gas" value="5" />
+            <label for="gasX">Nhân gas</label>
+            <select id="gasX">
+              <option value="1">x1 gas thường</option>
+              <option value="2">x2</option>
+              <option value="3">x3</option>
+            </select>
           </div>
           <div>
             <label for="qty">Số lượng mỗi ví</label>
@@ -109,8 +115,11 @@
         <input id="rpc" placeholder="https://..." />
         <label for="links">Link dự án, mỗi dòng một link. Chain khác: elysium https://trang-mint.example</label>
         <textarea id="links" placeholder="https://trang-mint-1.example&#10;elysium https://trang-mint-2.example"></textarea>
-        <label for="keys">Private key, mỗi ví một dòng</label>
+        <label for="keys">Private key, mỗi ví một dòng. Sau khi lưu, file chỉ còn bản đã khóa.</label>
         <textarea id="keys" autocomplete="off" spellcheck="false"></textarea>
+        <label for="password">Mật khẩu khóa ví, ít nhất 8 ký tự. Mật khẩu không ghi vào file.</label>
+        <input id="password" type="password" autocomplete="new-password" />
+        <p id="locknote"></p>
         <label class="check"><input id="dry" type="checkbox" checked /> Chỉ xem trước, chưa gửi giao dịch</label>
         <div class="row">
           <button class="primary" type="submit">Chạy</button>
@@ -136,6 +145,7 @@
           `chain=${$("chain").value}`,
           $("rpc").value.trim() ? `rpc=${$("rpc").value.trim()}` : "",
           `gas=${$("gas").value.trim()}`,
+          `gas_x=${$("gasX").value}`,
           `gas_limit=${$("gasLimit").value.trim()}`,
           `qty=${$("qty").value.trim()}`,
           `max_price=${$("price").value.trim()}`,
@@ -164,20 +174,26 @@
           const value = line.slice(eq + 1).trim();
           if (name === "chain" && [...$("chain").options].some((item) => item.value === value)) $("chain").value = value;
           else if (name === "gas") $("gas").value = value;
+          else if (name === "gas_x" && ["1", "2", "3"].includes(value.replace(/x/gi, ""))) $("gasX").value = value.replace(/x/gi, "");
           else if (name === "gas_limit") $("gasLimit").value = value;
           else if (name === "qty") $("qty").value = value;
           else if (name === "max_price") $("price").value = value;
           else if (name === "rpc") $("rpc").value = value;
           else if (name === "dry_run") $("dry").checked = ["1", "true", "yes", "on"].includes(value.toLowerCase());
           else if (name === "link" && value) links.push(value);
-          else if ((name === "key" || name === "private_key") && value) keys.push(value);
+          else if ((name === "key" || name === "private_key") && value && value !== "***") keys.push(value);
+          else if (name === "key_count") $("locknote").textContent = `Đã khóa ${value} ví. Nhập mật khẩu để chạy.`;
         }
         if (links.length) $("links").value = links.join("\n");
         if (keys.length) $("keys").value = keys.join("\n");
       }
 
       async function post(path) {
-        const response = await fetch(path, { method: "POST", body: build() });
+        const response = await fetch(path, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text: build(), password: $("password").value }),
+        });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || "Lỗi.");
         return body;
@@ -213,8 +229,9 @@
       });
       $("save").addEventListener("click", async () => {
         try {
-          await post("/api/save");
-          status.textContent = "Đã lưu nft.txt trên máy này.";
+          const body = await post("/api/save");
+          if (body.locked) $("keys").value = "";
+          status.textContent = body.locked ? `Đã khóa ${body.wallets} ví trong nft.txt.` : "Đã lưu nft.txt trên máy này.";
         } catch (error) {
           status.textContent = error.message;
         }

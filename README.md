@@ -86,6 +86,8 @@ node app/server.js
 
 Rồi mở http://127.0.0.1:4173. Trên Windows có thể double-click `Mo-NFT.bat`. Tải mã về: trên GitHub bấm Code, Download ZIP, giải nén, rồi chạy lệnh trên.
 
+Trong app, nhập mật khẩu ít nhất 8 ký tự rồi bấm Lưu. `nft.txt` chỉ còn bản mã hóa, không còn private key trần. Lần chạy sau nhập lại đúng mật khẩu. App chỉ nghe `127.0.0.1` và không trả key về trình duyệt. Dùng lệnh `node nft` khi file đã khóa thì gõ mật khẩu, hoặc đặt `NFT_PASSWORD`.
+
 ```
 chain=base
 gas=5
@@ -104,7 +106,8 @@ key=
 | --- | --- |
 | `chain` | `eth`, `base`, `polygon`, `arbitrum`, `optimism`, `bsc`, hoặc `elysium` |
 | `rpc` | Không bắt buộc. RPC riêng khi RPC mặc định bị giới hạn |
-| `gas` | Gas price, đơn vị gwei. Mạng tắc thì tăng |
+| `gas` | Gas thường, đơn vị gwei |
+| `gas_x` | Nhân với gas thường. `2` hoặc `3` để gửi gấp đôi, gấp ba. `gas=5` và `gas_x=3` thì gửi 15 gwei |
 | `gas_limit` | Trần gas. Lệnh bị out-of-gas thì tăng, ví dụ `800000` |
 | `qty` | Số NFT mỗi ví |
 | `max_price` | Trần giá mỗi NFT, tính bằng coin của chain |

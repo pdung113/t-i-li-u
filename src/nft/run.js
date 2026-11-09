@@ -20,6 +20,13 @@ export function isNotStarted(message) {
 
 const SPAM_WINDOW_MS = 120_000;
 
+export function gasLabel(options) {
+  if (options.gasX && Number(options.gasX) !== 1) {
+    return `${options.gasGwei} gwei (${options.gasBase} x${options.gasX})`;
+  }
+  return `${options.gasGwei} gwei`;
+}
+
 export function applyGas(tx, chain, gasGwei, gasLimit) {
   const gas = ethers.parseUnits(String(gasGwei), "gwei");
   const out = {
@@ -296,7 +303,7 @@ export async function runMint(options, deps = {}) {
       throw new Error("Không thấy địa chỉ contract trên trang. Dán link có 0x, hoặc thêm OPENSEA_API_KEY với link collection OpenSea.");
     }
     log(
-      `Mint | chain ${options.chain?.name || "tự nhận"} | số lượng ${options.quantity} | gas ${options.gasGwei} gwei | trần ${ethers.formatEther(options.maxPrice)} | ${options.dryRun ? "DRY RUN" : "MINT THẬT"}`,
+      `Mint | chain ${options.chain?.name || "tự nhận"} | số lượng ${options.quantity} | gas ${gasLabel(options)} | trần ${ethers.formatEther(options.maxPrice)} | ${options.dryRun ? "DRY RUN" : "MINT THẬT"}`,
     );
     const hits = await findHits(page, options, providers);
     if (!hits.length) throw new Error("Trang có địa chỉ nhưng không phải NFT mint (SeaDrop, thirdweb, hoặc mint public).");
@@ -327,7 +334,7 @@ export async function runMint(options, deps = {}) {
     if (options.dryRun) {
       const tx = applyGas(planned[0], chosen.hit.chain, options.gasGwei, options.gasLimit);
       const quantity = planned.reduce((sum, round) => sum + round.quantity, 0);
-      log(`DRY RUN: sẽ mint ${quantity} NFT trên ${planned.length} round, gas ${options.gasGwei} gwei.`);
+      log(`DRY RUN: sẽ mint ${quantity} NFT trên ${planned.length} round, gas ${gasLabel(options)}.`);
       for (const round of planned) {
         const preview = applyGas(round, chosen.hit.chain, options.gasGwei, options.gasLimit);
         log(`DRY RUN round ${round.label}: ${round.quantity} NFT, value ${ethers.formatEther(preview.value)} ${symbol}.`);
@@ -407,7 +414,7 @@ export async function runMint(options, deps = {}) {
 export async function runMintWallets(options, wallets, deps = {}) {
   const log = deps.log || defaultLog;
   const chainLabel = options.chain?.name || "tự nhận";
-  log(`Bắt đầu mint | chain ${chainLabel} | ${wallets.length} ví | gas ${options.gasGwei} gwei | số lượng ${options.quantity}`);
+  log(`Bắt đầu mint | chain ${chainLabel} | ${wallets.length} ví | gas ${gasLabel(options)} | số lượng ${options.quantity}`);
   const rows = await Promise.all(
     wallets.map(async (entry) => {
       const tag = shortAddress(entry.address);
@@ -457,7 +464,7 @@ export async function runBuy(options, deps = {}) {
     const chain = options.chain || resolveNftChain(cand.chain || page.parsed.chain || page.hints[0] || "eth");
     if (!chain.opensea) throw new Error(`OpenSea chưa có chain ${chain.name}. Mint trên chain này vẫn chạy.`);
     log(
-      `Mua giá thấp | số lượng ${options.quantity} | gas ${options.gasGwei} gwei | trần ${ethers.formatEther(options.maxPrice)} ${chain.nativeSymbol} | ${options.dryRun ? "DRY RUN" : "MUA THẬT"}`,
+      `Mua giá thấp | số lượng ${options.quantity} | gas ${gasLabel(options)} | trần ${ethers.formatEther(options.maxPrice)} ${chain.nativeSymbol} | ${options.dryRun ? "DRY RUN" : "MUA THẬT"}`,
     );
     const listings = await fetchListings({
       chain: chain.opensea,
