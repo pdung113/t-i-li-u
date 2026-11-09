@@ -339,7 +339,7 @@ test("dry run canh public khi ví không có allowlist", async () => {
   assert.equal(mintArgs[3], 2n);
   assert.notEqual(mintArgs[1], ethers.ZeroAddress);
   assert.ok(logs.some((line) => line.includes("Chọn round public")));
-  assert.ok(logs.some((line) => line.includes("Chưa mở")));
+  assert.ok(logs.some((line) => line.includes("Đang chờ tới giờ mint")));
   assert.ok(logs.some((line) => line.includes("gửi liên tục")));
 });
 

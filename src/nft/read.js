@@ -18,6 +18,7 @@ import {
   selectorOf,
 } from "./abi.js";
 import { fetchKalosEligibility } from "./kalos.js";
+import { proofCovers } from "./schedule.js";
 import { capQuantity, chooseFeeRecipient, genericRounds, seaDropAllowRound, seaDropPublicRound, thirdwebRound } from "./rounds.js";
 
 export async function tryCall(provider, to, iface, name, args = []) {
@@ -129,6 +130,7 @@ async function ownedIds(provider, token, wallet, limit) {
 
 export async function readRounds(provider, address, identity, context) {
   if (identity.type === "kalos") return readKalos(provider, address, identity, context);
+  if (identity.type === "timed") return readTimed(identity, context);
   if (identity.type === "seadrop") return readSeaDrop(provider, address, identity, context);
   if (identity.type === "thirdweb") return readThirdweb(provider, address, context);
   if (identity.type === "erc1155") return [emptyRound(address, "ERC1155 chưa được mint tự động")];
@@ -271,6 +273,73 @@ async function readSeaDrop(provider, nft, identity, context) {
     });
   }
   return rounds;
+}
+
+const timedIface = new ethers.Interface([
+  "function mintPublic(uint32 quantity) payable",
+  "function mintAllowlist(uint32 quantity, bytes32[] proof) payable",
+]);
+
+async function readProof(schedule, wallet, fetchImpl) {
+  if (!wallet || !fetchImpl || !schedule.pageUrl) return null;
+  try {
+    const url = new URL(`/api/proof/${schedule.collection}/${ethers.getAddress(wallet)}`, schedule.pageUrl);
+    const response = await fetchImpl(url.href, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(12_000),
+      headers: { accept: "application/json", "user-agent": "nft-mint/1.0" },
+    });
+    if (!response.ok) return null;
+    const body = await response.json();
+    const proof = Array.isArray(body?.proof) ? body.proof : [];
+    if (!proof.every((item) => typeof item === "string" && /^0x[a-fA-F0-9]{64}$/.test(item))) return null;
+    return { tier: body.tier ? String(body.tier) : "", proof };
+  } catch {
+    return null;
+  }
+}
+
+function timedRound(phase, end, schedule, context, proof) {
+  const price = phase.price;
+  const quantity = capQuantity(context.limits.quantity, phase.perWallet, 0, false);
+  const ended = end !== 0 && context.limits.now > end;
+  const allowed = phase.public || proofCovers(phase, proof);
+  const cost = price * BigInt(quantity || 0);
+  const enough = context.balance == null || context.balance >= cost + (context.limits.gasWei ?? 0n);
+  const eligible = allowed && !ended && quantity > 0 && price <= context.limits.maxPrice && enough;
+  const data = allowed
+    ? timedIface.encodeFunctionData(phase.public ? "mintPublic" : "mintAllowlist", phase.public ? [quantity || 1] : [quantity || 1, proof.proof])
+    : "0x";
+  let reason = "ví đủ điều kiện";
+  if (!allowed) reason = "ví không có trong allowlist";
+  else if (ended) reason = "round đã kết thúc";
+  else if (quantity <= 0) reason = "đã hết suất của ví";
+  else if (price > context.limits.maxPrice) reason = "giá cao hơn trần";
+  else if (!enough) reason = "ví không đủ số dư";
+  return {
+    id: `timed-${phase.key}`,
+    label: phase.name,
+    kind: phase.public ? "public" : "allowlist",
+    standard: "timed",
+    start: phase.start,
+    end,
+    price,
+    quantity: eligible ? quantity : 0,
+    eligible,
+    reason,
+    to: schedule.collection,
+    data,
+    value: eligible ? cost : 0n,
+  };
+}
+
+async function readTimed(identity, context) {
+  const schedule = identity.schedule;
+  const proof = await readProof(schedule, context.wallet, context.fetch);
+  return schedule.phases.map((phase, index) => {
+    const next = schedule.phases[index + 1];
+    return timedRound(phase, next ? next.start : 0, schedule, context, proof);
+  });
 }
 
 async function readKalos(provider, nft, identity, context) {

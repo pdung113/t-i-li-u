@@ -7,6 +7,7 @@ import { eligibleRounds, formatRound, selectRound } from "./rounds.js";
 import { fetchFulfillment, fetchListings, resolveCollection } from "./opensea.js";
 import { pickCheapest } from "./listings.js";
 import { loadKalosPage } from "./kalos.js";
+import { scheduleFromPage } from "./schedule.js";
 import { formatReport, safeReason, shortAddress } from "./notepad.js";
 
 function sleep(ms) {
@@ -103,6 +104,7 @@ export async function loadPage(url, fetchImpl) {
     }
   }
   const combined = [html, ...extras].join("\n");
+  const schedule = await scheduleFromPage(parsed.href, combined, fetchImpl);
   const candidates = [];
   const push = (address, score, chain = null) => {
     const key = address.toLowerCase();
@@ -110,12 +112,14 @@ export async function loadPage(url, fetchImpl) {
     candidates.push({ address, score, chain });
   };
   if (parsed.contract) push(parsed.contract, 200, parsed.chain);
+  if (schedule) push(schedule.collection, 400, schedule.chain);
   for (const item of extractCandidates(combined)) push(item.address, item.score, null);
   return {
     parsed,
     html: combined,
     candidates,
-    hints: [parsed.chain, ...chainHintsFromText(combined)].filter(Boolean),
+    hints: [parsed.chain, schedule?.chain, ...chainHintsFromText(combined)].filter(Boolean),
+    schedule,
   };
 }
 
@@ -161,16 +165,20 @@ async function findHits(page, options, providers) {
   const ranked = page.candidates.slice().sort((a, b) => b.score - a.score).slice(0, 8);
   for (const cand of ranked) {
     const kalosHit = page.kalos && cand.address.toLowerCase() === page.kalos.address.toLowerCase();
+    const timedHit = page.schedule && cand.address.toLowerCase() === page.schedule.collection.toLowerCase();
     const chains = kalosHit
       ? [resolveNftChain("elysium")]
-      : options.chain
-        ? [options.chain]
-        : cand.chain
-          ? [resolveNftChain(cand.chain)]
-          : probeOrder(page.hints);
+      : timedHit
+        ? [resolveNftChain(page.schedule.chain || cand.chain || "elysium")]
+        : options.chain
+          ? [options.chain]
+          : cand.chain
+            ? [resolveNftChain(cand.chain)]
+            : probeOrder(page.hints);
     for (const chain of chains) {
-      const rpc = kalosHit
-        ? options.chain?.name === "elysium" && options.rpc
+      const pinned = kalosHit || timedHit;
+      const rpc = pinned
+        ? options.chain?.name === chain.name && options.rpc
           ? options.rpc
           : chain.rpc
         : options.rpc && (options.chain || cand.chain || page.hints.length === 1)
@@ -179,7 +187,9 @@ async function findHits(page, options, providers) {
       const provider = providers.get(chain, rpc);
       const identity = kalosHit
         ? { type: "kalos", seaDrops: [page.kalos.seaDrop], slug: page.kalos.slug, code: await provider.getCode(cand.address) }
-        : await identifyContract(provider, cand.address);
+        : timedHit
+          ? { type: "timed", schedule: page.schedule, code: await provider.getCode(cand.address) }
+          : await identifyContract(provider, cand.address);
       if (!identity || identity.code === "0x") continue;
       hits.push({ ...cand, chain, provider, identity });
       break;
@@ -266,7 +276,7 @@ async function waitUntil(targetMs, clock, log, label, shouldStop, refresh) {
       continue;
     }
     if (Date.now() - lastLog > 15_000) {
-      log(`Canh round ${label}. Tự mint khi mở, còn ${Math.max(1, Math.ceil(remain / 1000))}s.`);
+      log(`Đang chờ tới giờ mint ${label}. Mở ${new Date(targetMs).toISOString()}. Còn ${Math.max(1, Math.ceil(remain / 1000))}s.`);
       lastLog = Date.now();
     }
     const slice = remain > 1_500 ? Math.min(remain - 1_500, 1_000) : Math.min(remain, 5);
@@ -290,7 +300,7 @@ async function spamMint({ wallet, provider, round, chain, gasGwei, gasLimit, now
     const state = await callState(provider, wallet.address, round);
     if (state === "wait") {
       if (Date.now() - lastLog > 1_000) {
-        log(`Chưa mở trên chain. Gửi lại liên tục, lần ${attempt}.`);
+        log(`Đang chờ tới giờ mint trên chain. Gửi lại liên tục, lần ${attempt}.`);
         lastLog = Date.now();
       }
       continue;
@@ -334,6 +344,10 @@ export async function runMint(options, deps = {}) {
       if (options.chain && options.chain.name !== "elysium") options.rpc = "";
       options.chain = resolveNftChain("elysium");
     }
+    if (page.schedule?.chain) {
+      if (options.chain && options.chain.name !== page.schedule.chain) options.rpc = "";
+      options.chain = resolveNftChain(page.schedule.chain);
+    }
     if (!page.candidates.length) {
       throw new Error("Không thấy địa chỉ contract trên trang. Dán link có 0x, hoặc thêm OPENSEA_API_KEY với link collection OpenSea.");
     }
@@ -375,7 +389,7 @@ export async function runMint(options, deps = {}) {
         const preview = applyGas(round, chosen.hit.chain, options.gasGwei, options.gasLimit);
         log(`DRY RUN round ${round.label}: ${round.quantity} NFT, value ${ethers.formatEther(preview.value)} ${symbol}.`);
         if (round.start * 1000 > clock.nowMs()) {
-          log(`Chưa mở round ${round.label}. Tới ${new Date(round.start * 1000).toISOString()} thì lệnh thật gửi liên tục đến khi mint được.`);
+          log(`Đang chờ tới giờ mint ${round.label}. Mở ${new Date(round.start * 1000).toISOString()}. Tới giờ thì lệnh thật gửi liên tục đến khi mint được.`);
         }
       }
       return {
@@ -405,7 +419,7 @@ export async function runMint(options, deps = {}) {
         continue;
       }
       if (fresh.start * 1000 > clock.nowMs()) {
-        log(`Canh sát ${new Date(fresh.start * 1000).toISOString()} cho round ${fresh.label}.`);
+        log(`Đang chờ tới giờ mint ${fresh.label}. Mở ${new Date(fresh.start * 1000).toISOString()}.`);
         clock = await waitUntil(fresh.start * 1000, clock, log, fresh.label, halt, () => syncClock(chosen.hit.provider));
       }
       try {
