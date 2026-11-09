@@ -86,6 +86,8 @@ node app/server.js
 
 Rồi mở http://127.0.0.1:4173. Trên Windows có thể double-click `Mo-NFT.bat`. Tải mã về: trên GitHub bấm Code, Download ZIP, giải nén, rồi chạy lệnh trên.
 
+Trong app có ô chọn file JSON. Tool lấy link mint hoặc địa chỉ contract trong file, điền vào danh sách, rồi bấm Chạy. File chỉ đọc trên máy này, không gửi đi.
+
 Trong app, nhập mật khẩu ít nhất 8 ký tự rồi bấm Lưu. `nft.txt` chỉ còn bản mã hóa, không còn private key trần. Lần chạy sau nhập lại đúng mật khẩu. App chỉ nghe `127.0.0.1` và không trả key về trình duyệt. Dùng lệnh `node nft` khi file đã khóa thì gõ mật khẩu, hoặc đặt `NFT_PASSWORD`.
 
 ```

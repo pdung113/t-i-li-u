@@ -44,6 +44,20 @@ test("app local chạy nhiều dự án trên máy mình", async () => {
     assert.ok(state.logs.some((line) => line.startsWith("1 one.example |")));
     assert.ok(state.logs.some((line) => line.startsWith("2 two.example |")));
     assert.equal(JSON.stringify(state).includes(key), false);
+
+    const imported = await fetch(`${url}/api/import`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        json: JSON.stringify({
+          projects: [{ chain: "base", mintUrl: "https://one.example/drop", contract: "0x1111111111111111111111111111111111111111" }],
+        }),
+      }),
+    });
+    const importedBody = await imported.json();
+    assert.equal(imported.status, 200);
+    assert.equal(importedBody.count, 1);
+    assert.equal(importedBody.links[0], "base https://one.example/drop");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

@@ -113,6 +113,8 @@
         <input id="gasLimit" value="500000" />
         <label for="rpc">RPC riêng, bỏ trống nếu dùng RPC mặc định</label>
         <input id="rpc" placeholder="https://..." />
+        <label for="json">File JSON danh sách dự án. Chọn file là tool lấy link và contract.</label>
+        <input id="json" type="file" accept=".json,application/json" />
         <label for="links">Link dự án, mỗi dòng một link. Chain khác: elysium https://trang-mint.example</label>
         <textarea id="links" placeholder="https://trang-mint-1.example&#10;elysium https://trang-mint-2.example"></textarea>
         <label for="keys">Private key, mỗi ví một dòng. Sau khi lưu, file chỉ còn bản đã khóa.</label>
@@ -188,6 +190,18 @@
         if (keys.length) $("keys").value = keys.join("\n");
       }
 
+      async function importJson(text) {
+        const response = await fetch("/api/import", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ json: text }),
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || "Không đọc được JSON.");
+        $("links").value = body.links.join("\n");
+        status.textContent = `Đã lấy ${body.count} dự án từ JSON. Kiểm tra link, rồi bấm Chạy.`;
+      }
+
       async function post(path) {
         const response = await fetch(path, {
           method: "POST",
@@ -213,6 +227,15 @@
         }
       };
 
+      $("json").addEventListener("change", async () => {
+        const file = $("json").files?.[0];
+        if (!file) return;
+        try {
+          await importJson(await file.text());
+        } catch (error) {
+          status.textContent = error.message;
+        }
+      });
       $("form").addEventListener("submit", async (event) => {
         event.preventDefault();
         status.textContent = "Đang gửi...";

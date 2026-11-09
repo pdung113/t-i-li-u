@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { NFT_CHAINS } from "../src/nft/chains.js";
 import { runProjects } from "../src/nft/index.js";
 import { parseNotepad, redactNotepad } from "../src/nft/notepad.js";
+import { projectLink, projectsFromJson } from "../src/nft/projects.js";
 import { lockNotepad } from "../src/nft/vault.js";
 
 const appDir = dirname(fileURLToPath(import.meta.url));
@@ -47,7 +48,7 @@ function readBody(req) {
     let size = 0;
     req.on("data", (chunk) => {
       size += chunk.length;
-      if (size > 1_000_000) {
+      if (size > 3_000_000) {
         reject(new Error("Nội dung quá dài."));
         req.destroy();
         return;
@@ -173,6 +174,23 @@ export function createApp(deps = {}) {
         res.write(`data: ${JSON.stringify({ type: "done", reports: job.reports, error: job.error })}\n\n`);
       }
       req.on("close", () => job.clients.delete(res));
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/import") {
+      const raw = await readBody(req);
+      let source = raw;
+      try {
+        const body = JSON.parse(raw);
+        source = body.json ?? body;
+      } catch {
+        source = raw;
+      }
+      try {
+        const projects = projectsFromJson(source);
+        sendJson(res, { ok: true, count: projects.length, links: projects.map(projectLink) });
+      } catch (error) {
+        sendJson(res, { error: error.message || String(error) }, 400);
+      }
       return;
     }
     if (req.method === "POST" && (url.pathname === "/api/run" || url.pathname === "/api/save")) {
