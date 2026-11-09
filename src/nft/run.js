@@ -169,7 +169,7 @@ async function findHits(page, options, providers) {
     const chains = kalosHit
       ? [resolveNftChain("elysium")]
       : timedHit
-        ? [resolveNftChain(page.schedule.chain || cand.chain || "elysium")]
+        ? [resolveNftChain(page.schedule.chain || cand.chain || options.chain?.name || page.hints.find(Boolean) || "eth")]
         : options.chain
           ? [options.chain]
           : cand.chain
@@ -371,13 +371,24 @@ export async function runMint(options, deps = {}) {
     contextBase.limits.now = clock.nowSec();
     let chosen = await chooseHit(hits, contextBase, clock.nowSec(), log);
     if (!chosen?.round) {
+      if (chosen?.hit) log(`Contract ${chosen.hit.address} trên ${chosen.hit.chain.name}.`);
       printRounds(chosen?.rounds || [], hits[0].chain.nativeSymbol, log);
+      for (const round of chosen?.rounds || []) log(`Bỏ ${round.label}: ${round.reason}.`);
       throw new Error("Không có round nào ví đủ điều kiện.");
     }
     clock = await syncClock(chosen.hit.provider);
     const symbol = chosen.hit.chain.nativeSymbol;
     log(`Contract ${chosen.hit.address} trên ${chosen.hit.chain.name} (${chosen.hit.identity.type}).`);
     printRounds(chosen.rounds, symbol, log);
+    for (const round of chosen.rounds) {
+      if (round.eligible && round.start * 1000 > clock.nowMs()) {
+        log(`Ví đủ điều kiện ${round.label}. Đang chờ tới giờ mint ${round.label}. Mở ${new Date(round.start * 1000).toISOString()}.`);
+      } else if (round.eligible) {
+        log(`Ví đủ điều kiện ${round.label}. Mint round này khi tới lượt.`);
+      } else {
+        log(`Bỏ ${round.label}: ${round.reason}.`);
+      }
+    }
     const planned = eligibleRounds(chosen.rounds, clock.nowSec());
     const labels = planned.map((round) => round.label).join(", ");
     log(planned.length === 1 ? `Chọn round ${labels}.` : `Chọn ${planned.length} round: ${labels}.`);
@@ -419,7 +430,7 @@ export async function runMint(options, deps = {}) {
         continue;
       }
       if (fresh.start * 1000 > clock.nowMs()) {
-        log(`Đang chờ tới giờ mint ${fresh.label}. Mở ${new Date(fresh.start * 1000).toISOString()}.`);
+        log(`Ví đủ điều kiện ${fresh.label}. Đang chờ tới giờ mint ${fresh.label}. Mở ${new Date(fresh.start * 1000).toISOString()}.`);
         clock = await waitUntil(fresh.start * 1000, clock, log, fresh.label, halt, () => syncClock(chosen.hit.provider));
       }
       try {

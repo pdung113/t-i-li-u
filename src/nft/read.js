@@ -18,7 +18,7 @@ import {
   selectorOf,
 } from "./abi.js";
 import { fetchKalosEligibility } from "./kalos.js";
-import { proofCovers } from "./schedule.js";
+import { proofCovers, proofUrls } from "./schedule.js";
 import { capQuantity, chooseFeeRecipient, genericRounds, seaDropAllowRound, seaDropPublicRound, thirdwebRound } from "./rounds.js";
 
 export async function tryCall(provider, to, iface, name, args = []) {
@@ -282,21 +282,23 @@ const timedIface = new ethers.Interface([
 
 async function readProof(schedule, wallet, fetchImpl) {
   if (!wallet || !fetchImpl || !schedule.pageUrl) return null;
-  try {
-    const url = new URL(`/api/proof/${schedule.collection}/${ethers.getAddress(wallet)}`, schedule.pageUrl);
-    const response = await fetchImpl(url.href, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(12_000),
-      headers: { accept: "application/json", "user-agent": "nft-mint/1.0" },
-    });
-    if (!response.ok) return null;
-    const body = await response.json();
-    const proof = Array.isArray(body?.proof) ? body.proof : [];
-    if (!proof.every((item) => typeof item === "string" && /^0x[a-fA-F0-9]{64}$/.test(item))) return null;
-    return { tier: body.tier ? String(body.tier) : "", proof };
-  } catch {
-    return null;
+  for (const url of proofUrls(schedule, wallet)) {
+    try {
+      const response = await fetchImpl(url, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(12_000),
+        headers: { accept: "application/json", "user-agent": "nft-mint/1.0" },
+      });
+      if (!response.ok) continue;
+      const body = await response.json();
+      const proof = Array.isArray(body?.proof) ? body.proof : Array.isArray(body?.merkleProof) ? body.merkleProof : [];
+      if (!proof.length || !proof.every((item) => typeof item === "string" && /^0x[a-fA-F0-9]{64}$/.test(item))) continue;
+      return { tier: body.tier ? String(body.tier) : "", proof };
+    } catch {
+      // thử đường proof tiếp theo
+    }
   }
+  return null;
 }
 
 function timedRound(phase, end, schedule, context, proof) {

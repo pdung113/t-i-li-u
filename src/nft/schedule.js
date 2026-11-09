@@ -32,25 +32,55 @@ function asAddress(value) {
   }
 }
 
+function phaseStart(raw) {
+  const value = raw?.starts ?? raw?.start ?? raw?.startTime ?? raw?.start_time ?? raw?.opens;
+  if (typeof value === "number" || (typeof value === "string" && /^\d+$/.test(value.trim()))) {
+    const number = Number(value);
+    if (number > 1e12) return Math.floor(number / 1000);
+    if (number > 1e9) return Math.floor(number);
+  }
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
+}
+
+function priceOf(raw) {
+  const value = raw?.price ?? raw?.priceWei ?? raw?.mintPrice ?? 0;
+  if (typeof value === "string" && value.includes(".")) {
+    try {
+      return ethers.parseEther(value);
+    } catch {
+      return 0n;
+    }
+  }
+  try {
+    return BigInt(value || 0);
+  } catch {
+    return 0n;
+  }
+}
+
 function phaseOf(raw) {
-  const starts = Date.parse(raw?.starts || raw?.start || "");
-  if (!Number.isFinite(starts)) return null;
-  const price = BigInt(raw.price ?? raw.priceWei ?? 0);
+  const start = phaseStart(raw);
+  if (!start) return null;
   const perWallet = Number(raw.per_wallet ?? raw.perWallet ?? raw.maxPerWallet ?? 1);
+  const label = String(raw.key || raw.name || "phase");
+  const text = label.toLowerCase();
+  const allow = raw.allowlist === true || raw.whitelist === true || /allow|white|tier|guaranteed|fcfs|^[ab]$/.test(text);
   return {
-    key: String(raw.key || raw.name || "phase"),
+    key: label,
     name: String(raw.name || raw.key || "phase"),
-    price,
+    price: priceOf(raw),
     perWallet: Number.isFinite(perWallet) && perWallet > 0 ? perWallet : 1,
-    start: Math.floor(starts / 1000),
+    start,
     extraFor: Array.isArray(raw.extra_for) ? raw.extra_for.map(String) : [],
-    public: String(raw.key || raw.name || "").toLowerCase() === "public",
+    public: /public|open mint|everyone/.test(text) || !allow,
   };
 }
 
 export function scheduleFromData(data, pageUrl = "") {
-  const collection = asAddress(data?.collection || data?.contract || data?.address);
-  const phases = (Array.isArray(data?.phases) ? data.phases : []).map(phaseOf).filter(Boolean);
+  const collection = asAddress(data?.collection || data?.contract || data?.nft || data?.nftAddress || data?.tokenAddress);
+  const list = data?.phases || data?.stages || data?.rounds;
+  const phases = (Array.isArray(list) ? list : []).map(phaseOf).filter(Boolean);
   if (!collection || !phases.length) return null;
   phases.sort((a, b) => a.start - b.start || a.name.localeCompare(b.name));
   const chain = chainFromId(data.chainId || data.chain_id);
@@ -66,7 +96,7 @@ export function scheduleFromData(data, pageUrl = "") {
 
 export function scheduleFromText(text, pageUrl = "") {
   const source = String(text || "");
-  const mark = /"collection"\s*:\s*"0x[a-fA-F0-9]{40}"/g;
+  const mark = /"(?:collection|contract|nftAddress|nft_address|tokenAddress)"\s*:\s*"0x[a-fA-F0-9]{40}"/gi;
   for (const match of source.matchAll(mark)) {
     let start = source.lastIndexOf("{", match.index);
     let steps = 0;
@@ -90,24 +120,43 @@ export function scheduleFromText(text, pageUrl = "") {
 export async function scheduleFromPage(pageUrl, html, fetchImpl) {
   const embedded = scheduleFromText(html, pageUrl);
   if (embedded) return embedded;
-  let apiUrl;
-  try {
-    apiUrl = new URL("/api/mint", pageUrl).href;
-  } catch {
-    return null;
+  const paths = ["/api/mint", "/api/drop", "/api/launch"];
+  for (const path of paths) {
+    let apiUrl;
+    try {
+      apiUrl = new URL(path, pageUrl).href;
+    } catch {
+      return null;
+    }
+    try {
+      const response = await fetchImpl(apiUrl, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(12_000),
+        headers: { accept: "application/json", "user-agent": "nft-mint/1.0" },
+      });
+      if (!response.ok) continue;
+      const body = await response.json();
+      const found = scheduleFromData(body, pageUrl) || scheduleFromText(JSON.stringify(body), pageUrl);
+      if (found) return found;
+    } catch {
+      // API này không có lịch mint
+    }
   }
-  try {
-    const response = await fetchImpl(apiUrl, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(12_000),
-      headers: { accept: "application/json", "user-agent": "nft-mint/1.0" },
-    });
-    if (!response.ok) return null;
-    const body = await response.json();
-    return scheduleFromData(body, pageUrl);
-  } catch {
-    return null;
-  }
+  return null;
+}
+
+export function proofUrls(schedule, wallet) {
+  const address = ethers.getAddress(schedule.collection);
+  const who = ethers.getAddress(wallet);
+  const base = schedule.pageUrl || "https://mint.local/";
+  const paths = [
+    `/api/proof/${address}/${who}`,
+    `/api/proof/${address.toLowerCase()}/${who.toLowerCase()}`,
+    `/api/mint/proof/${address}/${who}`,
+    `/api/allowlist/${address}/${who}`,
+    `/api/mint/check?a=${who}`,
+  ];
+  return paths.map((path) => new URL(path, base).href);
 }
 
 export function proofCovers(phase, proof) {
