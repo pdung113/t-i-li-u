@@ -20,7 +20,7 @@ import {
 } from "./abi.js";
 import { fetchKalosEligibility } from "./kalos.js";
 import { proofCovers, proofUrls } from "./schedule.js";
-import { encodePlanMint } from "./pageAbi.js";
+import { encodeAbiMint, encodePlanMint } from "./pageAbi.js";
 import { capQuantity, chooseFeeRecipient, genericRounds, seaDropAllowRound, seaDropPublicRound, thirdwebRound } from "./rounds.js";
 
 export async function tryCall(provider, to, iface, name, args = []) {
@@ -139,6 +139,7 @@ async function ownedIds(provider, token, wallet, limit) {
 export async function readRounds(provider, address, identity, context) {
   if (identity.type === "plan") return readPlan(provider, address, identity, context);
   if (identity.type === "phases") return readPhases(provider, address, identity, context);
+  if (identity.type === "abi") return readAbi(provider, address, identity, context);
   if (identity.type === "kalos") return readKalos(provider, address, identity, context);
   if (identity.type === "timed") return readTimed(identity, context);
   if (identity.type === "seadrop") return readSeaDrop(provider, address, identity, context);
@@ -298,7 +299,10 @@ async function readPlan(provider, nft, identity, context) {
 
 async function phaseAllowances(identity, wallet, fetchImpl) {
   if (!identity.slug || !wallet || !fetchImpl) return null;
-  const url = new URL(`/api/checker?collection=${encodeURIComponent(identity.slug)}&wallet=${wallet}`, identity.pageUrl || "https://mint.local/").href;
+  const pageUrl = identity.pageUrl || identity.plan?.pageUrl || "https://mint.local/";
+  const url = new URL(identity.plan?.checkPath || "/api/checker", pageUrl);
+  if (identity.slug) url.searchParams.set("collection", identity.slug);
+  url.searchParams.set("wallet", wallet);
   try {
     const response = await fetchImpl(url, { headers: { accept: "application/json" } });
     if (!response.ok) return null;
@@ -315,51 +319,88 @@ async function phaseAllowances(identity, wallet, fetchImpl) {
   }
 }
 
-async function readPhases(provider, nft, identity, context) {
-  const phases = plainList(await tryCall(provider, nft, phaseIface, "getPhases"));
+function phaseValue(phase, names) {
+  for (const name of names) {
+    if (phase?.[name] != null && phase[name] !== "") return phase[name];
+  }
+  return undefined;
+}
+
+function normalizePhase(phase) {
+  const startRaw = Number(phaseValue(phase, ["startTime", "start", "starts", "open"]) || 0);
+  const endRaw = Number(phaseValue(phase, ["endTime", "end", "ends", "close"]) || 0);
+  return {
+    name: String(phaseValue(phase, ["name", "label", "key"]) || ""),
+    start: startRaw > 1e12 ? Math.floor(startRaw / 1000) : startRaw,
+    end: endRaw > 1e12 ? Math.floor(endRaw / 1000) : endRaw,
+    price: BigInt(phaseValue(phase, ["price", "cost", "mintPrice"]) || 0),
+    cap: Number(phaseValue(phase, ["maxPerWallet", "perWallet", "max", "limit"]) || 0),
+    gated: Boolean(phaseValue(phase, ["gated", "allowlist", "whitelist"])),
+    phaseSupply: Number(phaseValue(phase, ["maxSupply", "supply"]) || 0),
+  };
+}
+
+async function readAbi(provider, nft, identity, context) {
+  const plan = identity.plan;
+  let decoded;
+  try {
+    const raw = await provider.call({ to: nft, data: plan.phaseData });
+    decoded = plan.phaseIface.decodeFunctionResult(plan.phaseName, raw)[0];
+  } catch (error) {
+    if (error?.message === "Dừng.") throw error;
+    return [emptyRound(nft, "không đọc được các phase trên contract")];
+  }
+  const phases = plainList(decoded).map(normalizePhase);
+  let fee = 0n;
+  if (plan.feeIface && plan.feeName) {
+    try {
+      const raw = await provider.call({ to: nft, data: plan.feeIface.encodeFunctionData(plan.feeName) });
+      fee = BigInt(plan.feeIface.decodeFunctionResult(plan.feeName, raw)[0] || 0);
+    } catch (error) {
+      if (error?.message === "Dừng.") throw error;
+    }
+  }
+  return roundsFromPhases(provider, nft, identity, context, phases, fee, (index, quantity, extras) => encodeAbiMint(plan, index, quantity, extras));
+}
+
+async function roundsFromPhases(provider, nft, identity, context, phases, fee, encode) {
   if (!phases.length) return [emptyRound(nft, "contract không có phase mint")];
-  const fee = BigInt((await tryCall(provider, nft, phaseIface, "platformFeePerMint")) || 0);
   const mintedTotal = BigInt((await tryCall(provider, nft, phaseIface, "totalMinted")) || 0);
   const supply = BigInt((await tryCall(provider, nft, phaseIface, "maxSupply")) || 0);
   const left = supply > 0n ? supply - mintedTotal : null;
-  const allowances = await phaseAllowances(identity, context.wallet, context.fetch);
+  const allowances = identity.slug ? await phaseAllowances(identity, context.wallet, context.fetch) : null;
   const rounds = [];
   for (let index = 0; index < phases.length; index += 1) {
     const phase = phases[index];
-    const start = Number(phase.startTime || 0);
-    const end = Number(phase.endTime || 0);
-    const price = BigInt(phase.price || 0) + fee;
-    const gated = Boolean(phase.gated);
-    const cap = Number(phase.maxPerWallet || 0);
-    const phaseSupply = Number(phase.maxSupply || 0);
+    const price = phase.price + fee;
     const phaseMinted = Number((await tryCall(provider, nft, phaseIface, "phaseMinted", [index])) || 0);
     const already = context.wallet ? Number((await tryCall(provider, nft, phaseIface, "mintedInPhase", [index, context.wallet])) || 0) : 0;
     const listed = allowances?.has(index) || false;
     const allowance = listed ? Number(allowances.get(index) || 0) : 0;
-    const walletCap = gated ? (cap > 0 && allowance > 0 ? Math.min(cap, allowance) : allowance) : cap > 0 ? cap : context.limits.quantity;
+    const walletCap = phase.gated ? (phase.cap > 0 && allowance > 0 ? Math.min(phase.cap, allowance) : allowance) : phase.cap > 0 ? phase.cap : context.limits.quantity;
     let quantity = capQuantity(context.limits.quantity, walletCap, already, false);
     if (left != null) quantity = Math.min(quantity, Number(left));
-    if (phaseSupply > 0) quantity = Math.min(quantity, Math.max(0, phaseSupply - phaseMinted));
-    const label = String(phase.name || `phase ${index + 1}`);
+    if (phase.phaseSupply > 0) quantity = Math.min(quantity, Math.max(0, phase.phaseSupply - phaseMinted));
     let round = {
       id: `phase-${index}`,
-      label,
-      kind: gated ? "allowlist" : "public",
+      label: phase.name || `phase ${index + 1}`,
+      kind: phase.gated ? "allowlist" : "public",
       standard: "phases",
-      start,
-      end,
+      start: phase.start,
+      end: phase.end,
       price,
       quantity,
       to: nft,
-      data: phaseIface.encodeFunctionData("mint", [index, BigInt(quantity || 1), 0, "0x"]),
+      data: encode(index, quantity || 1, { allowance: 0, signature: "0x", wallet: context.wallet }),
       value: price * BigInt(quantity || 0),
     };
-    if (gated && identity.slug && context.wallet) {
+    if (phase.gated && identity.slug && context.wallet && identity.plan?.authPath !== "") {
       const wallet = context.wallet;
       const fetchImpl = context.fetch;
-      const pageUrl = identity.pageUrl || "https://mint.local/";
+      const pageUrl = identity.pageUrl || identity.plan?.pageUrl || "https://mint.local/";
+      const authPath = identity.plan?.authPath || "/api/mint-auth";
       round.prepare = async () => {
-        const url = new URL("/api/mint-auth", pageUrl).href;
+        const url = new URL(authPath, pageUrl).href;
         const response = await fetchImpl(url, {
           method: "POST",
           headers: { "content-type": "application/json", accept: "application/json" },
@@ -372,16 +413,16 @@ async function readPhases(provider, nft, identity, context) {
         const nextQuantity = round.quantity || 1;
         return {
           ...round,
-          data: phaseIface.encodeFunctionData("mint", [index, BigInt(nextQuantity), BigInt(body.allowance ?? body.allow ?? nextQuantity), signature]),
+          data: encode(index, nextQuantity, { allowance: body.allowance ?? body.allow ?? nextQuantity, signature, wallet }),
           value: price * BigInt(nextQuantity),
         };
       };
     }
     if (supply > 0n && left <= 0n) round = { ...round, quantity: 0, eligible: false, reason: "đã hết NFT" };
-    else if (end && context.limits.now && context.limits.now >= end) round = { ...round, quantity: 0, eligible: false, reason: "round đã kết thúc" };
-    else if (!start) round = { ...round, quantity: 0, eligible: false, reason: "trang chưa công bố giờ mở" };
-    else if (gated && allowances == null) round = { ...round, quantity: 0, eligible: false, reason: "không đọc được danh sách của trang" };
-    else if (gated && !listed) round = { ...round, quantity: 0, eligible: false, reason: "ví không có trong danh sách của trang" };
+    else if (phase.end && context.limits.now && context.limits.now >= phase.end) round = { ...round, quantity: 0, eligible: false, reason: "round đã kết thúc" };
+    else if (!phase.start) round = { ...round, quantity: 0, eligible: false, reason: "trang chưa công bố giờ mở" };
+    else if (phase.gated && allowances == null) round = { ...round, quantity: 0, eligible: false, reason: "không đọc được danh sách của trang" };
+    else if (phase.gated && !listed) round = { ...round, quantity: 0, eligible: false, reason: "ví không có trong danh sách của trang" };
     else if (quantity <= 0) round = { ...round, quantity: 0, eligible: false, reason: "đã hết suất của ví" };
     else if (price > context.limits.maxPrice) round = { ...round, quantity: 0, eligible: false, reason: "giá cao hơn trần" };
     else if (context.balance != null && context.balance < price * BigInt(quantity) + (context.limits.gasWei ?? 0n)) {
@@ -390,6 +431,14 @@ async function readPhases(provider, nft, identity, context) {
     rounds.push(round);
   }
   return rounds;
+}
+
+async function readPhases(provider, nft, identity, context) {
+  const phases = plainList(await tryCall(provider, nft, phaseIface, "getPhases")).map(normalizePhase);
+  const fee = BigInt((await tryCall(provider, nft, phaseIface, "platformFeePerMint")) || 0);
+  return roundsFromPhases(provider, nft, identity, context, phases, fee, (index, quantity, extras) =>
+    phaseIface.encodeFunctionData("mint", [index, BigInt(quantity || 1), BigInt(extras.allowance || 0), extras.signature || "0x"]),
+  );
 }
 
 async function readSeaDrop(provider, nft, identity, context) {

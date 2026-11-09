@@ -2,7 +2,7 @@ import { ethers } from "ethers";
 import { log as defaultLog } from "../log.js";
 import { probeOrder, resolveNftChain } from "./chains.js";
 import { addressesNearSlug, collectAllowInfo, chainHintsFromText, collectionSlug, contractUnpublished, extractCandidates, keepAddress, linkedResources, parseMarketUrl, scriptChunks } from "./parse.js";
-import { mintPlanFromText } from "./pageAbi.js";
+import { mintPlanFromText, pageMintPlan } from "./pageAbi.js";
 import { identifyContract, readRounds } from "./read.js";
 import { eligibleRounds, formatRound, selectRound } from "./rounds.js";
 import { fetchFulfillment, fetchListings, resolveCollection } from "./opensea.js";
@@ -125,6 +125,7 @@ export async function loadPage(url, fetchImpl) {
     hints: [parsed.chain, schedule?.chain, ...chainHintsFromText(combined)].filter(Boolean),
     schedule,
     plan: mintPlanFromText(combined, parsed.href),
+    abiPlan: pageMintPlan(combined, parsed.href),
     unpublished,
   };
 }
@@ -248,8 +249,10 @@ async function findHits(page, options, providers) {
         ? { type: "kalos", seaDrops: [page.kalos.seaDrop], slug: page.kalos.slug, code: await provider.getCode(cand.address) }
         : timedHit
           ? { type: "timed", schedule: page.schedule, code: await provider.getCode(cand.address) }
-          : (await planIdentity(provider, cand.address, page.plan)) || (await identifyContract(provider, cand.address));
-      if (identity?.type === "phases") {
+          : (await planIdentity(provider, cand.address, page.plan)) ||
+            (await abiIdentity(provider, cand.address, page.abiPlan)) ||
+            (await identifyContract(provider, cand.address));
+      if (identity?.type === "phases" || identity?.type === "abi") {
         identity.slug = collectionSlug(page.parsed?.href);
         identity.pageUrl = page.parsed?.href || "";
       }
@@ -285,6 +288,22 @@ function chainChoices(options, cand, page) {
   }
   if (!list.length) return probeOrder(page.hints);
   return list.slice(0, 3);
+}
+
+async function abiIdentity(provider, address, plan) {
+  if (!plan) return null;
+  const code = await provider.getCode(address);
+  if (!code || code === "0x") return null;
+  const proxy = code.toLowerCase().includes("363d3d373d3d3d363d73");
+  if (!proxy && !code.toLowerCase().includes(plan.selector.slice(2).toLowerCase())) return null;
+  try {
+    const raw = await provider.call({ to: address, data: plan.phaseData });
+    if (!raw || raw === "0x") return null;
+    return { type: "abi", plan, code };
+  } catch (error) {
+    if (error?.message === "Dừng.") throw error;
+    return null;
+  }
 }
 
 async function planIdentity(provider, address, plan) {

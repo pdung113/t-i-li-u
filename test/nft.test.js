@@ -976,3 +976,64 @@ test("trang launchpad tự lấy contract trong file collection và chờ public
   assert.match(logs.join("\n"), /Đang chờ tới giờ mint Public/);
   assert.match(logs.join("\n"), /The Chosen Ones: ví không có trong danh sách/);
 });
+
+test("ABI lạ trong trang vẫn tự mint, không cần hàm getPhases cố định", async () => {
+  const now = 1_700_000_000;
+  const abi = [
+    '{inputs:[{name:"stage",type:"uint256"},{name:"qty",type:"uint256"},{name:"sig",type:"bytes"}],name:"purchase",outputs:[],stateMutability:"payable",type:"function"}',
+    '{inputs:[],name:"getStages",outputs:[{name:"rows",type:"tuple[]",components:[{name:"name",type:"string"},{name:"start",type:"uint64"},{name:"end",type:"uint64"},{name:"cost",type:"uint128"},{name:"perWallet",type:"uint32"},{name:"gated",type:"bool"}]}],stateMutability:"view",type:"function"}',
+    '{inputs:[],name:"mintFee",outputs:[{name:"",type:"uint256"}],stateMutability:"view",type:"function"}',
+  ].join(",");
+  const html = `<script>contract:"${nft}";chainId:99901;${abi}</script>`;
+  const { pageMintPlan } = await import("../src/nft/pageAbi.js");
+  const plan = pageMintPlan(html, "https://drop.example/custom");
+  assert.equal(plan.mintName, "purchase");
+  assert.equal(plan.phaseName, "getStages");
+  const stages = plan.phaseIface.encodeFunctionResult("getStages", [[
+    ["Allow", now - 100, now - 10, 0, 1, true],
+    ["Open", now + 3600, 0, 0, 4, false],
+  ]]);
+  const fee = plan.feeIface.encodeFunctionResult("mintFee", [2500n]);
+  const logs = [];
+  const result = await runMint(
+    {
+      url: "https://drop.example/custom",
+      quantity: 1,
+      gasGwei: "1",
+      gasLimit: 300_000,
+      maxPrice: ethers.parseEther("1"),
+      chain: resolveNftChain("elysium"),
+      rpc: "",
+      apiKey: "",
+      dryRun: true,
+      wallet,
+      signer: null,
+    },
+    {
+      listen: false,
+      log: (message) => logs.push(message),
+      fetch: async () => ({ ok: true, text: async () => html, json: async () => ({ phases: [] }) }),
+      providerFactory: () => ({
+        async getCode() {
+          return `0x${plan.selector.slice(2)}6000`;
+        },
+        async call(tx) {
+          const data = String(tx.data).toLowerCase();
+          if (data === plan.phaseData.toLowerCase()) return stages;
+          if (data === plan.feeIface.encodeFunctionData("mintFee").toLowerCase()) return fee;
+          return "0x";
+        },
+        async getBlock() {
+          return { timestamp: now };
+        },
+        async getBalance() {
+          return ethers.parseEther("1");
+        },
+        async destroy() {},
+      }),
+    },
+  );
+  assert.equal(result.rounds[0].label, "Open");
+  assert.equal(result.rounds[0].value, 2500n);
+  assert.match(logs.join("\n"), /Đang chờ tới giờ mint Open/);
+});
