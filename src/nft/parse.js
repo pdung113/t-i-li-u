@@ -2,6 +2,11 @@ import { ethers } from "ethers";
 import { chainFromId } from "./chains.js";
 
 const ADDR = /0x[a-fA-F0-9]{40}/g;
+const NAMED_ADDRESS = /["']?[A-Za-z0-9_]*address[A-Za-z0-9_]*["']?\s*[:=]\s*["'](0x[a-fA-F0-9]{40})["']/gi;
+const IGNORE_ADDRESS = new Set([
+  "0xca11bde05977b3631167028862be2a173976ca11",
+  "0x00000000000000000000000000000000deadbeef",
+]);
 const KEY = /["']?(?:contractAddress|contract_address|nftAddress|nftContract|collectionAddress|tokenAddress|mintContract|dropContract|contract|collection)["']?\s*[:=]\s*["'](0x[a-fA-F0-9]{40})["']/gi;
 const CHAIN_WORD = {
   ethereum: "eth",
@@ -28,6 +33,45 @@ function checksum(address) {
 function repeatingAddress(address) {
   const hex = address.slice(2).toLowerCase();
   return /^(f|e)\1+$/.test(hex);
+}
+
+export function keepAddress(address) {
+  try {
+    const key = checksum(address);
+    if (key === ethers.ZeroAddress || repeatingAddress(key) || IGNORE_ADDRESS.has(key.toLowerCase())) return null;
+    return key;
+  } catch {
+    return null;
+  }
+}
+
+export function collectionSlug(pageUrl) {
+  try {
+    const parts = new URL(pageUrl).pathname.split("/").filter(Boolean);
+    return [...parts].reverse().find((part) => !/^(mint|launchpad|drop|nft|launch|sale)$/i.test(part)) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function addressesNearSlug(text, slug) {
+  const needle = String(slug || "").toLowerCase();
+  if (needle.length < 3) return [];
+  const source = String(text || "");
+  const lower = source.toLowerCase();
+  const out = [];
+  let from = 0;
+  while (from < lower.length) {
+    const at = lower.indexOf(needle, from);
+    if (at < 0) break;
+    const window = source.slice(Math.max(0, at - 700), at + 1000);
+    for (const match of window.matchAll(ADDR)) {
+      const key = keepAddress(match[0]);
+      if (key && !out.includes(key)) out.push(key);
+    }
+    from = at + needle.length;
+  }
+  return out;
 }
 
 export function parseMarketUrl(input) {
@@ -87,11 +131,12 @@ export function extractCandidates(html) {
     } catch {
       return;
     }
-    if (key === ethers.ZeroAddress || repeatingAddress(key)) return;
+    if (!keepAddress(key)) return;
     scores.set(key, Math.max(scores.get(key) || 0, score));
   };
 
   for (const match of String(html || "").matchAll(KEY)) add(match[1], 100);
+  for (const match of String(html || "").matchAll(NAMED_ADDRESS)) add(match[1], 90);
 
   const text = String(html || "");
   for (const match of text.matchAll(ADDR)) {
@@ -287,6 +332,7 @@ export function linkedResources(html, pageUrl) {
     }
   };
   for (const match of String(html || "").matchAll(/<script[^>]+src=["']([^"']+)["']/gi)) push(match[1]);
+  for (const match of String(html || "").matchAll(/<link[^>]+href=["']([^"']+\.js)["']/gi)) push(match[1]);
   for (const match of String(html || "").matchAll(/https?:\/\/[^"'\s>]+\.json/gi)) push(match[0]);
   return links.slice(0, 8);
 }

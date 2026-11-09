@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ethers } from "ethers";
-import { nftIface, seaDropIface } from "../src/nft/abi.js";
+import { nftIface, phaseIface, seaDropIface } from "../src/nft/abi.js";
 import { chainFromId, resolveNftChain } from "../src/nft/chains.js";
 import { loadNftOptions, main } from "../src/nft/index.js";
 import { formatReport, multiplyGas, parseNotepad, shortAddress } from "../src/nft/notepad.js";
@@ -900,4 +900,79 @@ test("trang tự khai ABI thì chờ đúng phase, không cần code riêng cho 
   assert.equal(result.rounds[0].label, "Front Row");
   assert.match(logs.join("\n"), /Đang chờ tới giờ mint Front Row/);
   assert.equal(calls.some((href) => href.includes("/pass")), false);
+});
+
+test("trang launchpad tự lấy contract trong file collection và chờ public", async () => {
+  const now = 1_700_000_000;
+  const html = `<script type="module" src="/assets/index-a.js"></script>`;
+  const index = `["assets/web3-lib.js","assets/collections-a.js","/launchpad/erupt-genesis"]`;
+  const collections = `slug:"erupt-genesis";VITE_GENESIS_ADDRESS_MAINNET:"${nft}";chainId:99901`;
+  const seen = [];
+  const phases = phaseIface.encodeFunctionResult("getPhases", [[
+    ["Team", now - 7200, now - 3600, 0, 2, 0, true],
+    ["The Chosen Ones", now - 1800, now + 1800, 0, 2, 0, true],
+    ["Public", now + 3600, 0, 0, 3, 0, false],
+  ]]);
+  const fee = phaseIface.encodeFunctionResult("platformFeePerMint", [1000n]);
+  const minted = phaseIface.encodeFunctionResult("totalMinted", [10n]);
+  const supply = phaseIface.encodeFunctionResult("maxSupply", [100n]);
+  const zero = phaseIface.encodeFunctionResult("mintedInPhase", [0n]);
+  const logs = [];
+  const result = await runMint(
+    {
+      url: "https://eruptdot.fun/launchpad/erupt-genesis",
+      quantity: 1,
+      gasGwei: "1",
+      gasLimit: 300_000,
+      maxPrice: ethers.parseEther("1"),
+      chain: resolveNftChain("base"),
+      rpc: "https://base.example",
+      apiKey: "",
+      dryRun: true,
+      wallet,
+      signer: null,
+    },
+    {
+      listen: false,
+      log: (message) => logs.push(message),
+      fetch: async (url) => {
+        const href = String(url);
+        seen.push(href);
+        if (href.includes("/api/checker")) return { ok: true, json: async () => ({ phases: [], application: null }), text: async () => "" };
+        if (href.endsWith("/assets/index-a.js")) return { ok: true, text: async () => index, json: async () => ({}) };
+        if (href.endsWith("/assets/collections-a.js")) return { ok: true, text: async () => collections, json: async () => ({}) };
+        if (href.endsWith("/launchpad/erupt-genesis")) return { ok: true, text: async () => html, json: async () => ({}) };
+        return { ok: false, status: 404, text: async () => "", json: async () => ({}) };
+      },
+      providerFactory: (chain) => ({
+        async getCode() {
+          return chain.name === "elysium" ? "0x60016000" : "0x";
+        },
+        async call(tx) {
+          const data = String(tx.data).toLowerCase();
+          if (data === phaseIface.encodeFunctionData("getPhases").toLowerCase()) return phases;
+          if (data === phaseIface.encodeFunctionData("platformFeePerMint").toLowerCase()) return fee;
+          if (data === phaseIface.encodeFunctionData("totalMinted").toLowerCase()) return minted;
+          if (data === phaseIface.encodeFunctionData("maxSupply").toLowerCase()) return supply;
+          if (data.startsWith(phaseIface.getFunction("phaseMinted").selector.toLowerCase())) return zero;
+          if (data.startsWith(phaseIface.getFunction("mintedInPhase").selector.toLowerCase())) return zero;
+          return "0x";
+        },
+        async getBlock() {
+          return { timestamp: now };
+        },
+        async getBalance() {
+          return ethers.parseEther("1");
+        },
+        async destroy() {},
+      }),
+    },
+  );
+  assert.equal(seen.some((href) => href.includes("web3-lib.js")), false);
+  assert.equal(result.chain, "elysium");
+  assert.equal(result.rounds[0].label, "Public");
+  assert.equal(result.rounds[0].value, 1000n);
+  assert.match(logs.join("\n"), new RegExp(`Contract ${ethers.getAddress(nft)}`));
+  assert.match(logs.join("\n"), /Đang chờ tới giờ mint Public/);
+  assert.match(logs.join("\n"), /The Chosen Ones: ví không có trong danh sách/);
 });

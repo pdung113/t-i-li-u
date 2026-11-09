@@ -1,7 +1,7 @@
 import { ethers } from "ethers";
 import { log as defaultLog } from "../log.js";
 import { probeOrder, resolveNftChain } from "./chains.js";
-import { collectAllowInfo, chainHintsFromText, contractUnpublished, extractCandidates, linkedResources, parseMarketUrl, scriptChunks } from "./parse.js";
+import { addressesNearSlug, collectAllowInfo, chainHintsFromText, collectionSlug, contractUnpublished, extractCandidates, keepAddress, linkedResources, parseMarketUrl, scriptChunks } from "./parse.js";
 import { mintPlanFromText } from "./pageAbi.js";
 import { identifyContract, readRounds } from "./read.js";
 import { eligibleRounds, formatRound, selectRound } from "./rounds.js";
@@ -99,13 +99,22 @@ export async function loadPage(url, fetchImpl) {
   const schedule = await scheduleFromPage(parsed.href, combined, fetchImpl);
   const candidates = [];
   const push = (address, score, chain = null) => {
-    const key = address.toLowerCase();
-    if (candidates.some((item) => item.address.toLowerCase() === key)) return;
-    candidates.push({ address, score, chain });
+    const key = keepAddress(address);
+    if (!key) return;
+    const existing = candidates.find((item) => item.address.toLowerCase() === key.toLowerCase());
+    if (existing) {
+      existing.score = Math.max(existing.score, score);
+      existing.chain = existing.chain || chain;
+      return;
+    }
+    candidates.push({ address: key, score, chain });
   };
   if (parsed.contract) push(parsed.contract, 200, parsed.chain);
   if (schedule) push(schedule.collection, 400, schedule.chain);
   for (const item of extractCandidates(combined)) push(item.address, item.score, null);
+  for (const address of addressesNearSlug(combined, collectionSlug(parsed.href))) push(address, 500, null);
+  const ranked = candidates.filter((item) => item.score >= 80);
+  if (ranked.length) candidates.splice(0, candidates.length, ...ranked);
   const strong = candidates.some((item) => item.score >= 20);
   const unpublished = !strong && contractUnpublished(combined);
   if (unpublished) candidates.splice(0, candidates.length);
@@ -124,14 +133,15 @@ async function readScripts(html, pageUrl, fetchImpl) {
   const extras = [];
   const queue = [];
   const seen = new Set();
+  const vendor = /\/(?:web3|motion|wagmi|viem|react-dom|vendor|polyfill|walletconnect)[-.]/i;
   const push = (link, first = false) => {
-    if (!link || seen.has(link) || seen.size >= 16) return;
+    if (!link || seen.has(link) || seen.size >= 16 || vendor.test(link)) return;
     seen.add(link);
     if (first) queue.unshift(link);
     else queue.push(link);
   };
   for (const link of linkedResources(html, pageUrl)) push(link);
-  while (queue.length && extras.length < 8) {
+  while (queue.length && extras.length < 10) {
     const link = queue.shift();
     let body = "";
     try {
@@ -143,7 +153,7 @@ async function readScripts(html, pageUrl, fetchImpl) {
     extras.push(body);
     const next = scriptChunks(body, link);
     for (const item of next) {
-      if (/mint|drop|launch|nft|sale|claim|contract|config/i.test(item)) push(item, true);
+      if (/mint|drop|launch|nft|sale|claim|contract|config|collection/i.test(item)) push(item, true);
     }
     for (const item of next) push(item);
   }
@@ -239,6 +249,10 @@ async function findHits(page, options, providers) {
         : timedHit
           ? { type: "timed", schedule: page.schedule, code: await provider.getCode(cand.address) }
           : (await planIdentity(provider, cand.address, page.plan)) || (await identifyContract(provider, cand.address));
+      if (identity?.type === "phases") {
+        identity.slug = collectionSlug(page.parsed?.href);
+        identity.pageUrl = page.parsed?.href || "";
+      }
       if (!identity || identity.code === "0x") continue;
       hits.push({ ...cand, chain, provider, identity });
       break;

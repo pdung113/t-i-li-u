@@ -71,6 +71,16 @@ export const dropIface = new ethers.Interface([
   "function claim(address receiver, uint256 quantity, address currency, uint256 pricePerToken, (bytes32[] proof, uint256 quantityLimitPerWallet, uint256 pricePerToken, address currency) allowlistProof, bytes data) payable",
 ]);
 
+export const phaseIface = new ethers.Interface([
+  "function getPhases() view returns ((string name, uint64 startTime, uint64 endTime, uint128 price, uint32 maxPerWallet, uint32 maxSupply, bool gated)[])",
+  "function platformFeePerMint() view returns (uint256)",
+  "function totalMinted() view returns (uint256)",
+  "function maxSupply() view returns (uint256)",
+  "function phaseMinted(uint256 phaseId) view returns (uint256)",
+  "function mintedInPhase(uint256 phaseId, address minter) view returns (uint256)",
+  "function mint(uint256 phaseId, uint256 quantity, uint256 allowance, bytes signature) payable",
+]);
+
 export const PRICE_FNS = ["mintPrice", "price", "cost", "publicPrice", "getPrice"];
 export const PUBLIC_START_FNS = ["publicSaleStartTime", "publicSaleStart", "saleStart", "startTime", "mintStart"];
 export const ALLOW_START_FNS = ["allowlistStartTime", "allowlistStart", "whitelistStart"];

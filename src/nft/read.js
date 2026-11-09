@@ -13,6 +13,7 @@ import {
   ZERO,
   dropIface,
   nftIface,
+  phaseIface,
   seaDropIface,
   plainList,
   selectorOf,
@@ -82,6 +83,10 @@ async function findWrite(provider, nft, code, names, from, erc721) {
 export async function identifyContract(provider, address) {
   const code = await provider.getCode(address);
   if (!code || code === "0x") return null;
+  const phases = plainList(await tryCall(provider, address, phaseIface, "getPhases"));
+  if (phases.length && phases.some((phase) => phase && (phase.name || phase.startTime != null))) {
+    return { type: "phases", code };
+  }
   const seaDrops = plainList(await tryCall(provider, address, nftIface, "getAllowedSeaDrop"));
   if (seaDrops.length > 0) return { type: "seadrop", seaDrops, code };
   const claim = await tryCall(provider, address, dropIface, "claimCondition");
@@ -133,6 +138,7 @@ async function ownedIds(provider, token, wallet, limit) {
 
 export async function readRounds(provider, address, identity, context) {
   if (identity.type === "plan") return readPlan(provider, address, identity, context);
+  if (identity.type === "phases") return readPhases(provider, address, identity, context);
   if (identity.type === "kalos") return readKalos(provider, address, identity, context);
   if (identity.type === "timed") return readTimed(identity, context);
   if (identity.type === "seadrop") return readSeaDrop(provider, address, identity, context);
@@ -280,6 +286,102 @@ async function readPlan(provider, nft, identity, context) {
     else if (phase.pass && approved === false) round = { ...round, quantity: 0, eligible: false, reason: "ví không có trong danh sách của trang" };
     else if (phase.pass && approved == null) round = { ...round, quantity: 0, eligible: false, reason: "không đọc được danh sách của trang" };
     else if (phase.end && context.limits.now && context.limits.now >= phase.end) round = { ...round, quantity: 0, eligible: false, reason: "round đã kết thúc" };
+    else if (quantity <= 0) round = { ...round, quantity: 0, eligible: false, reason: "đã hết suất của ví" };
+    else if (price > context.limits.maxPrice) round = { ...round, quantity: 0, eligible: false, reason: "giá cao hơn trần" };
+    else if (context.balance != null && context.balance < price * BigInt(quantity) + (context.limits.gasWei ?? 0n)) {
+      round = { ...round, quantity: 0, eligible: false, reason: "ví không đủ số dư" };
+    } else round = { ...round, eligible: true, reason: context.balance == null ? "ví đủ điều kiện (chưa kiểm số dư)" : "ví đủ điều kiện" };
+    rounds.push(round);
+  }
+  return rounds;
+}
+
+async function phaseAllowances(identity, wallet, fetchImpl) {
+  if (!identity.slug || !wallet || !fetchImpl) return null;
+  const url = new URL(`/api/checker?collection=${encodeURIComponent(identity.slug)}&wallet=${wallet}`, identity.pageUrl || "https://mint.local/").href;
+  try {
+    const response = await fetchImpl(url, { headers: { accept: "application/json" } });
+    if (!response.ok) return null;
+    const body = await response.json();
+    const allowances = new Map();
+    for (const item of body?.phases || []) {
+      const id = Number(item.phaseId ?? item.id ?? item.phase);
+      if (Number.isInteger(id)) allowances.set(id, Number(item.allowance ?? item.max ?? 0));
+    }
+    return allowances;
+  } catch (error) {
+    if (error?.message === "Dừng.") throw error;
+    return null;
+  }
+}
+
+async function readPhases(provider, nft, identity, context) {
+  const phases = plainList(await tryCall(provider, nft, phaseIface, "getPhases"));
+  if (!phases.length) return [emptyRound(nft, "contract không có phase mint")];
+  const fee = BigInt((await tryCall(provider, nft, phaseIface, "platformFeePerMint")) || 0);
+  const mintedTotal = BigInt((await tryCall(provider, nft, phaseIface, "totalMinted")) || 0);
+  const supply = BigInt((await tryCall(provider, nft, phaseIface, "maxSupply")) || 0);
+  const left = supply > 0n ? supply - mintedTotal : null;
+  const allowances = await phaseAllowances(identity, context.wallet, context.fetch);
+  const rounds = [];
+  for (let index = 0; index < phases.length; index += 1) {
+    const phase = phases[index];
+    const start = Number(phase.startTime || 0);
+    const end = Number(phase.endTime || 0);
+    const price = BigInt(phase.price || 0) + fee;
+    const gated = Boolean(phase.gated);
+    const cap = Number(phase.maxPerWallet || 0);
+    const phaseSupply = Number(phase.maxSupply || 0);
+    const phaseMinted = Number((await tryCall(provider, nft, phaseIface, "phaseMinted", [index])) || 0);
+    const already = context.wallet ? Number((await tryCall(provider, nft, phaseIface, "mintedInPhase", [index, context.wallet])) || 0) : 0;
+    const listed = allowances?.has(index) || false;
+    const allowance = listed ? Number(allowances.get(index) || 0) : 0;
+    const walletCap = gated ? (cap > 0 && allowance > 0 ? Math.min(cap, allowance) : allowance) : cap > 0 ? cap : context.limits.quantity;
+    let quantity = capQuantity(context.limits.quantity, walletCap, already, false);
+    if (left != null) quantity = Math.min(quantity, Number(left));
+    if (phaseSupply > 0) quantity = Math.min(quantity, Math.max(0, phaseSupply - phaseMinted));
+    const label = String(phase.name || `phase ${index + 1}`);
+    let round = {
+      id: `phase-${index}`,
+      label,
+      kind: gated ? "allowlist" : "public",
+      standard: "phases",
+      start,
+      end,
+      price,
+      quantity,
+      to: nft,
+      data: phaseIface.encodeFunctionData("mint", [index, BigInt(quantity || 1), 0, "0x"]),
+      value: price * BigInt(quantity || 0),
+    };
+    if (gated && identity.slug && context.wallet) {
+      const wallet = context.wallet;
+      const fetchImpl = context.fetch;
+      const pageUrl = identity.pageUrl || "https://mint.local/";
+      round.prepare = async () => {
+        const url = new URL("/api/mint-auth", pageUrl).href;
+        const response = await fetchImpl(url, {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify({ collection: identity.slug, wallet, phaseId: index, contract: nft }),
+        });
+        if (!response.ok) throw new Error("Trang không ký cho ví này.");
+        const body = await response.json();
+        const signature = body?.signature || body?.sig;
+        if (!signature) throw new Error("Trang không trả chữ ký mint.");
+        const nextQuantity = round.quantity || 1;
+        return {
+          ...round,
+          data: phaseIface.encodeFunctionData("mint", [index, BigInt(nextQuantity), BigInt(body.allowance ?? body.allow ?? nextQuantity), signature]),
+          value: price * BigInt(nextQuantity),
+        };
+      };
+    }
+    if (supply > 0n && left <= 0n) round = { ...round, quantity: 0, eligible: false, reason: "đã hết NFT" };
+    else if (end && context.limits.now && context.limits.now >= end) round = { ...round, quantity: 0, eligible: false, reason: "round đã kết thúc" };
+    else if (!start) round = { ...round, quantity: 0, eligible: false, reason: "trang chưa công bố giờ mở" };
+    else if (gated && allowances == null) round = { ...round, quantity: 0, eligible: false, reason: "không đọc được danh sách của trang" };
+    else if (gated && !listed) round = { ...round, quantity: 0, eligible: false, reason: "ví không có trong danh sách của trang" };
     else if (quantity <= 0) round = { ...round, quantity: 0, eligible: false, reason: "đã hết suất của ví" };
     else if (price > context.limits.maxPrice) round = { ...round, quantity: 0, eligible: false, reason: "giá cao hơn trần" };
     else if (context.balance != null && context.balance < price * BigInt(quantity) + (context.limits.gasWei ?? 0n)) {
