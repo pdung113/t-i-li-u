@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mua listing KRW Upbit</title>
+  <style>
+    :root { color-scheme: light; }
+    body { margin: 0; font: 16px/1.45 system-ui, sans-serif; background: #f4f1ea; color: #1c1915; }
+    main { max-width: 720px; margin: 0 auto; padding: 28px 18px 48px; }
+    h1 { font-size: 28px; line-height: 1.2; margin: 0 0 8px; }
+    p { margin: 0 0 14px; }
+    form, section { background: #fffdf8; border: 1px solid #ddd4c4; border-radius: 14px; padding: 16px; }
+    label { display: block; font-weight: 650; margin: 12px 0 4px; }
+    input { width: 100%; box-sizing: border-box; font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid #c9bfae; background: #fff; }
+    .row { display: flex; gap: 10px; align-items: end; }
+    .row button { flex: 0 0 auto; }
+    .check { display: flex; gap: 8px; align-items: center; font-weight: 650; margin: 14px 0; }
+    .check input { width: auto; }
+    button { font: inherit; border: 0; border-radius: 10px; padding: 10px 14px; background: #1c1915; color: #fff; cursor: pointer; }
+    button.secondary { background: #ece4d6; color: #1c1915; }
+    button:disabled { opacity: 0.55; cursor: default; }
+    .actions { display: flex; gap: 8px; margin-top: 8px; }
+    pre { min-height: 220px; white-space: pre-wrap; background: #201c17; color: #f6f1e7; border-radius: 12px; padding: 12px; margin: 12px 0 0; }
+    .note { color: #5c5346; }
+    .error { color: #8d1d18; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Mua listing KRW trên Upbit</h1>
+    <p>Tool chỉ mua coin <strong>listing mới có cặp KRW</strong>. Cặp BTC hoặc USDT không mua. Upbit không có gas và không dùng private key của ví: tiền lấy từ số dư KRW, khóa là Access Key và Secret Key của Open API.</p>
+    <p class="note">Coin mới thường bị cấm mua khoảng 5 phút và khoảng 2 giờ chỉ cho lệnh giới hạn. Ô hệ số giá, mặc định 2, là giá trần so với giá trong thông báo. Ví dụ giá thông báo 58 KRW thì lệnh giới hạn đặt quanh 116–117 KRW. Bot báo cáo: <a href="https://t.me/follow07_bot">t.me/follow07_bot</a>.</p>
+    <form id="form">
+      <label for="accessKey">Access Key</label>
+      <input id="accessKey" name="accessKey" autocomplete="off" required>
+      <label for="secretKey">Secret Key</label>
+      <input id="secretKey" name="secretKey" type="password" autocomplete="off" required>
+      <label for="budgetKrw">Số KRW mỗi coin</label>
+      <input id="budgetKrw" name="budgetKrw" inputmode="decimal" value="100000" required>
+      <label for="multiple">Hệ số giá (2 = gấp đôi)</label>
+      <input id="multiple" name="multiple" inputmode="decimal" value="2" required>
+      <label for="telegramToken">Token bot Telegram</label>
+      <input id="telegramToken" name="telegramToken" type="password" autocomplete="off">
+      <label for="telegramChatId">Chat id</label>
+      <div class="row">
+        <input id="telegramChatId" name="telegramChatId" autocomplete="off">
+        <button class="secondary" id="chat" type="button">Lấy chat id</button>
+      </div>
+      <label for="noticeUrl">Link thông báo, nếu muốn canh một tin đã đăng</label>
+      <input id="noticeUrl" name="noticeUrl" placeholder="https://www.upbit.com/service_center/notice?id=...">
+      <label class="check"><input id="live" type="checkbox"> Gửi lệnh thật</label>
+      <div class="actions">
+        <button id="start" type="submit">Bắt đầu</button>
+        <button id="stop" class="secondary" type="button">Dừng</button>
+      </div>
+      <p id="error" class="error"></p>
+    </form>
+    <section>
+      <strong>Nhật ký</strong>
+      <pre id="log">Đang chờ.</pre>
+    </section>
+  </main>
+  <script>
+    const error = document.querySelector("#error");
+    const log = document.querySelector("#log");
+    const form = document.querySelector("#form");
+    const fields = ["accessKey", "secretKey", "budgetKrw", "multiple", "telegramToken", "telegramChatId", "noticeUrl", "live"];
+    const field = (id) => document.getElementById(id);
+
+    function payload() {
+      return {
+        accessKey: field("accessKey").value.trim(),
+        secretKey: field("secretKey").value.trim(),
+        budgetKrw: Number(field("budgetKrw").value),
+        multiple: Number(field("multiple").value),
+        telegramToken: field("telegramToken").value.trim(),
+        telegramChatId: field("telegramChatId").value.trim(),
+        noticeUrl: field("noticeUrl").value.trim(),
+        live: field("live").checked,
+      };
+    }
+
+    function setRunning(running) {
+      for (const id of fields) field(id).disabled = running;
+      field("start").disabled = running;
+      field("chat").disabled = running;
+      field("stop").disabled = !running;
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      error.textContent = "";
+      setRunning(true);
+      const response = await fetch("/api/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload()),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        error.textContent = body.error || "Không bắt đầu được.";
+        setRunning(false);
+      }
+    });
+
+    field("stop").addEventListener("click", async () => {
+      await fetch("/api/stop", { method: "POST" });
+      setRunning(false);
+    });
+
+    field("chat").addEventListener("click", async () => {
+      error.textContent = "";
+      const response = await fetch("/api/chat-id", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: field("telegramToken").value.trim() }),
+      });
+      const body = await response.json();
+      if (!response.ok) error.textContent = body.error || "Không lấy được chat id.";
+      else field("telegramChatId").value = body.chatId;
+    });
+
+    async function refresh() {
+      const response = await fetch("/api/status");
+      const body = await response.json();
+      if (!field("budgetKrw").value) field("budgetKrw").value = body.budgetKrw;
+      if (!field("multiple").value) field("multiple").value = body.multiple;
+      if (!field("telegramChatId").value && body.telegramChatId) field("telegramChatId").value = body.telegramChatId;
+      if (!field("noticeUrl").value && body.noticeUrl) field("noticeUrl").value = body.noticeUrl;
+      log.textContent = body.lines.length ? body.lines.join("\n") : "Đang chờ.";
+      if (body.running) setRunning(true);
+    }
+
+    refresh();
+    setInterval(refresh, 700);
+    setRunning(false);
+  </script>
+</body>
+</html>

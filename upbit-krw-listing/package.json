@@ -1,0 +1,17 @@
+{
+  "name": "upbit-krw-listing",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Mua coin listing mới có cặp KRW trên Upbit bằng Open API và báo kết quả qua Telegram.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}
