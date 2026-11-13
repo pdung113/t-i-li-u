@@ -4,7 +4,8 @@ import crypto from "node:crypto";
 import { queryString, readJwtPayload, signJwt } from "../src/auth.js";
 import { coerceNotice, decideNotice, parseContract, parseNetwork } from "../src/notice.js";
 import { executeListing, listingIsFresh, FRESH_MS, shouldBuyNow, startEngine } from "../src/engine.js";
-import { choosePool, isBaseAsset } from "../src/swap.js";
+import { ethers } from "ethers";
+import { MULTICALL, choosePool, createBuyer, decodeQuote, isBaseAsset, quoteCalls, quoteOnProvider } from "../src/swap.js";
 import { chainById } from "../src/networks.js";
 import { amountFor, fdvAllows, fdvUsd } from "../src/limits.js";
 import { minOut, priorityLamports, scaleUnits } from "../src/networks.js";
@@ -574,4 +575,149 @@ test("cùng ticker đang mua thì không mua thêm, pool chưa có thì thử l�
   await new Promise((resolve) => setTimeout(resolve, 1000));
   fdv.stop();
   assert.equal(fdvTries, 1);
+});
+
+const MC = new ethers.Interface([
+  "function aggregate3((address target, bool allowFailure, bytes callData)[] calls) payable returns ((bool success, bytes returnData)[] returnData)",
+]);
+const V2_RESULT = new ethers.Interface(["function getAmountsOut(uint256,address[]) view returns (uint256[])"]);
+const V3_RESULT = new ethers.Interface(["function quoteExactInputSingle((address,address,uint256,uint24,uint160)) returns (uint256,uint256,uint32,uint160)"]);
+const SUPPLY_RESULT = new ethers.Interface(["function totalSupply() view returns (uint256)"]);
+
+function quotePayload(plan, valueFor) {
+  const rows = plan.map((step) => {
+    const spec = valueFor(step);
+    if (!spec) return [false, "0x"];
+    if (step.kind === "v2") return [true, V2_RESULT.encodeFunctionResult("getAmountsOut", [[0n, spec]])];
+    if (step.kind === "v3") return [true, V3_RESULT.encodeFunctionResult("quoteExactInputSingle", [spec, 0n, 0, 0n])];
+    return [true, SUPPLY_RESULT.encodeFunctionResult("totalSupply", [spec])];
+  });
+  return MC.encodeFunctionResult("aggregate3", [rows]);
+}
+
+function fakeProvider(onCall) {
+  const calls = [];
+  return {
+    calls,
+    async getFeeData() {
+      calls.push("fee");
+      return { maxFeePerGas: 2n * 10n ** 9n, maxPriorityFeePerGas: 1n * 10n ** 9n, gasPrice: 2n * 10n ** 9n };
+    },
+    async getTransactionCount() {
+      calls.push("nonce");
+      return 4;
+    },
+    async call(tx) {
+      calls.push("quote");
+      return onCall(tx, calls);
+    },
+    async broadcastTransaction() {
+      calls.push("send");
+      return { hash: `0x${"ab".repeat(32)}`, wait: async () => ({ status: 1 }) };
+    },
+  };
+}
+
+test("hỏi giá một lần khi RPC đã nóng, pool lệch hoặc FDV cao thì không gửi", async () => {
+  const chain = chainById("ethereum");
+  const token = "0x1111111111111111111111111111111111111111";
+  const value = ethers.parseEther("0.01");
+  const plan = quoteCalls(chain, token, value, false);
+  assert.equal(plan.length, 5);
+  const raw = quotePayload(plan, (step) => {
+    if (step.kind === "v2") return 1_000_000n;
+    if (step.fee === 3000) return 900_000n;
+    return null;
+  });
+  const decoded = decodeQuote(plan, raw);
+  assert.equal(decoded.v2, 1_000_000n);
+  assert.equal(choosePool(decoded.v2, decoded.v3).version, 2);
+
+  const provider = fakeProvider((tx) => {
+    assert.equal(String(tx.to).toLowerCase(), MULTICALL.toLowerCase());
+    return raw;
+  });
+  const buyer = createBuyer({
+    evmPrivateKey: `0x${"11".repeat(32)}`,
+    amounts: { ethereum: 0.01 },
+    gasMultiple: 2,
+    slippagePercent: 10,
+    maxFdv: null,
+    providerFor: () => provider,
+  });
+  await buyer.warm();
+  provider.calls.length = 0;
+  const started = Date.now();
+  const bought = await buyer.buy({ chain: "ethereum", contract: token, receivedAt: started });
+  buyer.stop();
+  assert.deepEqual(provider.calls, ["quote", "send"]);
+  assert.equal(bought.ok, true);
+  assert.equal(bought.venue, "Uniswap V2");
+  assert.ok(Date.now() - started < 100);
+
+  const skewed = quotePayload(plan, (step) => {
+    if (step.kind === "v2") return 10_000n;
+    if (step.fee === 3000) return 1_000n;
+    return null;
+  });
+  const skewProvider = fakeProvider(() => skewed);
+  const skewBuyer = createBuyer({
+    evmPrivateKey: `0x${"11".repeat(32)}`,
+    amounts: { ethereum: 0.01 },
+    gasMultiple: 2,
+    slippagePercent: 10,
+    providerFor: () => skewProvider,
+  });
+  await skewBuyer.warm();
+  skewProvider.calls.length = 0;
+  const refused = await skewBuyer.buy({ chain: "ethereum", contract: token, receivedAt: Date.now() });
+  skewBuyer.stop();
+  assert.equal(refused.ok, false);
+  assert.match(refused.reason, /lệch giá/);
+  assert.deepEqual(skewProvider.calls, ["quote"]);
+
+  const cappedPlan = quoteCalls(chain, token, value, true);
+  const cappedRaw = quotePayload(cappedPlan, (step) => {
+    if (step.kind === "v2") return 1_000_000n;
+    if (step.kind === "supply") return 10n ** 30n;
+    return null;
+  });
+  const cappedProvider = fakeProvider(() => cappedRaw);
+  const cappedBuyer = createBuyer({
+    evmPrivateKey: `0x${"11".repeat(32)}`,
+    amounts: { ethereum: 0.01 },
+    gasMultiple: 2,
+    slippagePercent: 10,
+    maxFdv: 1,
+    providerFor: () => cappedProvider,
+  });
+  await cappedBuyer.warm();
+  cappedProvider.calls.length = 0;
+  const overCap = await cappedBuyer.buy({ chain: "ethereum", contract: token, receivedAt: Date.now() });
+  cappedBuyer.stop();
+  assert.equal(overCap.ok, false);
+  assert.match(overCap.reason, /FDV/);
+  assert.deepEqual(cappedProvider.calls, ["quote"]);
+});
+
+test("multicall hỏng thì vẫn đọc được pool V2", async () => {
+  const chain = chainById("ethereum");
+  const token = "0x1111111111111111111111111111111111111111";
+  const value = ethers.parseEther("0.01");
+  let first = true;
+  const provider = {
+    async call(tx) {
+      if (first) {
+        first = false;
+        throw new Error("multicall down");
+      }
+      if (String(tx.to).toLowerCase() === chain.v2Router.toLowerCase()) {
+        return V2_RESULT.encodeFunctionResult("getAmountsOut", [[0n, 1234n]]);
+      }
+      throw new Error("no pool");
+    },
+  };
+  const bundle = await quoteOnProvider(provider, chain, token, value, false);
+  assert.equal(bundle.v2, 1234n);
+  assert.equal(first, false);
 });

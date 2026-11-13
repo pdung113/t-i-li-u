@@ -27,6 +27,10 @@ const SUPPLY_IFACE = new ethers.Interface([
 
 const JUPITER_ORDER = "https://api.jup.ag/swap/v2/order";
 const PRICE_CHAIN = { ETH: "ethereum", BNB: "bsc", SOL: "solana", POL: "polygon" };
+export const MULTICALL = "0xcA11bde05977b3631167028862bE2a173976CA11";
+const MC_IFACE = new ethers.Interface([
+  "function aggregate3((address target, bool allowFailure, bytes callData)[] calls) payable returns ((bool success, bytes returnData)[] returnData)",
+]);
 
 function usdFromRaw(amount, decimals) {
   const scale = 10n ** BigInt(decimals);
@@ -129,12 +133,76 @@ export function isBaseAsset(chain, contract) {
   return items.some((item) => sameAsset(item, contract));
 }
 
-function within(promise, ms) {
-  let timer = null;
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(undefined), ms);
+export function quoteCalls(chain, token, value, needSupply) {
+  const plan = [];
+  if (chain.v2Router) {
+    plan.push({
+      kind: "v2",
+      target: chain.v2Router,
+      data: V2_IFACE.encodeFunctionData("getAmountsOut", [value, [chain.wrapped, token]]),
+    });
+  }
+  if (chain.v3Quoter) {
+    for (const fee of chain.v3Fees) {
+      plan.push({
+        kind: "v3",
+        fee,
+        target: chain.v3Quoter,
+        data: V3_QUOTER_IFACE.encodeFunctionData("quoteExactInputSingle", [[chain.wrapped, token, value, fee, 0]]),
+      });
+    }
+  }
+  if (needSupply) {
+    plan.push({ kind: "supply", target: token, data: SUPPLY_IFACE.encodeFunctionData("totalSupply") });
+  }
+  return plan;
+}
+
+export function decodeQuote(plan, raw) {
+  const rows = MC_IFACE.decodeFunctionResult("aggregate3", raw)[0];
+  let v2 = null;
+  let supply = null;
+  const v3 = [];
+  plan.forEach((step, index) => {
+    const row = rows[index];
+    if (!row?.success || !row.returnData || row.returnData === "0x") return;
+    try {
+      if (step.kind === "v2") {
+        const out = V2_IFACE.decodeFunctionResult("getAmountsOut", row.returnData)[0][1];
+        if (out > 0n) v2 = out;
+      } else if (step.kind === "v3") {
+        const out = V3_QUOTER_IFACE.decodeFunctionResult("quoteExactInputSingle", row.returnData)[0];
+        if (out > 0n) v3.push({ fee: step.fee, out });
+      } else if (step.kind === "supply") {
+        const out = SUPPLY_IFACE.decodeFunctionResult("totalSupply", row.returnData)[0];
+        if (out > 0n) supply = out;
+      }
+    } catch {
+      // Một pool lỗi không được làm hỏng các pool còn lại.
+    }
   });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  return { v2, v3, supply };
+}
+
+export async function quoteOnProvider(provider, chain, token, value, needSupply) {
+  const plan = quoteCalls(chain, token, value, needSupply);
+  if (!plan.length) return { v2: null, v3: [], supply: null };
+  const data = MC_IFACE.encodeFunctionData("aggregate3", [plan.map((step) => ({
+    target: step.target,
+    allowFailure: true,
+    callData: step.data,
+  }))]);
+  try {
+    const raw = await provider.call({ to: MULTICALL, data });
+    return decodeQuote(plan, raw);
+  } catch {
+    const [v2, v3, supply] = await Promise.all([
+      quoteV2(provider, chain, token, value),
+      chain.v3Quoter ? Promise.all(chain.v3Fees.map((fee) => quoteV3Fee(provider, chain, token, value, fee))) : [],
+      needSupply ? readSupply(provider, token).catch(() => null) : null,
+    ]);
+    return { v2, v3: (v3 || []).filter(Boolean), supply };
+  }
 }
 
 function venueName(chain, version) {
@@ -157,24 +225,43 @@ export function createBuyer(config) {
     solanaKey = null;
   }
   const providers = new Map();
-  const signers = new Map();
   const fees = new Map();
   const nonces = new Map();
   const prices = new Map();
+  const wsFailed = new Set();
   let priorityLamport = 5_000;
   let solana = null;
   let timer = null;
   let stopped = false;
 
+  function providerUrl(chain) {
+    const custom = config.rpc?.[chain.id] || "";
+    if (custom) return custom;
+    if (!wsFailed.has(chain.id) && chain.ws) return chain.ws;
+    return chain.rpc;
+  }
+
   function providerFor(chain) {
+    if (config.providerFor) {
+      const given = config.providerFor(chain);
+      if (given) return given;
+    }
     let provider = providers.get(chain.id);
     if (!provider) {
+      const url = providerUrl(chain);
       const network = ethers.Network.from(chain.chainId);
-      provider = new ethers.JsonRpcProvider(rpcFor(chain, config), network, { staticNetwork: network });
+      provider = String(url).startsWith("ws")
+        ? new ethers.WebSocketProvider(url, network, { staticNetwork: network })
+        : new ethers.JsonRpcProvider(url, network, { staticNetwork: network });
+      provider.on?.("error", () => {});
       providers.set(chain.id, provider);
-      if (evmWallet) signers.set(chain.id, evmWallet.connect(provider));
     }
     return provider;
+  }
+
+  function dropProvider(chain) {
+    providers.get(chain.id)?.destroy?.();
+    providers.delete(chain.id);
   }
 
   function solanaConnection() {
@@ -202,12 +289,9 @@ export function createBuyer(config) {
     }
     const provider = providerFor(chain);
     const one = 10n ** BigInt(chain.nativeDecimals);
-    let out = await quoteV2(provider, chain, chain.stable, one);
-    if ((out == null || out <= 0n) && chain.v3Quoter) {
-      const choices = (await Promise.all(chain.v3Fees.map((fee) => quoteV3Fee(provider, chain, chain.stable, one, fee)))).filter(Boolean);
-      out = choices.sort((a, b) => (a.out > b.out ? -1 : 1))[0]?.out ?? null;
-    }
-    return out != null && out > 0n ? usdFromRaw(out, chain.stableDecimals) : 0;
+    const bundle = await quoteOnProvider(provider, chain, chain.stable, one, false);
+    const choice = choosePool(bundle.v2, bundle.v3);
+    return choice.ok ? usdFromRaw(choice.quoted, chain.stableDecimals) : 0;
   }
 
   async function refreshPrices() {
@@ -227,20 +311,33 @@ export function createBuyer(config) {
     }));
   }
 
-  async function priceFor(symbol) {
-    if (prices.get(symbol) > 0) return prices.get(symbol);
-    await refreshPrices();
-    return prices.get(symbol) || 0;
-  }
-
   async function warm() {
     if (stopped) return;
     const active = Object.entries(config.amounts || {})
       .filter(([, amount]) => Number(amount) > 0)
       .map(([id]) => chainById(id))
       .filter(Boolean);
-    await Promise.all(active.map(async (chain) => {
+    async function warmEvm(chain, allowFallback) {
+      const provider = providerFor(chain);
       try {
+        const [fee, nonce] = await Promise.all([
+          provider.getFeeData(),
+          provider.getTransactionCount(evmWallet.address, "pending"),
+        ]);
+        fees.set(chain.id, fee);
+        const cached = nonces.get(chain.id);
+        nonces.set(chain.id, cached == null ? nonce : (nonce > cached ? nonce : cached));
+      } catch {
+        const custom = config.rpc?.[chain.id] || config.providerFor;
+        if (allowFallback && !custom && chain.ws && !wsFailed.has(chain.id)) {
+          wsFailed.add(chain.id);
+          dropProvider(chain);
+          await warmEvm(chain, false);
+        }
+      }
+    }
+
+    await Promise.all(active.map(async (chain) => {
       if (chain.kind === "solana") {
         try {
           const connection = solanaConnection();
@@ -252,17 +349,7 @@ export function createBuyer(config) {
         return;
       }
       if (!evmWallet) return;
-      const provider = providerFor(chain);
-      const [fee, nonce] = await Promise.all([
-        provider.getFeeData(),
-        provider.getTransactionCount(evmWallet.address, "pending"),
-      ]);
-      fees.set(chain.id, fee);
-      const cached = nonces.get(chain.id);
-      nonces.set(chain.id, cached == null ? nonce : (nonce > cached ? nonce : cached));
-      } catch {
-        // Cache trống thì lượt mua tự đọc RPC.
-      }
+      await warmEvm(chain, true);
     }));
     if (config.maxFdv) await refreshPrices();
     if (active.some((chain) => chain.kind === "solana")) {
@@ -306,21 +393,17 @@ export function createBuyer(config) {
 
   async function buyEvm(listing, chain, started) {
     if (!evmWallet) return { ok: false, reason: "Thiếu private key ví ERC." };
+    const needCap = Number(config.maxFdv) > 0;
+    const cachedUsd = prices.get(chain.symbol) || 0;
+    if (needCap && !(cachedUsd > 0)) return { ok: false, reason: "Chưa có giá USD nên không mua." };
     const provider = providerFor(chain);
-    const signer = signers.get(chain.id);
     const token = ethers.getAddress(listing.contract);
     const value = ethers.parseEther(String(amountFor(chain.id, config.amounts)));
     const feePromise = fees.get(chain.id) ? Promise.resolve(fees.get(chain.id)) : provider.getFeeData();
-    const v2Promise = quoteV2(provider, chain, token, value);
-    const v3Promise = chain.v3Quoter
-      ? Promise.all(chain.v3Fees.map((fee) => quoteV3Fee(provider, chain, token, value, fee)))
-      : Promise.resolve([]);
-    const supplyPromise = Number(config.maxFdv) > 0 ? readSupply(provider, token).catch(() => null) : Promise.resolve(null);
-    const pricePromise = Number(config.maxFdv) > 0 ? priceFor(chain.symbol) : Promise.resolve(0);
-    const [feeData, v2Out, supply, nativeUsd] = await Promise.all([feePromise, v2Promise, supplyPromise, pricePromise]);
+    const quotePromise = quoteOnProvider(provider, chain, token, value, needCap);
+    const [feeData, bundle] = await Promise.all([feePromise, quotePromise]);
     fees.set(chain.id, feeData);
-    const v3Choices = v2Out != null && v2Out > 0n ? ((await within(v3Promise, 150)) || []) : await v3Promise;
-    const choice = choosePool(v2Out, v3Choices);
+    const choice = choosePool(bundle.v2, bundle.v3);
     if (!choice.ok) {
       return {
         ok: false,
@@ -328,7 +411,7 @@ export function createBuyer(config) {
       };
     }
     const { version, quoted, feeTier } = choice;
-    const gate = gateFdv(chain, value, quoted, supply, nativeUsd);
+    const gate = gateFdv(chain, value, quoted, bundle.supply, cachedUsd);
     if (!gate.ok) return { ok: false, reason: gate.reason, fdv: gate.fdv };
     let nonce = takeNonce(chain.id);
     if (nonce == null) nonce = await provider.getTransactionCount(evmWallet.address, "pending");
@@ -365,7 +448,8 @@ export function createBuyer(config) {
       };
     let sent;
     try {
-      sent = await signer.sendTransaction(tx);
+      const signed = await evmWallet.signTransaction(tx);
+      sent = await provider.broadcastTransaction(signed);
     } catch (error) {
       nonces.delete(chain.id);
       return { ok: false, reason: error.shortMessage || error.message || "Không gửi được giao dịch.", venue };
@@ -406,17 +490,19 @@ export function createBuyer(config) {
     });
     const headers = { Accept: "application/json" };
     if (config.jupiterApiKey) headers["x-api-key"] = config.jupiterApiKey;
-    const supplyPromise = Number(config.maxFdv) > 0
+    const needCap = Number(config.maxFdv) > 0;
+    const cachedUsd = prices.get(chain.symbol) || 0;
+    if (needCap && !(cachedUsd > 0)) return { ok: false, reason: "Chưa có giá USD nên không mua." };
+    const supplyPromise = needCap
       ? connection.getTokenSupply(new PublicKey(listing.contract)).catch(() => null)
       : Promise.resolve(null);
-    const pricePromise = Number(config.maxFdv) > 0 ? priceFor(chain.symbol) : Promise.resolve(0);
-    const response = await fetch(`${JUPITER_ORDER}?${params}`, { headers });
+    const response = await fetch(`${JUPITER_ORDER}?${params}`, { headers, signal: AbortSignal.timeout(1200) });
     const order = await response.json().catch(() => ({}));
     const encoded = order.transaction || order.swapTransaction;
     if (!response.ok || !encoded) {
       return { ok: false, reason: order.errorMessage || order.error || `Jupiter HTTP ${response.status}` };
     }
-    const [supply, nativeUsd] = await Promise.all([supplyPromise, pricePromise]);
+    const supply = await supplyPromise;
     const outAmount = BigInt(order.outAmount || 0);
     const inAmount = BigInt(order.inAmount || amount);
     const gate = gateFdv(
@@ -424,7 +510,7 @@ export function createBuyer(config) {
       inAmount,
       outAmount,
       supply?.value?.amount ? BigInt(supply.value.amount) : null,
-      nativeUsd,
+      cachedUsd,
     );
     if (!gate.ok) return { ok: false, reason: gate.reason };
     const transaction = VersionedTransaction.deserialize(Buffer.from(encoded, "base64"));
