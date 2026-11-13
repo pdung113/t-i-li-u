@@ -1,31 +1,33 @@
-import { formatKst } from "./notice.js";
+import { chainById } from "./networks.js";
 
 export function resultText(info) {
-  const lines = [`Upbit ${info.market}`];
+  const lines = [`DEX ${info.market || ""}`.trim()];
   if (info.dry) {
-    lines.push("Chưa mua: đang ở chế độ xem thử, không gửi lệnh.");
+    lines.push("Chưa mua: đang ở chế độ xem thử, không gửi giao dịch.");
   } else if (info.ok) {
     lines.push("Mua được.");
   } else {
     lines.push("Không mua được.");
   }
-  if (info.kind === "limit") lines.push(`Loại: giới hạn, giá ${info.price} KRW, số lượng ${info.volume}`);
-  if (info.kind === "market") lines.push(`Loại: thị trường, tổng ${info.price} KRW`);
-  if (info.orderUuid) lines.push(`Mã lệnh: ${info.orderUuid}`);
-  if (info.when) lines.push(`Giờ mua dự kiến: ${formatKst(info.when)}`);
+  if (info.chain) lines.push(`Mạng: ${info.chain}`);
+  if (info.contract) lines.push(`Contract: ${info.contract}`);
+  if (info.venue) lines.push(`Sàn: ${info.venue}`);
+  if (info.tx) lines.push(`Tx: ${info.tx}`);
+  if (info.gasMultiple) lines.push(`Gas x${info.gasMultiple}`);
   if (info.reason) lines.push(`Lý do: ${info.reason}`);
   if (info.url) lines.push(info.url);
   return lines.join("\n");
 }
 
-export function armedText(listing, plan) {
-  const when = listing.openAt == null ? "khi cặp KRW mở" : formatKst(listing.openAt + listing.buyBanMs);
-  const price = plan?.params?.ord_type === "limit"
-    ? `, giá trần ${plan.params.price} KRW`
-    : plan?.params?.ord_type === "price"
-      ? `, mua thị trường ${plan.params.price} KRW`
-      : "";
-  return `Upbit: thấy listing mới ${listing.market}. Sẽ mua lúc ${when}${price}.`;
+export function armedText(listing, config) {
+  const chain = chainById(listing.chain);
+  const symbol = chain?.symbol || "native";
+  const amount = config?.amount ?? "";
+  return [
+    `Upbit báo listing mới ${listing.market}.`,
+    `Mua ngay trên DEX ${listing.chain || "chưa rõ mạng"}, contract ${listing.contract || "chưa có"}.`,
+    `Số lượng ${amount} ${symbol}, gas x${config?.gasMultiple ?? 2}.`,
+  ].join(" ");
 }
 
 export async function sendTelegram(token, chatId, text) {

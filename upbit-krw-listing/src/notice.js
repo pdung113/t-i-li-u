@@ -130,15 +130,18 @@ export function parseRestrictions(text) {
 }
 
 export function coerceNotice(raw) {
-  const id = raw?.uuid || raw?.uid || raw?.id || raw?.notice_id || "";
+  const source = raw?.announcement && typeof raw.announcement === "object"
+    ? { ...raw.announcement, event_type: raw.event_type || raw.announcement.event_type }
+    : raw;
+  const id = source?.uuid || source?.uid || source?.id || source?.notice_id || "";
   return {
     id: id == null ? "" : String(id),
-    title: stripMarkup(raw?.title || raw?.tt || ""),
-    body: stripMarkup(raw?.body || raw?.bd || raw?.contents || ""),
-    category: String(raw?.category || raw?.cat || ""),
-    listedAt: Date.parse(raw?.first_listed_at || raw?.listed_at || raw?.flat || raw?.lat || raw?.created_at || "") || null,
-    url: raw?.url || (id ? `https://www.upbit.com/service_center/notice?id=${id}&view=share` : ""),
-    eventType: raw?.event_type || raw?.et || "CREATED",
+    title: stripMarkup(source?.title || source?.tt || ""),
+    body: stripMarkup(source?.body || source?.bd || source?.contents || ""),
+    category: String(source?.category || source?.cat || ""),
+    listedAt: Date.parse(source?.first_listed_at || source?.listed_at || source?.flat || source?.lat || source?.created_at || "") || null,
+    url: source?.url || (id ? `https://www.upbit.com/service_center/notice?id=${id}&view=share` : ""),
+    eventType: source?.event_type || source?.et || "CREATED",
   };
 }
 
@@ -151,11 +154,52 @@ export function extractNotices(payload) {
   return [];
 }
 
+const NETWORK_RULES = [
+  ["solana", /solana|솔라나/i],
+  ["bsc", /bnb smart chain|\bbsc\b|바이낸스/i],
+  ["arbitrum", /arbitrum|아비트럼/i],
+  ["optimism", /optimism|옵티미즘/i],
+  ["polygon", /polygon|폴리곤/i],
+  ["base", /\bbase\b|베이스/i],
+  ["ethereum", /ethereum|이더리움/i],
+];
+
+export function mapNetwork(value) {
+  const text = String(value || "");
+  for (const [id, pattern] of NETWORK_RULES) {
+    if (pattern.test(text)) return id;
+  }
+  return "";
+}
+
+export function parseNetwork(text, ticker = "") {
+  if (ticker) {
+    const specific = text.match(new RegExp(`안내된\\s*네트워크\\s*\\(\\s*${ticker}\\s*-\\s*([^)]+?)\\s*\\)`, "i"));
+    if (specific) return mapNetwork(specific[1]);
+  }
+  const tagged = text.match(/안내된\s*네트워크\s*\(\s*[^-()]+\s*-\s*([^)]+?)\s*\)/);
+  if (tagged) return mapNetwork(tagged[1]);
+  const head = text.split(/거래\s*제한|입금\s*유의|추가\s*디지털/)[0];
+  return mapNetwork(head);
+}
+
+export function parseContract(text, ticker = "") {
+  if (ticker) {
+    const near = text.match(new RegExp(`${ticker}[\\s\\S]{0,120}?컨트랙트\\s*주소(?:는|:)?\\s*(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})`, "i"));
+    if (near) return near[1];
+  }
+  const labeled = text.match(/컨트랙트\s*주소(?:는|:)?\s*(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})/);
+  return labeled ? labeled[1] : "";
+}
+
 export function decideNotice(raw) {
   const notice = raw?.title ? coerceNotice(raw) : coerceNotice(raw || {});
   const category = notice.category.toLowerCase();
   if (category && category !== "trade" && category !== "거래" && !category.includes("trade")) {
     return { action: "skip", reason: "wrong-category", listings: [] };
+  }
+  if (/DELETE|REMOVED/i.test(notice.eventType)) {
+    return { action: "skip", reason: "removed", listings: [], title: notice.title };
   }
   if (!isNewListingTitle(notice.title)) {
     return { action: "skip", reason: "not-new-listing", listings: [], title: notice.title };
@@ -168,21 +212,15 @@ export function decideNotice(raw) {
   if (!tickers.length) {
     return { action: "skip", reason: "no-ticker", listings: [], title: notice.title, markets };
   }
-  const rules = parseRestrictions(notice.body);
-  const openAt = parseKoreanDate(openSection(notice.body), notice.listedAt);
-  const refPrice = referenceKrw(notice.body);
   const listings = tickers.map((ticker) => ({
     noticeId: notice.id,
     title: notice.title,
     url: notice.url,
     ticker,
     market: `KRW-${ticker}`,
-    openAt,
-    buyBanMs: rules.bodySeen ? rules.buyBanMs : 5 * 60 * 1000,
-    limitOnlyMs: rules.bodySeen ? rules.limitOnlyMs : 2 * 60 * 60 * 1000,
-    refPrice,
+    chain: parseNetwork(notice.body, ticker),
+    contract: parseContract(notice.body, ticker),
     listedAt: notice.listedAt,
-    assumedRules: !rules.bodySeen,
   }));
   return { action: "buy", listings };
 }

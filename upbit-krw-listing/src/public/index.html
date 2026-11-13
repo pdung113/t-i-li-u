@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Mua listing KRW Upbit</title>
+  <title>Mua listing KRW trên DEX</title>
   <style>
     :root { color-scheme: light; }
     body { margin: 0; font: 16px/1.45 system-ui, sans-serif; background: #f4f1ea; color: #1c1915; }
@@ -28,18 +28,24 @@
 </head>
 <body>
   <main>
-    <h1>Mua listing KRW trên Upbit</h1>
-    <p>Tool chỉ mua coin <strong>listing mới có cặp KRW</strong>. Cặp BTC hoặc USDT không mua. Upbit không có gas và không dùng private key của ví: tiền lấy từ số dư KRW, khóa là Access Key và Secret Key của Open API.</p>
-    <p class="note">Coin mới thường bị cấm mua khoảng 5 phút và khoảng 2 giờ chỉ cho lệnh giới hạn. Ô hệ số giá, mặc định 2, là giá trần so với giá trong thông báo. Ví dụ giá thông báo 58 KRW thì lệnh giới hạn đặt quanh 116–117 KRW. Bot báo cáo: <a href="https://t.me/follow07_bot">t.me/follow07_bot</a>.</p>
+    <h1>Mua listing KRW trên DEX</h1>
+    <p>Khi Upbit đăng thông báo <strong>listing mới có cặp KRW</strong>, tool mua coin đó ngay trên DEX của mạng ghi trong thông báo. Không đặt lệnh trên sàn KRW của Upbit.</p>
+    <p class="note">Access Key và Secret Key chỉ để nhận thông báo. Private key ví dùng để ký lệnh DEX và không được gửi đi đâu ngoài giao dịch trên mạng đó. Một ô số lượng dùng cho đồng native của mạng trong tin: ETH, BNB, SOL hoặc POL. Tối đa 5. Thiếu private key của đúng mạng thì không mua được. Gas mặc định x2, tối đa x20. Bot báo cáo: <a href="https://t.me/follow07_bot">t.me/follow07_bot</a>.</p>
     <form id="form">
-      <label for="accessKey">Access Key</label>
+      <label for="accessKey">Upbit Access Key</label>
       <input id="accessKey" name="accessKey" autocomplete="off" required>
-      <label for="secretKey">Secret Key</label>
+      <label for="secretKey">Upbit Secret Key</label>
       <input id="secretKey" name="secretKey" type="password" autocomplete="off" required>
-      <label for="budgetKrw">Số KRW mỗi coin</label>
-      <input id="budgetKrw" name="budgetKrw" inputmode="decimal" value="100000" required>
-      <label for="multiple">Hệ số giá (2 = gấp đôi)</label>
-      <input id="multiple" name="multiple" inputmode="decimal" value="2" required>
+      <label for="evmPrivateKey">Private key ví EVM</label>
+      <input id="evmPrivateKey" name="evmPrivateKey" type="password" autocomplete="off" placeholder="Để trống nếu chỉ mua Solana">
+      <label for="solanaPrivateKey">Private key ví Solana</label>
+      <input id="solanaPrivateKey" name="solanaPrivateKey" type="password" autocomplete="off" placeholder="Base58 hoặc mảng JSON">
+      <label for="amount">Số native mỗi coin (tối đa 5)</label>
+      <input id="amount" name="amount" inputmode="decimal" placeholder="0.05" required>
+      <label for="gasMultiple">Hệ số gas (2 = gấp đôi)</label>
+      <input id="gasMultiple" name="gasMultiple" inputmode="decimal" value="2" required>
+      <label for="slippagePercent">Trượt giá %</label>
+      <input id="slippagePercent" name="slippagePercent" inputmode="decimal" value="10" required>
       <label for="telegramToken">Token bot Telegram</label>
       <input id="telegramToken" name="telegramToken" type="password" autocomplete="off">
       <label for="telegramChatId">Chat id</label>
@@ -47,9 +53,9 @@
         <input id="telegramChatId" name="telegramChatId" autocomplete="off">
         <button class="secondary" id="chat" type="button">Lấy chat id</button>
       </div>
-      <label for="noticeUrl">Link thông báo, nếu muốn canh một tin đã đăng</label>
+      <label for="noticeUrl">Link thông báo, chỉ mua nếu tin còn trong 3 phút</label>
       <input id="noticeUrl" name="noticeUrl" placeholder="https://www.upbit.com/service_center/notice?id=...">
-      <label class="check"><input id="live" type="checkbox"> Gửi lệnh thật</label>
+      <label class="check"><input id="live" type="checkbox"> Gửi giao dịch thật trên DEX</label>
       <div class="actions">
         <button id="start" type="submit">Bắt đầu</button>
         <button id="stop" class="secondary" type="button">Dừng</button>
@@ -65,15 +71,18 @@
     const error = document.querySelector("#error");
     const log = document.querySelector("#log");
     const form = document.querySelector("#form");
-    const fields = ["accessKey", "secretKey", "budgetKrw", "multiple", "telegramToken", "telegramChatId", "noticeUrl", "live"];
+    const fields = ["accessKey", "secretKey", "evmPrivateKey", "solanaPrivateKey", "amount", "gasMultiple", "slippagePercent", "telegramToken", "telegramChatId", "noticeUrl", "live"];
     const field = (id) => document.getElementById(id);
 
     function payload() {
       return {
         accessKey: field("accessKey").value.trim(),
         secretKey: field("secretKey").value.trim(),
-        budgetKrw: Number(field("budgetKrw").value),
-        multiple: Number(field("multiple").value),
+        evmPrivateKey: field("evmPrivateKey").value.trim(),
+        solanaPrivateKey: field("solanaPrivateKey").value.trim(),
+        amount: field("amount").value.trim(),
+        gasMultiple: field("gasMultiple").value.trim(),
+        slippagePercent: field("slippagePercent").value.trim(),
         telegramToken: field("telegramToken").value.trim(),
         telegramChatId: field("telegramChatId").value.trim(),
         noticeUrl: field("noticeUrl").value.trim(),
@@ -124,8 +133,9 @@
     async function refresh() {
       const response = await fetch("/api/status");
       const body = await response.json();
-      if (!field("budgetKrw").value) field("budgetKrw").value = body.budgetKrw;
-      if (!field("multiple").value) field("multiple").value = body.multiple;
+      if (!field("amount").value && body.amount) field("amount").value = body.amount;
+      if (!field("gasMultiple").value) field("gasMultiple").value = body.gasMultiple;
+      if (!field("slippagePercent").value) field("slippagePercent").value = body.slippagePercent;
       if (!field("telegramChatId").value && body.telegramChatId) field("telegramChatId").value = body.telegramChatId;
       if (!field("noticeUrl").value && body.noticeUrl) field("noticeUrl").value = body.noticeUrl;
       log.textContent = body.lines.length ? body.lines.join("\n") : "Đang chờ.";

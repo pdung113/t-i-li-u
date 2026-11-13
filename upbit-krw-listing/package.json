@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Mua coin listing mới có cặp KRW trên Upbit bằng Open API và báo kết quả qua Telegram.",
+  "description": "Khi Upbit báo listing mới có cặp KRW, mua coin đó trên DEX và báo kết quả qua Telegram.",
   "engines": {
     "node": ">=22"
   },
@@ -12,6 +12,9 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "bs58": "^6.0.0",
+    "ethers": "^6.17.0",
     "ws": "^8.18.3"
   }
 }

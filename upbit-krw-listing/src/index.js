@@ -5,8 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createClient } from "./client.js";
 import { normalizeState, startEngine } from "./engine.js";
 import { decideNotice } from "./notice.js";
-import { explainError } from "./order.js";
-import { MIN_KRW_ORDER } from "./price.js";
+import { buyOnDex, walletFromEvmKey, walletFromSolanaKey } from "./swap.js";
 import { discoverChatId, sendTelegram } from "./telegram.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -14,12 +13,37 @@ const dir = path.resolve(root, "..");
 const envPath = path.join(dir, ".env");
 const statePath = path.join(dir, "data", "state.json");
 const htmlPath = path.join(root, "public", "index.html");
+const MAX_AMOUNT = 5;
+const KEPT_ENV = [
+  "RPC_ETHEREUM",
+  "RPC_BSC",
+  "RPC_BASE",
+  "RPC_ARBITRUM",
+  "RPC_OPTIMISM",
+  "RPC_POLYGON",
+  "RPC_SOLANA",
+  "JUPITER_API_KEY",
+];
 
 const lines = [];
 let engine = null;
-let krwBalance = null;
 let current = null;
 let telegramWarned = false;
+
+const AUTH_HINTS = {
+  invalid_access_key: "Access Key không đúng.",
+  invalid_secret_key: "Secret Key không đúng.",
+  jwt_verification: "Secret Key không khớp Access Key.",
+  no_authorization_ip: "IP máy này chưa được thêm vào API key.",
+  out_of_scope: "API key không có quyền đọc tài khoản.",
+  expired_jwt: "JWT hết hạn. Thử lại.",
+};
+
+function explainError(name, message) {
+  const hint = AUTH_HINTS[name];
+  const detail = [name, message].filter(Boolean).join(": ");
+  return hint ? `${hint} (${detail})` : detail || "Upbit từ chối kết nối.";
+}
 
 function log(message) {
   const line = `${new Date().toISOString()}  ${message}`;
@@ -58,40 +82,89 @@ function saveState(state) {
 }
 
 function writeEnv(config) {
+  const existing = loadEnvFile();
   const text = [
     `UPBIT_ACCESS_KEY=${config.accessKey}`,
     `UPBIT_SECRET_KEY=${config.secretKey}`,
-    `BUY_KRW=${config.budgetKrw}`,
-    `PRICE_MULTIPLE=${config.multiple}`,
+    `EVM_PRIVATE_KEY=${config.evmPrivateKey}`,
+    `SOLANA_PRIVATE_KEY=${config.solanaPrivateKey}`,
+    `BUY_AMOUNT=${config.amount}`,
+    `GAS_MULTIPLE=${config.gasMultiple}`,
+    `SLIPPAGE_PERCENT=${config.slippagePercent}`,
     `TELEGRAM_BOT_TOKEN=${config.telegramToken}`,
     `TELEGRAM_CHAT_ID=${config.telegramChatId}`,
     `LIVE=${config.live ? "true" : "false"}`,
     `NOTICE_URL=${config.noticeUrl || ""}`,
+    ...KEPT_ENV.filter((key) => existing[key]).map((key) => `${key}=${existing[key]}`),
     "",
   ].join("\n");
   fs.writeFileSync(envPath, text, { mode: 0o600 });
+  try {
+    fs.chmodSync(envPath, 0o600);
+  } catch {
+    // Quyền file đã đặt lúc ghi.
+  }
 }
 
 function configFromEnv(env) {
   return {
     accessKey: env.UPBIT_ACCESS_KEY || "",
     secretKey: env.UPBIT_SECRET_KEY || "",
-    budgetKrw: Number(env.BUY_KRW || 0),
-    multiple: Number(env.PRICE_MULTIPLE || 2),
+    evmPrivateKey: env.EVM_PRIVATE_KEY || "",
+    solanaPrivateKey: env.SOLANA_PRIVATE_KEY || "",
+    amount: Number(env.BUY_AMOUNT || 0),
+    gasMultiple: Number(env.GAS_MULTIPLE || 2),
+    slippagePercent: Number(env.SLIPPAGE_PERCENT || 10),
     telegramToken: env.TELEGRAM_BOT_TOKEN || "",
     telegramChatId: env.TELEGRAM_CHAT_ID || "",
     live: env.LIVE === "true",
     noticeUrl: env.NOTICE_URL || "",
+    jupiterApiKey: env.JUPITER_API_KEY || "",
+    rpc: {
+      ethereum: env.RPC_ETHEREUM || "",
+      bsc: env.RPC_BSC || "",
+      base: env.RPC_BASE || "",
+      arbitrum: env.RPC_ARBITRUM || "",
+      optimism: env.RPC_OPTIMISM || "",
+      polygon: env.RPC_POLYGON || "",
+      solana: env.RPC_SOLANA || "",
+    },
   };
+}
+
+function parseDecimal(value) {
+  const text = String(value ?? "").trim().replace(/\s/g, "").replace(",", ".");
+  if (!/^\d+(\.\d+)?$/.test(text)) return Number.NaN;
+  return Number(text);
 }
 
 function validate(config) {
   if (!config.accessKey || !config.secretKey) throw new Error("Cần Access Key và Secret Key của Upbit Open API.");
-  if (!Number.isFinite(config.budgetKrw) || config.budgetKrw < MIN_KRW_ORDER) {
-    throw new Error(`Số KRW mỗi coin phải từ ${MIN_KRW_ORDER}.`);
+  if (!Number.isFinite(config.amount) || config.amount <= 0 || config.amount > MAX_AMOUNT) {
+    throw new Error(`Số native mỗi coin phải lớn hơn 0 và không quá ${MAX_AMOUNT}.`);
   }
-  if (!Number.isFinite(config.multiple) || config.multiple < 1 || config.multiple > 10) {
-    throw new Error("Hệ số giá phải từ 1 đến 10. Nhập 2 nếu muốn giá trần gấp đôi.");
+  if (!Number.isFinite(config.gasMultiple) || config.gasMultiple < 1 || config.gasMultiple > 20) {
+    throw new Error("Hệ số gas phải từ 1 đến 20. Nhập 2 nếu muốn gấp đôi.");
+  }
+  if (!Number.isFinite(config.slippagePercent) || config.slippagePercent < 1 || config.slippagePercent > 50) {
+    throw new Error("Trượt giá phải từ 1% đến 50%.");
+  }
+  if (config.evmPrivateKey) {
+    try {
+      walletFromEvmKey(config.evmPrivateKey);
+    } catch {
+      throw new Error("Private key ví EVM không đúng.");
+    }
+  }
+  if (config.solanaPrivateKey) {
+    try {
+      walletFromSolanaKey(config.solanaPrivateKey);
+    } catch {
+      throw new Error("Private key ví Solana không đúng.");
+    }
+  }
+  if (config.live && !config.evmPrivateKey && !config.solanaPrivateKey) {
+    throw new Error("Cần private key ví EVM hoặc Solana để gửi giao dịch thật.");
   }
 }
 
@@ -116,15 +189,16 @@ async function start(config) {
   validate(config);
   const client = createClient({ accessKey: config.accessKey, secretKey: config.secretKey });
   try {
-    krwBalance = await client.krwBalance();
+    await client.krwBalance();
   } catch (error) {
     throw new Error(error.code ? explainError(error.code, "") : error.message);
   }
   writeEnv(config);
   current = config;
   telegramWarned = false;
-  log(`Đã xác thực API. KRW khả dụng: ${krwBalance}. Mỗi listing dùng ${config.budgetKrw} KRW, hệ số giá x${config.multiple}.`);
-  log(config.live ? "Đang gửi lệnh thật." : "Chế độ xem thử: không gửi lệnh.");
+  log("Đã xác thực API Upbit. Key này chỉ để nhận thông báo, không mua trên sàn KRW.");
+  log(`Listing mới có cặp KRW sẽ mua ngay trên DEX: ${config.amount} native, gas x${config.gasMultiple}, trượt giá ${config.slippagePercent}%.`);
+  log(config.live ? "Đang gửi giao dịch thật trên DEX." : "Chế độ xem thử: không ký và không gửi giao dịch.");
   const state = readState();
   if (config.noticeUrl) {
     const notice = await client.fetchNotice(config.noticeUrl);
@@ -138,13 +212,17 @@ async function start(config) {
           state.armed = state.armed.filter((item) => `${item.noticeId}:${item.ticker}` !== `${listing.noticeId}:${listing.ticker}`);
           state.armed.push(listing);
         }
-        log(`Đã nạp thông báo ${decision.listings.map((item) => item.market).join(", ")}.`);
+        log(`Đã đọc ${decision.listings.map((item) => item.market).join(", ")}. Chỉ mua nếu thông báo còn trong 3 phút.`);
       }
     }
   }
   engine = startEngine({
     client,
-    config: { ...config, saveState },
+    config: {
+      ...config,
+      saveState,
+      swap: (listing) => buyOnDex(listing, config),
+    },
     log,
     notify,
     state,
@@ -191,12 +269,16 @@ function readBody(req) {
   });
 }
 
-function formConfig(body) {
+function formConfig(body, env) {
   return {
+    ...configFromEnv(env),
     accessKey: String(body.accessKey || "").trim(),
     secretKey: String(body.secretKey || "").trim(),
-    budgetKrw: Number(body.budgetKrw),
-    multiple: Number(body.multiple),
+    evmPrivateKey: String(body.evmPrivateKey || "").trim(),
+    solanaPrivateKey: String(body.solanaPrivateKey || "").trim(),
+    amount: parseDecimal(body.amount),
+    gasMultiple: parseDecimal(body.gasMultiple),
+    slippagePercent: parseDecimal(body.slippagePercent),
     telegramToken: String(body.telegramToken || "").trim(),
     telegramChatId: String(body.telegramChatId || "").trim(),
     live: body.live === true,
@@ -216,12 +298,14 @@ function serve() {
         const env = configFromEnv(loadEnvFile());
         send(res, 200, {
           running: Boolean(engine),
-          krw: krwBalance,
           lines,
           live: current?.live === true,
-          budgetKrw: current?.budgetKrw || env.budgetKrw || 100000,
-          multiple: current?.multiple || env.multiple || 2,
+          amount: current?.amount || env.amount || "",
+          gasMultiple: current?.gasMultiple || env.gasMultiple || 2,
+          slippagePercent: current?.slippagePercent || env.slippagePercent || 10,
           hasKeys: Boolean(env.accessKey && env.secretKey),
+          hasEvmKey: Boolean(env.evmPrivateKey),
+          hasSolanaKey: Boolean(env.solanaPrivateKey),
           telegramChatId: current?.telegramChatId || env.telegramChatId || "",
           noticeUrl: current?.noticeUrl || env.noticeUrl || "",
         });
@@ -236,7 +320,7 @@ function serve() {
         return send(res, 200, { chatId: found.chatId });
       }
       if (req.method === "POST" && url.pathname === "/api/start") {
-        const config = formConfig(await readBody(req));
+        const config = formConfig(await readBody(req), loadEnvFile());
         await start(config);
         return send(res, 200, { ok: true });
       }

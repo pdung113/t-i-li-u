@@ -1,7 +1,6 @@
 import WebSocket from "ws";
 import { queryString, signJwt } from "./auth.js";
 import { extractNotices, noticeIdFromUrl } from "./notice.js";
-import { judgeResponse } from "./order.js";
 
 const API = "https://api.upbit.com";
 const NOTICES = "https://api-manager.upbit.com/api/v1/announcements";
@@ -62,49 +61,6 @@ export function createClient({ accessKey, secretKey }) {
       }
       const row = json.find((item) => item.currency === "KRW");
       return row ? Number(row.balance) : 0;
-    },
-
-    async markets() {
-      const { status, json } = await publicGet(`${API}/v1/market/all?isDetails=false`);
-      if (status !== 200 || !Array.isArray(json)) throw new Error(`market/all HTTP ${status}`);
-      return json.map((item) => item.market).filter(Boolean);
-    },
-
-    async bestAsk(market) {
-      const { status, json } = await publicGet(`${API}/v1/orderbook?markets=${encodeURIComponent(market)}`);
-      if (status !== 200 || !Array.isArray(json)) return null;
-      const ask = Number(json[0]?.orderbook_units?.[0]?.ask_price);
-      return Number.isFinite(ask) && ask > 0 ? ask : null;
-    },
-
-    async chance(market) {
-      const { status, json } = await exchange("GET", "/v1/orders/chance", { market });
-      if (status !== 200 || !json) return null;
-      const fee = Number(json.bid_fee);
-      const minTotal = Number(json.market?.bid?.min_total ?? json.market?.min_total);
-      return {
-        fee: Number.isFinite(fee) ? fee : null,
-        minTotal: Number.isFinite(minTotal) ? minTotal : null,
-      };
-    },
-
-    async place(params) {
-      const { status, json } = await exchange("POST", "/v1/orders", params);
-      return judgeResponse(status, json);
-    },
-
-    async lookup(identifier) {
-      const { status, json } = await exchange("GET", "/v1/order", { identifier });
-      if (status === 200 && json?.uuid) return json;
-      return null;
-    },
-
-    async clockOffset() {
-      const started = Date.now();
-      const result = await publicGet(`${API}/v1/ticker?markets=KRW-BTC`);
-      const finished = Date.now();
-      if (!result.date) return 0;
-      return Date.parse(result.date) - (started + finished) / 2;
     },
 
     async listNotices() {
