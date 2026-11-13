@@ -225,7 +225,7 @@ async function start(config) {
   log(`Số lượng theo chain: ${chosen.join(", ")}. Trượt giá ${config.slippagePercent}%. FDV tối đa ${cap}. Thanh khoản pool ${floor}. Gas x${config.gasMultiple}.`);
   if (!config.maxFdv) log("Chưa đặt FDV tối đa. Tool sẽ mua đúng giá pool lúc tin ra, kể cả khi giá đã bị đẩy.");
   if (!config.minLiquidity) log("Chưa đặt thanh khoản tối thiểu. Pool mỏng vẫn có thể được mua và bị trượt giá.");
-  log("Gas, nonce và kết nối RPC được giữ sẵn. Hỏi giá một lần rồi gửi ngay. Gửi xong là báo, không chờ block xác nhận.");
+  log("Gas, nonce và kết nối RPC được giữ sẵn. Hỏi giá trên đường riêng rồi gửi cùng lúc hai RPC. Gửi xong là báo, không chờ block xác nhận.");
   log(config.live ? "Đang gửi giao dịch thật trên DEX." : "Chế độ xem thử: không ký và không gửi giao dịch.");
   const state = readState();
   buyer = createBuyer({

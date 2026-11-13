@@ -357,6 +357,7 @@ export function createBuyer(config) {
     solanaKey = null;
   }
   const providers = new Map();
+  const priceProviders = new Map();
   const fees = new Map();
   const nonces = new Map();
   const prices = new Map(
@@ -405,6 +406,58 @@ export function createBuyer(config) {
     providers.delete(chain.id);
   }
 
+  function openProvider(url, chain) {
+    const network = ethers.Network.from(chain.chainId);
+    const provider = String(url).startsWith("ws")
+      ? new ethers.WebSocketProvider(url, network, { staticNetwork: network })
+      : new ethers.JsonRpcProvider(url, network, { staticNetwork: network });
+    provider.on?.("error", () => {});
+    return provider;
+  }
+
+  function priceProviderFor(chain) {
+    if (config.providerFor) return providerFor(chain);
+    let provider = priceProviders.get(chain.id);
+    if (!provider) {
+      provider = openProvider(config.rpc?.[chain.id] || chain.ws || chain.rpc, chain);
+      priceProviders.set(chain.id, provider);
+    }
+    return provider;
+  }
+
+  function httpProvider(chain) {
+    if (config.providerFor || config.broadcastFor) return null;
+    const url = config.rpc?.[chain.id] || chain.rpc;
+    if (!url || String(url).startsWith("ws")) return null;
+    if (!String(providerUrl(chain)).startsWith("ws")) return null;
+    const key = `http:${chain.id}`;
+    let provider = providers.get(key);
+    if (!provider) {
+      provider = openProvider(url, chain);
+      providers.set(key, provider);
+    }
+    return provider;
+  }
+
+  async function sendSigned(chain, primary, signed) {
+    const extra = config.broadcastFor ? config.broadcastFor(chain) : httpProvider(chain);
+    if (!extra || extra === primary) return primary.broadcastTransaction(signed);
+    const settled = await Promise.allSettled([
+      primary.broadcastTransaction(signed),
+      extra.broadcastTransaction(signed),
+    ]);
+    const won = settled.find((item) => item.status === "fulfilled" && item.value?.hash);
+    if (won) return won.value;
+    const known = settled.some((item) => /already known|already imported|nonce too low/i.test(
+      `${item.reason?.shortMessage || ""} ${item.reason?.message || ""}`,
+    ));
+    if (known) {
+      const hash = ethers.Transaction.from(signed).hash;
+      return { hash, wait: (confirms) => primary.waitForTransaction(hash, confirms) };
+    }
+    throw settled.find((item) => item.status === "rejected")?.reason || new Error("Không gửi được giao dịch.");
+  }
+
   function solanaConnection() {
     if (!solana) {
       const chain = chainById("solana");
@@ -428,7 +481,7 @@ export function createBuyer(config) {
       const out = BigInt(order.outAmount || 0);
       return response.ok && out > 0n ? usdFromRaw(out, chain.stableDecimals) : 0;
     }
-    const provider = providerFor(chain);
+    const provider = priceProviderFor(chain);
     const one = 10n ** BigInt(chain.nativeDecimals);
     const bundle = await quoteOnProvider(provider, chain, chain.stable, one, false, false);
     const choice = choosePool(bundle.v2, bundle.v3);
@@ -525,7 +578,11 @@ export function createBuyer(config) {
           return;
         }
         if (!evmWallet) return;
-        await warmEvm(chain, true);
+        const http = httpProvider(chain);
+        await Promise.all([
+          warmEvm(chain, true),
+          http ? http.getFeeData().catch(() => {}) : null,
+        ]);
       })),
     ]);
   }
@@ -541,7 +598,9 @@ export function createBuyer(config) {
     stopped = true;
     clearInterval(timer);
     for (const provider of providers.values()) provider.destroy?.();
+    for (const provider of priceProviders.values()) provider.destroy?.();
     providers.clear();
+    priceProviders.clear();
   }
 
   function takeNonce(chainId) {
@@ -591,24 +650,25 @@ export function createBuyer(config) {
     const value = ethers.parseEther(String(amountFor(chain.id, config.amounts)));
     const quoteOnce = (current) => quoteOnProvider(current, chain, token, value, needCap, true);
     let feeData = fees.get(chain.id);
+    const feeWatch = provider.getFeeData().then((fee) => {
+      if (fee) fees.set(chain.id, fee);
+      return fee;
+    }).catch(() => null);
     let bundle;
     try {
-      [feeData, bundle] = await Promise.all([
-        feeData ? Promise.resolve(feeData) : provider.getFeeData(),
-        quoteOnce(provider),
-      ]);
+      bundle = await quoteOnce(provider);
     } catch (error) {
       const custom = config.rpc?.[chain.id];
       if (custom || !chain.ws || wsFailed.has(chain.id) || !isTransport(error)) throw error;
       wsFailed.add(chain.id);
       dropProvider(chain);
       provider = providerFor(chain);
-      [feeData, bundle] = await Promise.all([
-        provider.getFeeData(),
-        quoteOnce(provider),
-      ]);
+      const retriedFee = provider.getFeeData().catch(() => null);
+      bundle = await quoteOnce(provider);
+      feeData = (await raceDelay(retriedFee, feeData ? 0 : 1500)) || feeData;
     }
-    fees.set(chain.id, feeData);
+    feeData = (await raceDelay(feeWatch, feeData ? 0 : 1500)) || feeData;
+    if (feeData) fees.set(chain.id, feeData);
     const choice = choosePool(bundle.v2, bundle.v3);
     if (!choice.ok) {
       return {
@@ -676,7 +736,7 @@ export function createBuyer(config) {
     let sent;
     try {
       const signed = await evmWallet.signTransaction(tx);
-      sent = await provider.broadcastTransaction(signed);
+      sent = await sendSigned(chain, provider, signed);
     } catch (error) {
       nonces.delete(chain.id);
       return { ok: false, reason: error.shortMessage || error.message || "Không gửi được giao dịch.", venue };

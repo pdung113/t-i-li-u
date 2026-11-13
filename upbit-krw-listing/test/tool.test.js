@@ -710,7 +710,7 @@ test("hỏi giá một lần khi RPC đã nóng, pool lệch hoặc FDV cao thì
   const started = Date.now();
   const bought = await buyer.buy({ chain: "ethereum", contract: token, receivedAt: started });
   buyer.stop();
-  assert.deepEqual(provider.calls, ["quote", "send"]);
+  assert.deepEqual(provider.calls, ["fee", "quote", "send"]);
   assert.equal(bought.ok, true);
   assert.equal(bought.pending, true);
   assert.equal(bought.venue, "Uniswap V2");
@@ -735,7 +735,7 @@ test("hỏi giá một lần khi RPC đã nóng, pool lệch hoặc FDV cao thì
   skewBuyer.stop();
   assert.equal(refused.ok, false);
   assert.match(refused.reason, /lệch giá/);
-  assert.deepEqual(skewProvider.calls, ["quote"]);
+  assert.deepEqual(skewProvider.calls, ["fee", "quote"]);
 
   const cappedPlan = quoteCalls(chain, token, value, true);
   const cappedRaw = quotePayload(cappedPlan, (step) => {
@@ -758,7 +758,7 @@ test("hỏi giá một lần khi RPC đã nóng, pool lệch hoặc FDV cao thì
   cappedBuyer.stop();
   assert.equal(overCap.ok, false);
   assert.match(overCap.reason, /FDV/);
-  assert.deepEqual(cappedProvider.calls, ["quote"]);
+  assert.deepEqual(cappedProvider.calls, ["fee", "quote"]);
 });
 
 test("multicall hỏng thì vẫn đọc được pool V2", async () => {
@@ -810,7 +810,7 @@ test("pool mỏng hơn 100k mỗi bên thì không gửi giao dịch", async () 
   assert.equal(refused.ok, false);
   assert.match(refused.reason, /Thanh khoản thấp/);
   assert.match(refused.reason, /100,000 USD/);
-  assert.deepEqual(thinProvider.calls, ["quote"]);
+  assert.deepEqual(thinProvider.calls, ["fee", "quote"]);
 
   const deep = quotePayload(plan, (step) => {
     if (step.kind === "v2") return 10n ** 18n;
@@ -834,7 +834,7 @@ test("pool mỏng hơn 100k mỗi bên thì không gửi giao dịch", async () 
   assert.equal(bought.ok, true);
   assert.equal(Math.round(bought.nativeLiquidity), 200_000);
   assert.equal(Math.round(bought.tokenLiquidity), 200_000);
-  assert.deepEqual(deepProvider.calls, ["quote", "send"]);
+  assert.deepEqual(deepProvider.calls, ["fee", "quote", "send"]);
 
   const unread = quotePayload(plan, (step) => (step.kind === "v2" ? 10n ** 18n : null));
   const unreadProvider = fakeProvider(() => unread);
@@ -852,7 +852,7 @@ test("pool mỏng hơn 100k mỗi bên thì không gửi giao dịch", async () 
   const blocked = await unreadBuyer.buy({ chain: "ethereum", contract: token, receivedAt: Date.now() });
   unreadBuyer.stop();
   assert.match(blocked.reason, /Không đọc được thanh khoản/);
-  assert.deepEqual(unreadProvider.calls, ["quote"]);
+  assert.deepEqual(unreadProvider.calls, ["fee", "quote"]);
 
   const preview = fakeProvider(() => deep);
   const previewBuyer = createBuyer({
@@ -871,7 +871,7 @@ test("pool mỏng hơn 100k mỗi bên thì không gửi giao dịch", async () 
   assert.equal(looked.dry, true);
   assert.match(looked.reason, /Sẽ mua trên Uniswap V2/);
   assert.match(looked.reason, /200,000 USD/);
-  assert.deepEqual(preview.calls, ["quote"]);
+  assert.deepEqual(preview.calls, ["fee", "quote"]);
 });
 
 test("gửi xong là trả về, socket đứt thì hỏi lại một lần", async () => {
@@ -936,6 +936,36 @@ test("gửi xong là trả về, socket đứt thì hỏi lại một lần", as
   flakyBuyer.stop();
   assert.equal(recovered.pending, true);
   assert.equal(quotes, 2);
+});
+
+test("cùng một lệnh được gửi trên hai đường RPC", async () => {
+  const chain = chainById("ethereum");
+  const token = "0x1111111111111111111111111111111111111111";
+  const value = ethers.parseEther("0.01");
+  const plan = quoteCalls(chain, token, value, false);
+  const raw = quotePayload(plan, (step) => (step.kind === "v2" ? 1_000_000n : null));
+  const provider = fakeProvider(() => raw);
+  const extra = [];
+  const buyer = createBuyer({
+    evmPrivateKey: `0x${"11".repeat(32)}`,
+    amounts: { ethereum: 0.01 },
+    gasMultiple: 2,
+    slippagePercent: 10,
+    providerFor: () => provider,
+    broadcastFor: () => ({
+      async broadcastTransaction(signed) {
+        extra.push(signed);
+        return { hash: `0x${"ef".repeat(32)}`, wait: async () => ({ status: 1 }) };
+      },
+    }),
+  });
+  await buyer.warm();
+  provider.calls.length = 0;
+  const bought = await buyer.buy({ chain: "ethereum", contract: token, receivedAt: Date.now() });
+  buyer.stop();
+  assert.equal(bought.pending, true);
+  assert.equal(extra.length, 1);
+  assert.equal(provider.calls.filter((call) => call === "send").length, 1);
 });
 
 test("chưa có giá thì thử lại, pool mỏng thì dừng", async () => {
