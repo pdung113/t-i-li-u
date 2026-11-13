@@ -15,6 +15,11 @@ export function resultText(info) {
   if (info.gasMultiple) lines.push(`Gas x${info.gasMultiple}`);
   if (info.slippagePercent) lines.push(`Trượt giá: ${info.slippagePercent}%`);
   if (info.fdv > 0) lines.push(`FDV: ${formatUsd(info.fdv)} USD`);
+  if (info.nativeLiquidity > 0 && info.tokenLiquidity > 0) {
+    lines.push(`Thanh khoản: ${info.symbol || "native"} ${formatUsd(info.nativeLiquidity)} USD, token ${formatUsd(info.tokenLiquidity)} USD`);
+  } else if (info.poolLiquidity > 0) {
+    lines.push(`Thanh khoản pool: ${formatUsd(info.poolLiquidity)} USD`);
+  }
   if (info.lagMs != null) {
     lines.push(info.lagMs > 500
       ? `Gửi sau: ${info.lagMs} ms, chậm hơn mục tiêu 500 ms.`
@@ -29,10 +34,11 @@ export function armedText(listing, config) {
   const chain = chainById(listing.chain);
   const amount = amountFor(listing.chain, config?.amounts);
   const cap = Number(config?.maxFdv) > 0 ? `, FDV tối đa ${formatUsd(config.maxFdv)} USD` : "";
+  const floor = Number(config?.minLiquidity) > 0 ? `, mỗi bên pool ít nhất ${formatUsd(config.minLiquidity)} USD` : "";
   return [
     `Upbit báo listing mới ${listing.market}.`,
     `Mua ngay trên DEX ${listing.chain || "chưa rõ mạng"}, ${amount} ${chain?.symbol || ""}, contract ${listing.contract || "chưa có"}.`,
-    `Trượt giá ${config?.slippagePercent ?? 10}%, gas x${config?.gasMultiple ?? 2}${cap}.`,
+    `Trượt giá ${config?.slippagePercent ?? 10}%, gas x${config?.gasMultiple ?? 2}${cap}${floor}.`,
   ].join(" ");
 }
 

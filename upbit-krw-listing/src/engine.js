@@ -38,7 +38,7 @@ function contractFits(chain, contract) {
 }
 
 function retryable(result) {
-  return /Không thấy pool|timeout|ETIMEDOUT|ECONN|fetch failed|socket|network|HTTP/i.test(result?.reason || "");
+  return /Không thấy pool|timeout|ETIMEDOUT|ECONN|fetch failed|socket|network|HTTP|Không đọc được thanh khoản/i.test(result?.reason || "");
 }
 
 function emptyState() {

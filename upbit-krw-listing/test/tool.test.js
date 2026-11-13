@@ -5,9 +5,9 @@ import { queryString, readJwtPayload, signJwt } from "../src/auth.js";
 import { coerceNotice, decideNotice, parseContract, parseNetwork } from "../src/notice.js";
 import { executeListing, listingIsFresh, FRESH_MS, shouldBuyNow, startEngine } from "../src/engine.js";
 import { ethers } from "ethers";
-import { MULTICALL, choosePool, createBuyer, decodeQuote, isBaseAsset, quoteCalls, quoteOnProvider } from "../src/swap.js";
+import { MULTICALL, choosePool, createBuyer, decodeQuote, isBaseAsset, quoteCalls, quoteOnProvider, v2PairAddress, v3PoolAddress } from "../src/swap.js";
 import { chainById } from "../src/networks.js";
-import { amountFor, fdvAllows, fdvUsd } from "../src/limits.js";
+import { amountFor, fdvAllows, fdvUsd, liquidityAllows, parseUserNumber, poolSidesUsd, solanaLiquidityAllows } from "../src/limits.js";
 import { minOut, priorityLamports, scaleUnits } from "../src/networks.js";
 import { resultText } from "../src/telegram.js";
 
@@ -140,6 +140,45 @@ test("mỗi chain một số lượng và FDV cao thì không mua", () => {
   assert.equal(fdvAllows(fdv, 1_000_000).ok, false);
   assert.equal(fdvAllows(null, 1_000_000).ok, false);
   assert.equal(fdvAllows(fdv, null).ok, true);
+});
+
+test("thanh khoản tính riêng hai bên và 100.000 vẫn là một trăm nghìn", () => {
+  assert.equal(parseUserNumber("100.000"), 100000);
+  assert.equal(parseUserNumber("100,000"), 100000);
+  assert.equal(parseUserNumber("0,05"), 0.05);
+  assert.equal(parseUserNumber(""), null);
+  const sides = poolSidesUsd({
+    nativeReserve: 100n * 10n ** 18n,
+    tokenReserve: 10n ** 22n,
+    amountIn: 10n ** 16n,
+    amountOut: 10n ** 18n,
+    nativeUsd: 2000,
+    nativeDecimals: 18,
+  });
+  assert.equal(Math.round(sides.native), 200_000);
+  assert.equal(Math.round(sides.token), 200_000);
+  assert.equal(liquidityAllows(sides, 100_000, "ETH").ok, true);
+  const thin = { native: 200_000, token: 40_000 };
+  const refused = liquidityAllows(thin, 100_000, "ETH");
+  assert.equal(refused.ok, false);
+  assert.match(refused.reason, /40,000 USD/);
+  assert.match(refused.reason, /mỗi bên/);
+  assert.match(liquidityAllows(null, 100_000).reason, /Không đọc được thanh khoản/);
+  assert.equal(liquidityAllows(thin, null).ok, true);
+  assert.equal(solanaLiquidityAllows(250_000, 100_000).ok, true);
+  assert.equal(solanaLiquidityAllows(150_000, 100_000).ok, false);
+  assert.match(solanaLiquidityAllows(null, 100_000).reason, /Không đọc được thanh khoản Solana/);
+});
+
+test("địa chỉ pool CREATE2 trùng pool đang có trên chain", () => {
+  const eth = chainById("ethereum");
+  const usdc = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+  assert.equal(v2PairAddress(eth, usdc).pair, "0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc");
+  assert.equal(v3PoolAddress(eth, usdc, 500), "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640");
+  const bsc = chainById("bsc");
+  const usdt = "0x55d398326f99059fF775485246999027B3197955";
+  assert.equal(v2PairAddress(bsc, usdt).pair, "0x16b9a82891338f9bA80E2D6970FddA79D1eb0daE");
+  assert.equal(v3PoolAddress(bsc, usdt, 2500), "0x1401ff943D08a7E098328C1d3a9d388923B115D2");
 });
 
 test("chain chưa nhập số lượng thì không gọi swap", async () => {
@@ -583,6 +622,10 @@ const MC = new ethers.Interface([
 const V2_RESULT = new ethers.Interface(["function getAmountsOut(uint256,address[]) view returns (uint256[])"]);
 const V3_RESULT = new ethers.Interface(["function quoteExactInputSingle((address,address,uint256,uint24,uint160)) returns (uint256,uint256,uint32,uint160)"]);
 const SUPPLY_RESULT = new ethers.Interface(["function totalSupply() view returns (uint256)"]);
+const RESERVE_RESULT = new ethers.Interface([
+  "function getReserves() view returns (uint112,uint112,uint32)",
+  "function balanceOf(address) view returns (uint256)",
+]);
 
 function quotePayload(plan, valueFor) {
   const rows = plan.map((step) => {
@@ -590,6 +633,14 @@ function quotePayload(plan, valueFor) {
     if (!spec) return [false, "0x"];
     if (step.kind === "v2") return [true, V2_RESULT.encodeFunctionResult("getAmountsOut", [[0n, spec]])];
     if (step.kind === "v3") return [true, V3_RESULT.encodeFunctionResult("quoteExactInputSingle", [spec, 0n, 0, 0n])];
+    if (step.kind === "v2reserves") {
+      const reserve0 = step.wrappedIs0 ? spec.native : spec.token;
+      const reserve1 = step.wrappedIs0 ? spec.token : spec.native;
+      return [true, RESERVE_RESULT.encodeFunctionResult("getReserves", [reserve0, reserve1, 0])];
+    }
+    if (step.kind === "v3native" || step.kind === "v3token") {
+      return [true, RESERVE_RESULT.encodeFunctionResult("balanceOf", [spec])];
+    }
     return [true, SUPPLY_RESULT.encodeFunctionResult("totalSupply", [spec])];
   });
   return MC.encodeFunctionResult("aggregate3", [rows]);
@@ -623,7 +674,9 @@ test("hỏi giá một lần khi RPC đã nóng, pool lệch hoặc FDV cao thì
   const token = "0x1111111111111111111111111111111111111111";
   const value = ethers.parseEther("0.01");
   const plan = quoteCalls(chain, token, value, false);
-  assert.equal(plan.length, 5);
+  assert.equal(plan.filter((step) => step.kind === "v2").length, 1);
+  assert.equal(plan.filter((step) => step.kind === "v3").length, 4);
+  assert.equal(plan.filter((step) => step.kind === "v2reserves").length, 1);
   const raw = quotePayload(plan, (step) => {
     if (step.kind === "v2") return 1_000_000n;
     if (step.fee === 3000) return 900_000n;
@@ -720,4 +773,76 @@ test("multicall hỏng thì vẫn đọc được pool V2", async () => {
   const bundle = await quoteOnProvider(provider, chain, token, value, false);
   assert.equal(bundle.v2, 1234n);
   assert.equal(first, false);
+});
+
+test("pool mỏng hơn 100k mỗi bên thì không gửi giao dịch", async () => {
+  const chain = chainById("ethereum");
+  const token = "0x1111111111111111111111111111111111111111";
+  const value = ethers.parseEther("0.01");
+  const plan = quoteCalls(chain, token, value, false);
+  const thin = quotePayload(plan, (step) => {
+    if (step.kind === "v2") return 10n ** 18n;
+    if (step.kind === "v2reserves") return { native: 10n ** 18n, token: 10n ** 20n };
+    return null;
+  });
+  const thinProvider = fakeProvider(() => thin);
+  const thinBuyer = createBuyer({
+    evmPrivateKey: `0x${"11".repeat(32)}`,
+    amounts: { ethereum: 0.01 },
+    gasMultiple: 2,
+    slippagePercent: 10,
+    minLiquidity: 100_000,
+    prices: { ETH: 2000 },
+    providerFor: () => thinProvider,
+  });
+  await thinBuyer.warm();
+  thinProvider.calls.length = 0;
+  const refused = await thinBuyer.buy({ chain: "ethereum", contract: token, receivedAt: Date.now() });
+  thinBuyer.stop();
+  assert.equal(refused.ok, false);
+  assert.match(refused.reason, /Thanh khoản thấp/);
+  assert.match(refused.reason, /100,000 USD/);
+  assert.deepEqual(thinProvider.calls, ["quote"]);
+
+  const deep = quotePayload(plan, (step) => {
+    if (step.kind === "v2") return 10n ** 18n;
+    if (step.kind === "v2reserves") return { native: 100n * 10n ** 18n, token: 10n ** 22n };
+    return null;
+  });
+  const deepProvider = fakeProvider(() => deep);
+  const deepBuyer = createBuyer({
+    evmPrivateKey: `0x${"11".repeat(32)}`,
+    amounts: { ethereum: 0.01 },
+    gasMultiple: 2,
+    slippagePercent: 10,
+    minLiquidity: 100_000,
+    prices: { ETH: 2000 },
+    providerFor: () => deepProvider,
+  });
+  await deepBuyer.warm();
+  deepProvider.calls.length = 0;
+  const bought = await deepBuyer.buy({ chain: "ethereum", contract: token, receivedAt: Date.now() });
+  deepBuyer.stop();
+  assert.equal(bought.ok, true);
+  assert.equal(Math.round(bought.nativeLiquidity), 200_000);
+  assert.equal(Math.round(bought.tokenLiquidity), 200_000);
+  assert.deepEqual(deepProvider.calls, ["quote", "send"]);
+
+  const unread = quotePayload(plan, (step) => (step.kind === "v2" ? 10n ** 18n : null));
+  const unreadProvider = fakeProvider(() => unread);
+  const unreadBuyer = createBuyer({
+    evmPrivateKey: `0x${"11".repeat(32)}`,
+    amounts: { ethereum: 0.01 },
+    gasMultiple: 2,
+    slippagePercent: 10,
+    minLiquidity: 100_000,
+    prices: { ETH: 2000 },
+    providerFor: () => unreadProvider,
+  });
+  await unreadBuyer.warm();
+  unreadProvider.calls.length = 0;
+  const blocked = await unreadBuyer.buy({ chain: "ethereum", contract: token, receivedAt: Date.now() });
+  unreadBuyer.stop();
+  assert.match(blocked.reason, /Không đọc được thanh khoản/);
+  assert.deepEqual(unreadProvider.calls, ["quote"]);
 });

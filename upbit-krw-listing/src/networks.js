@@ -17,6 +17,10 @@ export const CHAINS = {
     v3Quoter: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
     v3Fees: [100, 500, 3000, 10000],
     v3Deadline: false,
+    v2Factory: "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
+    v2InitCodeHash: "0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f",
+    v3Deployer: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+    v3InitCodeHash: "0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54",
   },
   bsc: {
     kind: "evm",
@@ -34,6 +38,10 @@ export const CHAINS = {
     v3Quoter: "0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997",
     v3Fees: [100, 500, 2500, 10000],
     v3Deadline: true,
+    v2Factory: "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73",
+    v2InitCodeHash: "0x00fb7f630766e6a796048ea87d01acd3068e8ff67d078148a3fa3f4a84f69bd5",
+    v3Deployer: "0x41ff9AA7e16B8B1a8a8dc4f0eFacd93D02d071c9",
+    v3InitCodeHash: "0x6ce8eb472fa82df5469c6ab6d485f17c3ad13c8cd7af59b3d4a8026c5ce0f7e2",
   },
   base: {
     kind: "evm",
@@ -51,6 +59,10 @@ export const CHAINS = {
     v3Quoter: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
     v3Fees: [100, 500, 3000, 10000],
     v3Deadline: false,
+    v2Factory: "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6",
+    v2InitCodeHash: "0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f",
+    v3Deployer: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+    v3InitCodeHash: "0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54",
   },
   arbitrum: {
     kind: "evm",
@@ -68,6 +80,10 @@ export const CHAINS = {
     v3Quoter: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
     v3Fees: [100, 500, 3000, 10000],
     v3Deadline: false,
+    v2Factory: "0xf1D7CC64Fb4452F05c498126312eBE29f30Fbcf9",
+    v2InitCodeHash: "0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f",
+    v3Deployer: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+    v3InitCodeHash: "0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54",
   },
   optimism: {
     kind: "evm",
@@ -85,6 +101,8 @@ export const CHAINS = {
     v3Quoter: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
     v3Fees: [100, 500, 3000, 10000],
     v3Deadline: false,
+    v3Deployer: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+    v3InitCodeHash: "0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54",
   },
   polygon: {
     kind: "evm",
@@ -102,6 +120,8 @@ export const CHAINS = {
     v3Quoter: "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
     v3Fees: [100, 500, 3000, 10000],
     v3Deadline: false,
+    v3Deployer: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+    v3InitCodeHash: "0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54",
   },
   solana: {
     kind: "solana",
