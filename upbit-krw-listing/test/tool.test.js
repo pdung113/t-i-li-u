@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { queryString, readJwtPayload, signJwt } from "../src/auth.js";
 import { decideNotice, parseContract, parseNetwork } from "../src/notice.js";
-import { executeListing, listingIsFresh, FRESH_MS } from "../src/engine.js";
+import { executeListing, listingIsFresh, FRESH_MS, startEngine } from "../src/engine.js";
 import { amountFor, fdvAllows, fdvUsd } from "../src/limits.js";
 import { minOut, priorityLamports, scaleUnits } from "../src/networks.js";
 import { resultText } from "../src/telegram.js";
@@ -230,4 +230,62 @@ test("chế độ xem thử không gọi swap", async () => {
   assert.equal(result.dry, true);
   assert.match(notes[0], /xem thử/);
   assert.match(notes[0], /Không mua được|Chưa mua/);
+});
+
+test("kênh Upbit tự đẩy tin, không cần dán link, và chờ contract rồi mới mua", async () => {
+  const calls = [];
+  const listedAt = new Date().toISOString();
+  const client = {
+    async listNotices() {
+      const error = new Error("blocked");
+      error.status = 403;
+      throw error;
+    },
+    async fetchNotice() {
+      return null;
+    },
+    listenAnnouncements(onNotice) {
+      onNotice({
+        type: "announcement",
+        event_type: "CREATED",
+        uuid: "notice-1",
+        title: "오픈(OPEN) 신규 거래지원 안내 (KRW 마켓)",
+        category: "trade",
+        listed_at: listedAt,
+        receivedAt: Date.now(),
+        body: null,
+      });
+      onNotice({
+        type: "announcement",
+        event_type: "UPDATED",
+        uuid: "notice-1",
+        title: "오픈(OPEN) 신규 거래지원 안내 (KRW 마켓)",
+        category: "trade",
+        listed_at: listedAt,
+        receivedAt: Date.now(),
+        url: "https://www.upbit.com/service_center/notice?id=notice-1&view=share",
+        body: "안내된 네트워크 (OPEN-Ethereum)\nOPEN 컨트랙트 주소는 0xa227cc36938f0c9e09ce0e64dfab226cad739447",
+      });
+      return () => {};
+    },
+  };
+  const engine = startEngine({
+    client,
+    config: {
+      live: true,
+      gasMultiple: 2,
+      slippagePercent: 10,
+      amounts: { ethereum: 0.01 },
+      swap: async (listing) => {
+        calls.push(listing.contract);
+        return { ok: true, tx: "0xabc", venue: "Uniswap V2" };
+      },
+    },
+    log: () => {},
+    notify: () => {},
+    state: { bought: {}, tickerBoughtAt: {}, notified: {}, armed: [] },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  engine.stop();
+  assert.deepEqual(calls, ["0xa227cc36938f0c9e09ce0e64dfab226cad739447"]);
 });

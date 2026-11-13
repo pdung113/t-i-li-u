@@ -109,6 +109,13 @@ export function startEngine({ client, config, log, notify, state }) {
       log(`Bỏ ${listing.market}: chưa nhập số lượng cho ${listing.chain}.`);
       return;
     }
+    if (!listing.contract) {
+      if (!sessionDone.has(`wait:${key}`)) {
+        sessionDone.add(`wait:${key}`);
+        log(`${listing.market}: Upbit vừa báo listing KRW. Đang chờ contract trong thông báo rồi mua.`);
+      }
+      return;
+    }
     running.add(key);
     const chain = chainById(listing.chain);
     const task = executeListing(listing, {
@@ -140,7 +147,13 @@ export function startEngine({ client, config, log, notify, state }) {
       arm({ ...raw, receivedAt }, options);
       return;
     }
-    const decision = decideNotice(raw);
+    let source = raw;
+    const hasBody = Boolean(raw?.body || raw?.bd || raw?.announcement?.body);
+    if (!hasBody && client.fetchNotice && (raw?.uuid || raw?.uid || raw?.url)) {
+      const full = await client.fetchNotice(raw.uuid || raw.uid || raw.url);
+      if (full?.title) source = { ...full, receivedAt, event_type: raw.event_type || raw.et || full.eventType };
+    }
+    const decision = decideNotice(source);
     if (decision.action !== "buy") {
       if (decision.reason === "no-krw" && decision.tickers?.length) {
         const skipKey = decision.tickers.join(",");
@@ -170,7 +183,7 @@ export function startEngine({ client, config, log, notify, state }) {
       } catch (error) {
         backoff = error.status === 403 ? 30_000 : 5000;
         if (!warned) {
-          log("Chưa đọc được danh sách thông báo web. Vẫn nhận tin mới qua WebSocket.");
+          log("Chưa đọc được danh sách web. Tool vẫn tự nghe thông báo mới từ Upbit.");
           warned = true;
         }
       }
@@ -178,13 +191,19 @@ export function startEngine({ client, config, log, notify, state }) {
     }
   }
 
+  const waits = new Map();
+
   function sleep(ms) {
     return new Promise((resolve) => {
-      const timer = setTimeout(resolve, ms);
       if (stopped) {
-        clearTimeout(timer);
         resolve();
+        return;
       }
+      const timer = setTimeout(() => {
+        waits.delete(timer);
+        resolve();
+      }, ms);
+      waits.set(timer, resolve);
     });
   }
 
@@ -196,8 +215,8 @@ export function startEngine({ client, config, log, notify, state }) {
     consider(message, { allowMissingTime: true }).catch((error) => log(`Lỗi xử lý thông báo: ${error.message}`));
   }, {
     onStatus: (status) => {
-      if (status === "connected") log("Đã nối WebSocket thông báo Upbit.");
-      if (status === "closed") log("WebSocket thông báo ngắt, đang nối lại.");
+      if (status === "connected") log("Đã nối kênh thông báo Upbit. Listing KRW mới sẽ tự vào, không cần dán link.");
+      if (status === "closed") log("Kênh thông báo Upbit ngắt, đang nối lại.");
       if (String(status).startsWith("error")) log(`WebSocket thông báo: ${status}.`);
     },
   });
@@ -207,6 +226,11 @@ export function startEngine({ client, config, log, notify, state }) {
   return {
     stop() {
       stopped = true;
+      for (const [timer, resolve] of waits) {
+        clearTimeout(timer);
+        resolve();
+      }
+      waits.clear();
       stopSocket();
     },
   };

@@ -6,7 +6,6 @@ import { createClient } from "./client.js";
 import { normalizeState, startEngine } from "./engine.js";
 import { MAX_NATIVE } from "./limits.js";
 import { CHAIN_IDS } from "./networks.js";
-import { decideNotice } from "./notice.js";
 import { createBuyer, walletFromEvmKey, walletFromSolanaKey } from "./swap.js";
 import { discoverChatId, sendTelegram } from "./telegram.js";
 
@@ -97,7 +96,6 @@ function writeEnv(config) {
     `TELEGRAM_BOT_TOKEN=${config.telegramToken}`,
     `TELEGRAM_CHAT_ID=${config.telegramChatId}`,
     `LIVE=${config.live ? "true" : "false"}`,
-    `NOTICE_URL=${config.noticeUrl || ""}`,
     ...KEPT_ENV.filter((key) => existing[key]).map((key) => `${key}=${existing[key]}`),
     "",
   ].join("\n");
@@ -122,7 +120,6 @@ function configFromEnv(env) {
     telegramToken: env.TELEGRAM_BOT_TOKEN || "",
     telegramChatId: env.TELEGRAM_CHAT_ID || "",
     live: env.LIVE === "true",
-    noticeUrl: env.NOTICE_URL || "",
     jupiterApiKey: env.JUPITER_API_KEY || "",
     rpc: {
       ethereum: env.RPC_ETHEREUM || "",
@@ -217,29 +214,13 @@ async function start(config) {
   writeEnv(config);
   current = config;
   telegramWarned = false;
-  log("Đã xác thực API Upbit. Key này chỉ để nhận thông báo, không mua trên sàn KRW.");
+  log("Đã xác thực API Upbit. Tool tự nghe thông báo mới, không cần gửi link.");
   const chosen = CHAIN_IDS.filter((id) => config.amounts[id] > 0).map((id) => `${config.amounts[id]} ${id}`);
   const cap = config.maxFdv ? `${config.maxFdv} USD` : "không giới hạn";
   log(`Số lượng theo chain: ${chosen.join(", ")}. Trượt giá ${config.slippagePercent}%. FDV tối đa ${cap}. Gas x${config.gasMultiple}.`);
   log("RPC và gas được giữ sẵn để gửi trong khoảng 0,5 giây sau tin.");
   log(config.live ? "Đang gửi giao dịch thật trên DEX." : "Chế độ xem thử: không ký và không gửi giao dịch.");
   const state = readState();
-  if (config.noticeUrl) {
-    const notice = await client.fetchNotice(config.noticeUrl);
-    if (!notice?.title) {
-      log("Không tải được link thông báo. Tin mới vẫn vào qua WebSocket.");
-    } else {
-      const decision = decideNotice(notice);
-      if (decision.action !== "buy") log(`Link đã dán không phải listing KRW mới (${decision.reason}).`);
-      else {
-        for (const listing of decision.listings) {
-          state.armed = state.armed.filter((item) => `${item.noticeId}:${item.ticker}` !== `${listing.noticeId}:${listing.ticker}`);
-          state.armed.push(listing);
-        }
-        log(`Đã đọc ${decision.listings.map((item) => item.market).join(", ")}. Chỉ mua nếu thông báo còn trong 3 phút.`);
-      }
-    }
-  }
   buyer = createBuyer(config);
   try {
     await Promise.race([
@@ -321,7 +302,6 @@ function formConfig(body, env) {
     telegramToken: String(body.telegramToken || "").trim(),
     telegramChatId: String(body.telegramChatId || "").trim(),
     live: body.live === true,
-    noticeUrl: String(body.noticeUrl || "").trim(),
   };
 }
 
@@ -350,7 +330,6 @@ function serve() {
           hasEvmKey: Boolean(env.evmPrivateKey),
           hasSolanaKey: Boolean(env.solanaPrivateKey),
           telegramChatId: current?.telegramChatId || env.telegramChatId || "",
-          noticeUrl: current?.noticeUrl || env.noticeUrl || "",
         });
         return;
       }

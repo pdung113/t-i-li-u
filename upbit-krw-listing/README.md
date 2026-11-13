@@ -1,6 +1,6 @@
 # Mua listing KRW của Upbit trên DEX
 
-Tool riêng này đọc thông báo Upbit. Khi có **listing mới có cặp KRW**, tool mua coin đó ngay trên DEX của mạng ghi trong thông báo. Không đặt lệnh trên sàn KRW của Upbit.
+Tool riêng này tự nghe thông báo Upbit. Không cần dán link. Khi sàn đăng **listing mới có cặp KRW**, tool đọc contract trong thông báo và mua coin đó ngay trên DEX của mạng đó. Không đặt lệnh trên sàn KRW của Upbit.
 
 Cặp chỉ có BTC hoặc USDT không mua. Tin thêm thị trường và tin đóng giao dịch cũng không mua. Thông báo cũ hơn 3 phút không mua khi mở lại tool.
 
