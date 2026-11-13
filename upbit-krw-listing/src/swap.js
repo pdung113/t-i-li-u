@@ -26,7 +26,12 @@ const SUPPLY_IFACE = new ethers.Interface([
 ]);
 
 const JUPITER_ORDER = "https://api.jup.ag/swap/v2/order";
-const PRICE_SYMBOL = { ETH: "ETHUSDT", BNB: "BNBUSDT", SOL: "SOLUSDT", POL: "POLUSDT" };
+const PRICE_CHAIN = { ETH: "ethereum", BNB: "bsc", SOL: "solana", POL: "polygon" };
+
+function usdFromRaw(amount, decimals) {
+  const scale = 10n ** BigInt(decimals);
+  return Number(amount / scale) + Number(amount % scale) / Number(scale);
+}
 
 export function walletFromEvmKey(secret) {
   const text = String(secret || "").trim();
@@ -144,29 +149,46 @@ export function createBuyer(config) {
     return solana;
   }
 
+  async function nativeUsd(chain) {
+    if (!chain?.stable) return 0;
+    if (chain.kind === "solana") {
+      const params = new URLSearchParams({
+        inputMint: SOL_MINT,
+        outputMint: chain.stable,
+        amount: (10n ** 9n).toString(),
+        slippageBps: "50",
+        maxSupportedTransactionVersion: "0",
+      });
+      const response = await fetch(`${JUPITER_ORDER}?${params}`, { signal: AbortSignal.timeout(1500) });
+      const order = await response.json().catch(() => ({}));
+      const out = BigInt(order.outAmount || 0);
+      return response.ok && out > 0n ? usdFromRaw(out, chain.stableDecimals) : 0;
+    }
+    const provider = providerFor(chain);
+    const one = 10n ** BigInt(chain.nativeDecimals);
+    let out = await quoteV2(provider, chain, chain.stable, one);
+    if ((out == null || out <= 0n) && chain.v3Quoter) {
+      const choices = (await Promise.all(chain.v3Fees.map((fee) => quoteV3Fee(provider, chain, chain.stable, one, fee)))).filter(Boolean);
+      out = choices.sort((a, b) => (a.out > b.out ? -1 : 1))[0]?.out ?? null;
+    }
+    return out != null && out > 0n ? usdFromRaw(out, chain.stableDecimals) : 0;
+  }
+
   async function refreshPrices() {
-    const wanted = [...new Set(
+    const symbols = new Set(
       Object.entries(config.amounts || {})
         .filter(([, amount]) => Number(amount) > 0)
         .map(([id]) => chainById(id)?.symbol)
-        .filter((symbol) => PRICE_SYMBOL[symbol]),
-    )];
-    if (!wanted.length) return;
-    try {
-      const symbols = encodeURIComponent(JSON.stringify(wanted.map((symbol) => PRICE_SYMBOL[symbol])));
-      const response = await fetch(`https://api.binance.com/api/v3/ticker/price?symbols=${symbols}`, {
-        signal: AbortSignal.timeout(1200),
-      });
-      const rows = await response.json();
-      if (!Array.isArray(rows)) return;
-      for (const row of rows) {
-        const symbol = Object.keys(PRICE_SYMBOL).find((key) => PRICE_SYMBOL[key] === row.symbol);
-        const price = Number(row.price);
-        if (symbol && price > 0) prices.set(symbol, price);
+        .filter((symbol) => PRICE_CHAIN[symbol]),
+    );
+    await Promise.all([...symbols].map(async (symbol) => {
+      try {
+        const usd = await nativeUsd(chainById(PRICE_CHAIN[symbol]));
+        if (usd > 0) prices.set(symbol, usd);
+      } catch {
+        // Giữ giá gần nhất. Không có giá thì trần FDV chặn lệnh.
       }
-    } catch {
-      // Giá nền giữ bản gần nhất. Lượt mua sẽ đọc lại nếu đang thiếu.
-    }
+    }));
   }
 
   async function priceFor(symbol) {
@@ -410,7 +432,13 @@ export function createBuyer(config) {
     return buyEvm(listing, chain, started);
   }
 
-  return { warm, start, stop, buy };
+  return {
+    warm,
+    start,
+    stop,
+    buy,
+    prices: () => Object.fromEntries(prices),
+  };
 }
 
 export async function buyOnDex(listing, config) {
