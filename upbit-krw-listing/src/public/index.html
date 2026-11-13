@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mua listing KRW trên DEX</title>
+  <style>
+    :root { color-scheme: light; }
+    body { margin: 0; font: 16px/1.45 system-ui, sans-serif; background: #f4f1ea; color: #1c1915; }
+    main { max-width: 760px; margin: 0 auto; padding: 28px 18px 48px; }
+    h1 { font-size: 28px; line-height: 1.2; margin: 0 0 8px; }
+    p { margin: 0 0 14px; }
+    form, section { background: #fffdf8; border: 1px solid #ddd4c4; border-radius: 14px; padding: 16px; }
+    label { display: block; font-weight: 650; margin: 12px 0 4px; }
+    input, select { width: 100%; box-sizing: border-box; font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid #c9bfae; background: #fff; }
+    [hidden] { display: none !important; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
+    .grid label { margin-top: 8px; }
+    .row { display: flex; gap: 10px; align-items: end; }
+    .row button { flex: 0 0 auto; }
+    .check { display: flex; gap: 8px; align-items: center; font-weight: 650; margin: 14px 0; }
+    .check input { width: auto; }
+    button { font: inherit; border: 0; border-radius: 10px; padding: 10px 14px; background: #1c1915; color: #fff; cursor: pointer; }
+    button.secondary { background: #ece4d6; color: #1c1915; }
+    button:disabled { opacity: 0.55; cursor: default; }
+    .actions { display: flex; gap: 8px; margin-top: 8px; }
+    pre { min-height: 220px; white-space: pre-wrap; background: #201c17; color: #f6f1e7; border-radius: 12px; padding: 12px; margin: 12px 0 0; }
+    .note { color: #5c5346; }
+    .error { color: #8d1d18; font-weight: 700; }
+    @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Mua listing KRW trên DEX</h1>
+    <p>Tool tự nghe thông báo của Upbit. Không cần dán link. Khi sàn đăng <strong>listing mới có cặp KRW</strong>, tool tự đọc contract trong thông báo và mua trên DEX của mạng đó. Không đặt lệnh trên sàn KRW của Upbit.</p>
+    <p class="note">Hai ví khác nhau: ví ERC cho Ethereum, BNB Chain, Base, Arbitrum, Optimism, Polygon, và ví Solana. Mỗi chain một số lượng, tối đa 5. Chain để trống thì không mua. Tool chỉ mua tin đăng sau lúc bấm Bắt đầu. Nên nhập FDV tối đa. Để trống thì tool mua theo giá pool, kể cả khi giá đã bị đẩy. Pool phải có đủ tiền ở cả phía token và phía ETH, BNB, SOL hoặc POL. Mặc định mỗi bên 50.000 USD. Để trống ô đó thì không chặn pool mỏng. Gas, nonce và kết nối RPC được giữ sẵn. Hỏi giá một lần trên đường riêng rồi gửi ngay trên hai RPC, nhằm trong khoảng 0,5 giây sau tin. Gửi xong là báo, không chờ block. Chế độ xem thử vẫn kiểm tra pool nhưng không ký. Bot báo cáo: <a href="https://t.me/follow07_bot">t.me/follow07_bot</a>.</p>
+    <form id="form">
+      <label for="accessKey">Upbit Access Key</label>
+      <input id="accessKey" name="accessKey" autocomplete="off" required>
+      <label for="secretKey">Upbit Secret Key</label>
+      <input id="secretKey" name="secretKey" type="password" autocomplete="off" required>
+      <label for="evmPrivateKey">Private key ví ERC</label>
+      <input id="evmPrivateKey" name="evmPrivateKey" type="password" autocomplete="off" placeholder="Một ví cho mọi chain ERC">
+      <label for="solanaPrivateKey">Private key ví Solana</label>
+      <input id="solanaPrivateKey" name="solanaPrivateKey" type="password" autocomplete="off" placeholder="Base58 hoặc mảng JSON">
+      <p class="note">Số lượng mỗi chain. Để trống chain không mua.</p>
+      <div class="grid">
+        <label for="amount-ethereum">Ethereum (ETH)<input id="amount-ethereum" inputmode="decimal" placeholder="0.02"></label>
+        <label for="amount-bsc">BNB Chain (BNB)<input id="amount-bsc" inputmode="decimal" placeholder="0.1"></label>
+        <label for="amount-base">Base (ETH)<input id="amount-base" inputmode="decimal" placeholder="0.02"></label>
+        <label for="amount-arbitrum">Arbitrum (ETH)<input id="amount-arbitrum" inputmode="decimal" placeholder="0.02"></label>
+        <label for="amount-optimism">Optimism (ETH)<input id="amount-optimism" inputmode="decimal" placeholder="0.02"></label>
+        <label for="amount-polygon">Polygon (POL)<input id="amount-polygon" inputmode="decimal" placeholder="2"></label>
+        <label for="amount-solana">Solana (SOL)<input id="amount-solana" inputmode="decimal" placeholder="0.5"></label>
+      </div>
+      <label for="slippagePercent">Trượt giá %</label>
+      <input id="slippagePercent" name="slippagePercent" inputmode="decimal" value="10" required>
+      <label for="maxFdv">FDV tối đa (USD)</label>
+      <input id="maxFdv" name="maxFdv" inputmode="decimal" placeholder="Để trống nếu không giới hạn">
+      <label for="minLiquidity">Thanh khoản tối thiểu mỗi bên (USD)</label>
+      <input id="minLiquidity" name="minLiquidity" inputmode="decimal" value="50000" placeholder="50000. Ví dụ PEPE 50000 và ETH 50000. Để trống nếu không chặn">
+      <label for="gasMultiple">Hệ số gas (2 = gấp đôi)</label>
+      <input id="gasMultiple" name="gasMultiple" inputmode="decimal" value="2" required>
+      <label for="rpcProvider">RPC riêng</label>
+      <select id="rpcProvider">
+        <option value="saved">Giữ RPC đã lưu</option>
+        <option value="public">RPC công cộng</option>
+        <option value="alchemy">Alchemy, một key cho mọi chain</option>
+        <option value="infura">Infura, một key cho mọi chain</option>
+        <option value="custom">Tự dán link từng chain</option>
+      </select>
+      <p class="note" id="rpcHelp">Một API key Alchemy hoặc Infura tạo đường wss cho Ethereum, BNB Chain, Base, Arbitrum, Optimism, Polygon và Solana. Không gửi key vào chat.</p>
+      <input id="rpcSecret" type="password" autocomplete="off" placeholder="API key hoặc một link wss của Alchemy / Infura" hidden>
+      <div id="rpcCustom" class="grid" hidden>
+        <label for="rpc-ethereum">Ethereum<input id="rpc-ethereum" type="password" autocomplete="off" placeholder="wss:// hoặc https://"></label>
+        <label for="rpc-bsc">BNB Chain<input id="rpc-bsc" type="password" autocomplete="off" placeholder="wss:// hoặc https://"></label>
+        <label for="rpc-base">Base<input id="rpc-base" type="password" autocomplete="off" placeholder="wss:// hoặc https://"></label>
+        <label for="rpc-arbitrum">Arbitrum<input id="rpc-arbitrum" type="password" autocomplete="off" placeholder="wss:// hoặc https://"></label>
+        <label for="rpc-optimism">Optimism<input id="rpc-optimism" type="password" autocomplete="off" placeholder="wss:// hoặc https://"></label>
+        <label for="rpc-polygon">Polygon<input id="rpc-polygon" type="password" autocomplete="off" placeholder="wss:// hoặc https://"></label>
+        <label for="rpc-solana">Solana<input id="rpc-solana" type="password" autocomplete="off" placeholder="https://"></label>
+      </div>
+      <div class="actions">
+        <button class="secondary" id="rpcCheck" type="button">Kiểm tra RPC</button>
+      </div>
+      <p id="rpcSaved" class="note"></p>
+      <p id="rpcResult" class="note"></p>
+      <label for="telegramToken">Token bot Telegram</label>
+      <input id="telegramToken" name="telegramToken" type="password" autocomplete="off">
+      <label for="telegramChatId">Chat id</label>
+      <div class="row">
+        <input id="telegramChatId" name="telegramChatId" autocomplete="off">
+        <button class="secondary" id="chat" type="button">Lấy chat id</button>
+      </div>
+      <label class="check"><input id="live" type="checkbox"> Gửi giao dịch thật trên DEX</label>
+      <div class="actions">
+        <button id="start" type="submit">Bắt đầu</button>
+        <button id="stop" class="secondary" type="button">Dừng</button>
+      </div>
+      <p id="error" class="error"></p>
+    </form>
+    <section>
+      <strong>Nhật ký</strong>
+      <pre id="log">Đang chờ.</pre>
+    </section>
+  </main>
+  <script>
+    const error = document.querySelector("#error");
+    const log = document.querySelector("#log");
+    const form = document.querySelector("#form");
+    const amountIds = ["ethereum", "bsc", "base", "arbitrum", "optimism", "polygon", "solana"];
+    const fields = ["accessKey", "secretKey", "evmPrivateKey", "solanaPrivateKey", "slippagePercent", "maxFdv", "minLiquidity", "gasMultiple", "rpcProvider", "rpcSecret", "rpcCheck", "telegramToken", "telegramChatId", "live", ...amountIds.map((id) => `amount-${id}`), ...amountIds.map((id) => `rpc-${id}`)];
+    const field = (id) => document.getElementById(id);
+
+    function payload() {
+      const amounts = {};
+      for (const id of amountIds) amounts[id] = field(`amount-${id}`).value.trim();
+      return {
+        accessKey: field("accessKey").value.trim(),
+        secretKey: field("secretKey").value.trim(),
+        evmPrivateKey: field("evmPrivateKey").value.trim(),
+        solanaPrivateKey: field("solanaPrivateKey").value.trim(),
+        amounts,
+        gasMultiple: field("gasMultiple").value.trim(),
+        slippagePercent: field("slippagePercent").value.trim(),
+        maxFdv: field("maxFdv").value.trim(),
+        minLiquidity: field("minLiquidity").value.trim(),
+        telegramToken: field("telegramToken").value.trim(),
+        telegramChatId: field("telegramChatId").value.trim(),
+        live: field("live").checked,
+        rpcProvider: field("rpcProvider").value,
+        rpcSecret: field("rpcSecret").value.trim(),
+        rpc: Object.fromEntries(amountIds.map((id) => [id, field(`rpc-${id}`).value.trim()])),
+      };
+    }
+
+    function showRpcFields() {
+      const choice = field("rpcProvider").value;
+      field("rpcSecret").hidden = choice !== "alchemy" && choice !== "infura";
+      field("rpcCustom").hidden = choice !== "custom";
+    }
+
+    function setRunning(running) {
+      for (const id of fields) field(id).disabled = running;
+      field("start").disabled = running;
+      field("chat").disabled = running;
+      field("stop").disabled = !running;
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      error.textContent = "";
+      setRunning(true);
+      const response = await fetch("/api/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload()),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        error.textContent = body.error || "Không bắt đầu được.";
+        setRunning(false);
+      }
+    });
+
+    field("stop").addEventListener("click", async () => {
+      await fetch("/api/stop", { method: "POST" });
+      setRunning(false);
+    });
+
+    field("rpcProvider").addEventListener("change", showRpcFields);
+    showRpcFields();
+
+    field("rpcCheck").addEventListener("click", async () => {
+      error.textContent = "";
+      field("rpcResult").textContent = "Đang đo...";
+      const response = await fetch("/api/rpc-check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload()),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        field("rpcResult").textContent = body.error || "Không kiểm tra được RPC.";
+        return;
+      }
+      field("rpcResult").textContent = body.rows.map((row) => (
+        row.ok ? `${row.label} ${row.ms} ms` : `${row.label}: ${row.detail || "không nối được"}`
+      )).join(" · ");
+    });
+
+    field("chat").addEventListener("click", async () => {
+      error.textContent = "";
+      const response = await fetch("/api/chat-id", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: field("telegramToken").value.trim() }),
+      });
+      const body = await response.json();
+      if (!response.ok) error.textContent = body.error || "Không lấy được chat id.";
+      else field("telegramChatId").value = body.chatId;
+    });
+
+    async function refresh() {
+      const response = await fetch("/api/status");
+      const body = await response.json();
+      if (body.amounts) {
+        for (const id of amountIds) {
+          const input = field(`amount-${id}`);
+          if (!input.value && body.amounts[id]) input.value = body.amounts[id];
+        }
+      }
+      if (!field("gasMultiple").value) field("gasMultiple").value = body.gasMultiple;
+      if (!field("slippagePercent").value) field("slippagePercent").value = body.slippagePercent;
+      if (!field("maxFdv").value && body.maxFdv) field("maxFdv").value = body.maxFdv;
+      if (!field("minLiquidity").value && body.minLiquidity) field("minLiquidity").value = body.minLiquidity;
+      if (!field("telegramChatId").value && body.telegramChatId) field("telegramChatId").value = body.telegramChatId;
+      field("rpcSaved").textContent = body.rpcSaved?.length
+        ? `Đã lưu RPC riêng cho ${body.rpcSaved.join(", ")}. Để trống ô key thì giữ nguyên.`
+        : "Chưa lưu RPC riêng.";
+      log.textContent = body.lines.length ? body.lines.join("\n") : "Đang chờ.";
+      if (body.running) setRunning(true);
+    }
+
+    refresh();
+    setInterval(refresh, 700);
+    setRunning(false);
+  </script>
+</body>
+</html>
