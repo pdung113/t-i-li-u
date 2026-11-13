@@ -16,7 +16,7 @@ npm start
 
 Mở http://127.0.0.1:8787
 
-Điền key Upbit, private key ví ERC, private key ví Solana, số lượng từng chain, trượt giá, FDV tối đa, thanh khoản tối thiểu mỗi bên, hệ số gas, token bot và chat id. Muốn mua thật thì tick **Gửi giao dịch thật trên DEX**. Không tick thì tool chỉ báo kế hoạch, không ký giao dịch. Bấm Bắt đầu trước khi có tin. Tin đã nằm sẵn trên bảng không được mua. RPC công cộng vẫn có thể khiến cả lượt vượt 0,5 giây. Điền RPC riêng trong `.env` nếu cần sát hơn.
+Điền key Upbit, private key ví ERC, private key ví Solana, số lượng từng chain, trượt giá, FDV tối đa, thanh khoản tối thiểu mỗi bên, hệ số gas, token bot và chat id. Ở ô **RPC riêng**, chọn Alchemy hoặc Infura rồi dán một API key. Tool tự tạo đường wss cho cả bảy chain. Bấm **Kiểm tra RPC** để xem số mili giây, không cần bấm Bắt đầu. Muốn mua thật thì tick **Gửi giao dịch thật trên DEX**. Không tick thì tool chỉ báo kế hoạch, không ký giao dịch. Bấm Bắt đầu trước khi có tin. Tin đã nằm sẵn trên bảng không được mua. Để ô RPC ở mức công cộng thì tool vẫn chạy, nhưng có thể chậm hơn 0,5 giây khi nhiều bot cùng mua.
 
 API key cần nằm trong danh sách IP cho phép. Không cần quyền rút tiền và không cần quyền đặt lệnh trên Upbit.
 
@@ -28,7 +28,7 @@ Muốn chạy lại cùng cấu hình:
 npm start -- --run
 ```
 
-RPC và khóa Jupiter có thể thêm trong `.env` nếu RPC công cộng chậm hoặc Jupiter yêu cầu khóa: `RPC_ETHEREUM`, `RPC_BSC`, `RPC_BASE`, `RPC_ARBITRUM`, `RPC_OPTIMISM`, `RPC_POLYGON`, `RPC_SOLANA`, `JUPITER_API_KEY`.
+RPC riêng nhập trên form. Tool lưu vào `.env` và không ghi key ra nhật ký. Khóa Jupiter, nếu cần, vẫn để trong `.env` với tên `JUPITER_API_KEY`.
 
 ## Kiểm tra
 

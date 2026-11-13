@@ -2,6 +2,7 @@ import { ethers } from "ethers";
 import bs58 from "bs58";
 import { Connection, Keypair, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { chainById, minOut, priorityLamports, scaleUnits, SOL_MINT } from "./networks.js";
+import { buyUrl, endpointPair } from "./rpc.js";
 import { amountFor, fdvAllows, fdvUsd, formatUsd, liquidityAllows, poolSidesUsd, routeImpactAllows, solanaLiquidityAllows } from "./limits.js";
 
 const V2_IFACE = new ethers.Interface([
@@ -60,7 +61,13 @@ export function walletFromSolanaKey(secret) {
 }
 
 function rpcFor(chain, config) {
-  return config.rpc?.[chain.id] || chain.rpc;
+  const custom = config.rpc?.[chain.id] || "";
+  if (!custom) return chain.rpc;
+  try {
+    return endpointPair(custom).http || custom;
+  } catch {
+    return chain.rpc;
+  }
 }
 
 function feeFields(chain, feeData, multiple) {
@@ -376,7 +383,15 @@ export function createBuyer(config) {
 
   function providerUrl(chain) {
     const custom = config.rpc?.[chain.id] || "";
-    if (custom) return custom;
+    if (custom) {
+      try {
+        const pair = endpointPair(custom);
+        if (wsFailed.has(chain.id)) return pair.http || custom;
+        return pair.ws || pair.http || custom;
+      } catch {
+        return custom;
+      }
+    }
     if (!wsFailed.has(chain.id) && chain.ws) return chain.ws;
     return chain.rpc;
   }
@@ -388,14 +403,7 @@ export function createBuyer(config) {
     }
     let provider = providers.get(chain.id);
     if (!provider) {
-      const url = providerUrl(chain);
-      const network = ethers.Network.from(chain.chainId);
-      provider = String(url).startsWith("ws")
-        ? new ethers.WebSocketProvider(url, network, { staticNetwork: network })
-        : new ethers.JsonRpcProvider(url, network, { staticNetwork: network });
-      provider.on?.("error", () => {
-        wsFailed.add(chain.id);
-      });
+      provider = openProvider(providerUrl(chain), chain);
       providers.set(chain.id, provider);
     }
     return provider;
@@ -411,7 +419,12 @@ export function createBuyer(config) {
     const provider = String(url).startsWith("ws")
       ? new ethers.WebSocketProvider(url, network, { staticNetwork: network })
       : new ethers.JsonRpcProvider(url, network, { staticNetwork: network });
-    provider.on?.("error", () => {});
+    provider.websocket?.on?.("error", () => {
+      if (chain?.id) wsFailed.add(chain.id);
+    });
+    provider.on?.("error", () => {
+      if (chain?.id) wsFailed.add(chain.id);
+    });
     return provider;
   }
 
@@ -419,7 +432,9 @@ export function createBuyer(config) {
     if (config.providerFor) return providerFor(chain);
     let provider = priceProviders.get(chain.id);
     if (!provider) {
-      provider = openProvider(config.rpc?.[chain.id] || chain.ws || chain.rpc, chain);
+      const custom = config.rpc?.[chain.id] || "";
+      const priceUrl = custom ? (endpointPair(custom).http || custom) : (chain.rpc || chain.ws);
+      provider = openProvider(priceUrl, chain);
       priceProviders.set(chain.id, provider);
     }
     return provider;
@@ -427,9 +442,10 @@ export function createBuyer(config) {
 
   function httpProvider(chain) {
     if (config.providerFor || config.broadcastFor) return null;
-    const url = config.rpc?.[chain.id] || chain.rpc;
-    if (!url || String(url).startsWith("ws")) return null;
-    if (!String(providerUrl(chain)).startsWith("ws")) return null;
+    const custom = config.rpc?.[chain.id] || "";
+    const url = custom ? endpointPair(custom).http : chain.rpc;
+    const primary = providerUrl(chain);
+    if (!url || url === primary || !String(primary).startsWith("ws")) return null;
     const key = `http:${chain.id}`;
     let provider = providers.get(key);
     if (!provider) {
@@ -658,9 +674,10 @@ export function createBuyer(config) {
     try {
       bundle = await quoteOnce(provider);
     } catch (error) {
-      const custom = config.rpc?.[chain.id];
-      if (custom || !chain.ws || wsFailed.has(chain.id) || !isTransport(error)) throw error;
+      if (!isTransport(error) || wsFailed.has(chain.id)) throw error;
+      const before = providerUrl(chain);
       wsFailed.add(chain.id);
+      if (providerUrl(chain) === before) throw error;
       dropProvider(chain);
       provider = providerFor(chain);
       const retriedFee = provider.getFeeData().catch(() => null);

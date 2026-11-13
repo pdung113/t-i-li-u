@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { createClient } from "./client.js";
 import { normalizeState, startEngine } from "./engine.js";
 import { MAX_NATIVE, parseUserNumber } from "./limits.js";
-import { CHAIN_IDS } from "./networks.js";
+import { CHAIN_IDS, chainById } from "./networks.js";
+import { CHAIN_LABELS, endpointPair, probeRpc, resolveRpcChoice, scrubRpcError } from "./rpc.js";
 import { createBuyer, walletFromEvmKey, walletFromSolanaKey } from "./swap.js";
 import { discoverChatId, resultText, sendTelegram } from "./telegram.js";
 
@@ -14,16 +15,7 @@ const dir = path.resolve(root, "..");
 const envPath = path.join(dir, ".env");
 const statePath = path.join(dir, "data", "state.json");
 const htmlPath = path.join(root, "public", "index.html");
-const KEPT_ENV = [
-  "RPC_ETHEREUM",
-  "RPC_BSC",
-  "RPC_BASE",
-  "RPC_ARBITRUM",
-  "RPC_OPTIMISM",
-  "RPC_POLYGON",
-  "RPC_SOLANA",
-  "JUPITER_API_KEY",
-];
+const KEPT_ENV = ["JUPITER_API_KEY"];
 
 const lines = [];
 let engine = null;
@@ -97,6 +89,7 @@ function writeEnv(config) {
     `TELEGRAM_BOT_TOKEN=${config.telegramToken}`,
     `TELEGRAM_CHAT_ID=${config.telegramChatId}`,
     `LIVE=${config.live ? "true" : "false"}`,
+    ...CHAIN_IDS.filter((id) => config.rpc?.[id]).map((id) => `RPC_${id.toUpperCase()}=${config.rpc[id]}`),
     ...KEPT_ENV.filter((key) => existing[key]).map((key) => `${key}=${existing[key]}`),
     "",
   ].join("\n");
@@ -188,6 +181,14 @@ function validate(config) {
   const needsEvm = CHAIN_IDS.some((id) => id !== "solana" && config.amounts[id] > 0);
   if (config.live && needsEvm && !config.evmPrivateKey) throw new Error("Cần private key ví ERC cho chain đang nhập số lượng.");
   if (config.live && config.amounts.solana > 0 && !config.solanaPrivateKey) throw new Error("Cần private key ví Solana.");
+  for (const id of CHAIN_IDS) {
+    if (!config.rpc?.[id]) continue;
+    try {
+      endpointPair(config.rpc[id]);
+    } catch {
+      throw new Error(`RPC ${CHAIN_LABELS[id]} phải là link https hoặc wss.`);
+    }
+  }
 }
 
 async function notify(text) {
@@ -225,6 +226,10 @@ async function start(config) {
   log(`Số lượng theo chain: ${chosen.join(", ")}. Trượt giá ${config.slippagePercent}%. FDV tối đa ${cap}. Thanh khoản pool ${floor}. Gas x${config.gasMultiple}.`);
   if (!config.maxFdv) log("Chưa đặt FDV tối đa. Tool sẽ mua đúng giá pool lúc tin ra, kể cả khi giá đã bị đẩy.");
   if (!config.minLiquidity) log("Chưa đặt thanh khoản tối thiểu. Pool mỏng vẫn có thể được mua và bị trượt giá.");
+  const privateRpc = CHAIN_IDS.filter((id) => config.rpc?.[id]).map((id) => CHAIN_LABELS[id]);
+  log(privateRpc.length
+    ? `RPC riêng cho ${privateRpc.join(", ")}. Chain không nhập thì dùng RPC công cộng.`
+    : "Đang dùng RPC công cộng. Dán API key Alchemy hoặc Infura ở ô RPC riêng nếu muốn sát hơn.");
   log("Gas, nonce và kết nối RPC được giữ sẵn. Hỏi giá trên đường riêng rồi gửi cùng lúc hai RPC. Gửi xong là báo, không chờ block xác nhận.");
   log(config.live ? "Đang gửi giao dịch thật trên DEX." : "Chế độ xem thử: không ký và không gửi giao dịch.");
   const state = readState();
@@ -317,6 +322,41 @@ function formConfig(body, env) {
     telegramToken: String(body.telegramToken || "").trim(),
     telegramChatId: String(body.telegramChatId || "").trim(),
     live: body.live === true,
+    rpc: resolveRpcChoice({
+      provider: body.rpcProvider,
+      secret: body.rpcSecret,
+      overrides: body.rpc,
+      saved: configFromEnv(env).rpc,
+    }),
+  };
+}
+
+async function checkRpc(body) {
+  const env = configFromEnv(loadEnvFile());
+  const choice = String(body.rpcProvider || "saved");
+  const secret = String(body.rpcSecret || "");
+  const urls = choice === "public"
+    ? Object.fromEntries(CHAIN_IDS.map((id) => {
+      const chain = chainById(id);
+      return [id, chain.ws || chain.rpc];
+    }))
+    : resolveRpcChoice({
+      provider: choice,
+      secret,
+      overrides: body.rpc,
+      saved: env.rpc,
+    });
+  const chosen = CHAIN_IDS.filter((id) => urls[id]);
+  if (!chosen.length) throw new Error("Chưa có RPC riêng. Dán API key Alchemy hoặc Infura. Không gửi key vào chat.");
+  return {
+    rows: await Promise.all(chosen.map(async (id) => {
+      try {
+        const result = await probeRpc(id, urls[id]);
+        return { id, label: CHAIN_LABELS[id], ...result };
+      } catch (error) {
+        return { id, label: CHAIN_LABELS[id], ok: false, detail: scrubRpcError(error?.message, secret) };
+      }
+    })),
   };
 }
 
@@ -346,6 +386,7 @@ function serve() {
           hasEvmKey: Boolean(env.evmPrivateKey),
           hasSolanaKey: Boolean(env.solanaPrivateKey),
           telegramChatId: current?.telegramChatId || env.telegramChatId || "",
+          rpcSaved: CHAIN_IDS.filter((id) => env.rpc[id]).map((id) => CHAIN_LABELS[id]),
         });
         return;
       }
@@ -356,6 +397,9 @@ function serve() {
         const found = await discoverChatId(token);
         if (found.error) return send(res, 400, { error: found.error });
         return send(res, 200, { chatId: found.chatId });
+      }
+      if (req.method === "POST" && url.pathname === "/api/rpc-check") {
+        return send(res, 200, await checkRpc(await readBody(req)));
       }
       if (req.method === "POST" && url.pathname === "/api/start") {
         const config = formConfig(await readBody(req), loadEnvFile());
@@ -368,7 +412,7 @@ function serve() {
       }
       send(res, 404, { error: "Không có đường dẫn này." });
     } catch (error) {
-      send(res, 400, { error: error.message || "Lỗi." });
+      send(res, 400, { error: scrubRpcError(error.message, "") || "Lỗi." });
     }
   });
   const port = Number(process.env.PORT || 8787);

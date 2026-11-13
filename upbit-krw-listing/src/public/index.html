@@ -12,7 +12,8 @@
     p { margin: 0 0 14px; }
     form, section { background: #fffdf8; border: 1px solid #ddd4c4; border-radius: 14px; padding: 16px; }
     label { display: block; font-weight: 650; margin: 12px 0 4px; }
-    input { width: 100%; box-sizing: border-box; font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid #c9bfae; background: #fff; }
+    input, select { width: 100%; box-sizing: border-box; font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid #c9bfae; background: #fff; }
+    [hidden] { display: none !important; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
     .grid label { margin-top: 8px; }
     .row { display: flex; gap: 10px; align-items: end; }
@@ -61,6 +62,30 @@
       <input id="minLiquidity" name="minLiquidity" inputmode="decimal" value="50000" placeholder="50000. Ví dụ PEPE 50000 và ETH 50000. Để trống nếu không chặn">
       <label for="gasMultiple">Hệ số gas (2 = gấp đôi)</label>
       <input id="gasMultiple" name="gasMultiple" inputmode="decimal" value="2" required>
+      <label for="rpcProvider">RPC riêng</label>
+      <select id="rpcProvider">
+        <option value="saved">Giữ RPC đã lưu</option>
+        <option value="public">RPC công cộng</option>
+        <option value="alchemy">Alchemy, một key cho mọi chain</option>
+        <option value="infura">Infura, một key cho mọi chain</option>
+        <option value="custom">Tự dán link từng chain</option>
+      </select>
+      <p class="note" id="rpcHelp">Một API key Alchemy hoặc Infura tạo đường wss cho Ethereum, BNB Chain, Base, Arbitrum, Optimism, Polygon và Solana. Không gửi key vào chat.</p>
+      <input id="rpcSecret" type="password" autocomplete="off" placeholder="API key hoặc một link wss của Alchemy / Infura" hidden>
+      <div id="rpcCustom" class="grid" hidden>
+        <label for="rpc-ethereum">Ethereum<input id="rpc-ethereum" type="password" autocomplete="off" placeholder="wss:// hoặc https://"></label>
+        <label for="rpc-bsc">BNB Chain<input id="rpc-bsc" type="password" autocomplete="off" placeholder="wss:// hoặc https://"></label>
+        <label for="rpc-base">Base<input id="rpc-base" type="password" autocomplete="off" placeholder="wss:// hoặc https://"></label>
+        <label for="rpc-arbitrum">Arbitrum<input id="rpc-arbitrum" type="password" autocomplete="off" placeholder="wss:// hoặc https://"></label>
+        <label for="rpc-optimism">Optimism<input id="rpc-optimism" type="password" autocomplete="off" placeholder="wss:// hoặc https://"></label>
+        <label for="rpc-polygon">Polygon<input id="rpc-polygon" type="password" autocomplete="off" placeholder="wss:// hoặc https://"></label>
+        <label for="rpc-solana">Solana<input id="rpc-solana" type="password" autocomplete="off" placeholder="https://"></label>
+      </div>
+      <div class="actions">
+        <button class="secondary" id="rpcCheck" type="button">Kiểm tra RPC</button>
+      </div>
+      <p id="rpcSaved" class="note"></p>
+      <p id="rpcResult" class="note"></p>
       <label for="telegramToken">Token bot Telegram</label>
       <input id="telegramToken" name="telegramToken" type="password" autocomplete="off">
       <label for="telegramChatId">Chat id</label>
@@ -85,7 +110,7 @@
     const log = document.querySelector("#log");
     const form = document.querySelector("#form");
     const amountIds = ["ethereum", "bsc", "base", "arbitrum", "optimism", "polygon", "solana"];
-    const fields = ["accessKey", "secretKey", "evmPrivateKey", "solanaPrivateKey", "slippagePercent", "maxFdv", "minLiquidity", "gasMultiple", "telegramToken", "telegramChatId", "live", ...amountIds.map((id) => `amount-${id}`)];
+    const fields = ["accessKey", "secretKey", "evmPrivateKey", "solanaPrivateKey", "slippagePercent", "maxFdv", "minLiquidity", "gasMultiple", "rpcProvider", "rpcSecret", "rpcCheck", "telegramToken", "telegramChatId", "live", ...amountIds.map((id) => `amount-${id}`), ...amountIds.map((id) => `rpc-${id}`)];
     const field = (id) => document.getElementById(id);
 
     function payload() {
@@ -104,7 +129,16 @@
         telegramToken: field("telegramToken").value.trim(),
         telegramChatId: field("telegramChatId").value.trim(),
         live: field("live").checked,
+        rpcProvider: field("rpcProvider").value,
+        rpcSecret: field("rpcSecret").value.trim(),
+        rpc: Object.fromEntries(amountIds.map((id) => [id, field(`rpc-${id}`).value.trim()])),
       };
+    }
+
+    function showRpcFields() {
+      const choice = field("rpcProvider").value;
+      field("rpcSecret").hidden = choice !== "alchemy" && choice !== "infura";
+      field("rpcCustom").hidden = choice !== "custom";
     }
 
     function setRunning(running) {
@@ -135,6 +169,27 @@
       setRunning(false);
     });
 
+    field("rpcProvider").addEventListener("change", showRpcFields);
+    showRpcFields();
+
+    field("rpcCheck").addEventListener("click", async () => {
+      error.textContent = "";
+      field("rpcResult").textContent = "Đang đo...";
+      const response = await fetch("/api/rpc-check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload()),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        field("rpcResult").textContent = body.error || "Không kiểm tra được RPC.";
+        return;
+      }
+      field("rpcResult").textContent = body.rows.map((row) => (
+        row.ok ? `${row.label} ${row.ms} ms` : `${row.label}: ${row.detail || "không nối được"}`
+      )).join(" · ");
+    });
+
     field("chat").addEventListener("click", async () => {
       error.textContent = "";
       const response = await fetch("/api/chat-id", {
@@ -161,6 +216,9 @@
       if (!field("maxFdv").value && body.maxFdv) field("maxFdv").value = body.maxFdv;
       if (!field("minLiquidity").value && body.minLiquidity) field("minLiquidity").value = body.minLiquidity;
       if (!field("telegramChatId").value && body.telegramChatId) field("telegramChatId").value = body.telegramChatId;
+      field("rpcSaved").textContent = body.rpcSaved?.length
+        ? `Đã lưu RPC riêng cho ${body.rpcSaved.join(", ")}. Để trống ô key thì giữ nguyên.`
+        : "Chưa lưu RPC riêng.";
       log.textContent = body.lines.length ? body.lines.join("\n") : "Đang chờ.";
       if (body.running) setRunning(true);
     }

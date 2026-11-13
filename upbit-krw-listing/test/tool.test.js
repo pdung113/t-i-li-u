@@ -10,6 +10,7 @@ import { chainById } from "../src/networks.js";
 import { amountFor, fdvAllows, fdvUsd, liquidityAllows, parseUserNumber, poolSidesUsd, routeImpactAllows, solanaLiquidityAllows } from "../src/limits.js";
 import { minOut, priorityLamports, scaleUnits } from "../src/networks.js";
 import { resultText } from "../src/telegram.js";
+import { buyUrl, endpointPair, expandRpc, resolveRpcChoice, scrubRpcError } from "../src/rpc.js";
 
 const SANC_TITLE = "생텀(SANC) 신규 거래지원 안내 (KRW, BTC, USDT 마켓)";
 const SANC_BODY = `
@@ -1029,4 +1030,26 @@ test("chưa có giá thì thử lại, pool mỏng thì dừng", async () => {
   await new Promise((resolve) => setTimeout(resolve, 700));
   thin.stop();
   assert.equal(thinTries, 1);
+});
+
+test("một API key Alchemy phủ bảy chain và lỗi không chứa key", () => {
+  const key = "A".repeat(32);
+  const urls = expandRpc("alchemy", key);
+  assert.equal(urls.ethereum, `wss://eth-mainnet.g.alchemy.com/v2/${key}`);
+  assert.equal(urls.bsc, `wss://bnb-mainnet.g.alchemy.com/v2/${key}`);
+  assert.equal(urls.solana, `wss://solana-mainnet.g.alchemy.com/v2/${key}`);
+  assert.equal(Object.keys(urls).length, 7);
+  const fromLink = expandRpc("infura", `https://eth-mainnet.g.alchemy.com/v2/${key}`);
+  assert.equal(fromLink.base, `wss://base-mainnet.g.alchemy.com/v2/${key}`);
+  const pair = endpointPair(urls.ethereum);
+  assert.equal(pair.http, `https://eth-mainnet.g.alchemy.com/v2/${key}`);
+  assert.equal(buyUrl(`https://mainnet.infura.io/v3/${key}`), `wss://mainnet.infura.io/v3/${key}`);
+  assert.equal(endpointPair("https://example-rpc.invalid/path").ws, "");
+  const kept = resolveRpcChoice({ provider: "alchemy", secret: "", saved: { ethereum: "https://rpc.example/eth" } });
+  assert.equal(kept.ethereum, "https://rpc.example/eth");
+  assert.deepEqual(resolveRpcChoice({ provider: "public", saved: { ethereum: "https://rpc.example/eth" } }).ethereum, "");
+  const leaked = `request to https://eth-mainnet.g.alchemy.com/v2/${key} failed`;
+  const scrubbed = scrubRpcError(leaked, key);
+  assert.equal(scrubbed.includes(key), false);
+  assert.equal(scrubbed.includes("alchemy.com"), false);
 });
