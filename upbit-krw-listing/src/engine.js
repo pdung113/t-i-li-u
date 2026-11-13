@@ -38,7 +38,7 @@ function contractFits(chain, contract) {
 }
 
 function retryable(result) {
-  return /Không thấy pool|timeout|ETIMEDOUT|ECONN|fetch failed|socket|network|HTTP|Không đọc được thanh khoản/i.test(result?.reason || "");
+  return /Không thấy pool|timeout|ETIMEDOUT|ECONN|fetch failed|socket|network|HTTP|Không đọc được thanh khoản|Chưa có giá USD/i.test(result?.reason || "");
 }
 
 function emptyState() {
@@ -101,19 +101,12 @@ export async function executeListing(listing, ctx) {
       reason: !listing.contract ? "Thông báo không có địa chỉ contract." : `Chưa hỗ trợ DEX trên mạng ${listing.chain || "này"}.`,
     });
   }
-  if (!ctx.live) {
-    return finish(ctx, listing, {
-      ok: false,
-      dry: true,
-      venue: chain.kind === "solana" ? "Jupiter" : "DEX",
-      reason: "Chế độ xem thử.",
-    });
-  }
   try {
-    const result = await ctx.swap(listing);
+    const result = await ctx.swap(ctx.live ? listing : { ...listing, dry: true });
+    if (!ctx.live) return finish(ctx, listing, { ...result, ok: false, dry: true, tx: undefined });
     return finish(ctx, listing, result);
   } catch (error) {
-    return finish(ctx, listing, { ok: false, reason: error.message || "Không gửi được giao dịch." });
+    return finish(ctx, listing, { ok: false, dry: !ctx.live, reason: error.message || "Không gửi được giao dịch." });
   }
 }
 
@@ -165,7 +158,7 @@ export function startEngine({ client, config, log, notify, state }) {
     inflightTickers.add(listing.ticker);
     inflightContracts.add(token);
     const chain = chainById(listing.chain);
-    log(`${listing.market}: mua ngay trên ${chain ? chain.id : "DEX"} ${listing.contract}.`);
+    log(`${listing.market}: ${config.live ? "mua ngay" : "xem thử, chưa gửi lệnh"} trên ${chain ? chain.id : "DEX"} ${listing.contract}.`);
     if (!memory.notified[key]) {
       memory.notified[key] = true;
       try {

@@ -7,7 +7,7 @@ import { executeListing, listingIsFresh, FRESH_MS, shouldBuyNow, startEngine } f
 import { ethers } from "ethers";
 import { MULTICALL, choosePool, createBuyer, decodeQuote, isBaseAsset, quoteCalls, quoteOnProvider, v2PairAddress, v3PoolAddress } from "../src/swap.js";
 import { chainById } from "../src/networks.js";
-import { amountFor, fdvAllows, fdvUsd, liquidityAllows, parseUserNumber, poolSidesUsd, solanaLiquidityAllows } from "../src/limits.js";
+import { amountFor, fdvAllows, fdvUsd, liquidityAllows, parseUserNumber, poolSidesUsd, routeImpactAllows, solanaLiquidityAllows } from "../src/limits.js";
 import { minOut, priorityLamports, scaleUnits } from "../src/networks.js";
 import { resultText } from "../src/telegram.js";
 
@@ -168,6 +168,8 @@ test("thanh khoản tính riêng hai bên và 100.000 vẫn là một trăm ngh�
   assert.equal(solanaLiquidityAllows(250_000, 100_000).ok, true);
   assert.equal(solanaLiquidityAllows(150_000, 100_000).ok, false);
   assert.match(solanaLiquidityAllows(null, 100_000).reason, /Không đọc được thanh khoản Solana/);
+  assert.equal(routeImpactAllows(-0.0005).ok, true);
+  assert.match(routeImpactAllows(-0.08).reason, /8%/);
 });
 
 test("địa chỉ pool CREATE2 trùng pool đang có trên chain", () => {
@@ -251,8 +253,8 @@ test("mua DEX ngay một lần và không mua lần hai", async () => {
   assert.equal(state.bought["n1:SANC"].tx, "sig123");
 });
 
-test("chế độ xem thử không gọi swap", async () => {
-  let called = false;
+test("chế độ xem thử hỏi giá nhưng không giữ giao dịch", async () => {
+  let dry = false;
   const notes = [];
   const result = await executeListing({
     noticeId: "n2",
@@ -267,13 +269,18 @@ test("chế độ xem thử không gọi swap", async () => {
     state: { bought: {}, tickerBoughtAt: {} },
     now: () => Date.now(),
     stopped: () => false,
-    swap: async () => { called = true; return { ok: true }; },
+    swap: async (listing) => {
+      dry = listing.dry === true;
+      return { ok: true, tx: "0xshould-not-stick", reason: "Sẽ mua trên Uniswap V2." };
+    },
     notify: (text) => notes.push(text),
   });
-  assert.equal(called, false);
+  assert.equal(dry, true);
   assert.equal(result.dry, true);
+  assert.equal(result.ok, false);
+  assert.equal(result.tx, undefined);
   assert.match(notes[0], /xem thử/);
-  assert.match(notes[0], /Không mua được|Chưa mua/);
+  assert.match(notes[0], /Sẽ mua/);
 });
 
 test("kênh Upbit tự đẩy tin, không cần dán link, và chờ contract rồi mới mua", async () => {
@@ -705,6 +712,7 @@ test("hỏi giá một lần khi RPC đã nóng, pool lệch hoặc FDV cao thì
   buyer.stop();
   assert.deepEqual(provider.calls, ["quote", "send"]);
   assert.equal(bought.ok, true);
+  assert.equal(bought.pending, true);
   assert.equal(bought.venue, "Uniswap V2");
   assert.ok(Date.now() - started < 100);
 
@@ -845,4 +853,150 @@ test("pool mỏng hơn 100k mỗi bên thì không gửi giao dịch", async () 
   unreadBuyer.stop();
   assert.match(blocked.reason, /Không đọc được thanh khoản/);
   assert.deepEqual(unreadProvider.calls, ["quote"]);
+
+  const preview = fakeProvider(() => deep);
+  const previewBuyer = createBuyer({
+    evmPrivateKey: `0x${"11".repeat(32)}`,
+    amounts: { ethereum: 0.01 },
+    gasMultiple: 2,
+    slippagePercent: 10,
+    minLiquidity: 100_000,
+    prices: { ETH: 2000 },
+    providerFor: () => preview,
+  });
+  await previewBuyer.warm();
+  preview.calls.length = 0;
+  const looked = await previewBuyer.buy({ chain: "ethereum", contract: token, dry: true, receivedAt: Date.now() });
+  previewBuyer.stop();
+  assert.equal(looked.dry, true);
+  assert.match(looked.reason, /Sẽ mua trên Uniswap V2/);
+  assert.match(looked.reason, /200,000 USD/);
+  assert.deepEqual(preview.calls, ["quote"]);
+});
+
+test("gửi xong là trả về, socket đứt thì hỏi lại một lần", async () => {
+  const chain = chainById("ethereum");
+  const token = "0x1111111111111111111111111111111111111111";
+  const value = ethers.parseEther("0.01");
+  const plan = quoteCalls(chain, token, value, false);
+  const raw = quotePayload(plan, (step) => (step.kind === "v2" ? 1_000_000n : null));
+  let settled;
+  const settledPromise = new Promise((resolve) => {
+    settled = resolve;
+  });
+  let waited = false;
+  const provider = fakeProvider(() => raw);
+  provider.broadcastTransaction = async () => ({
+    hash: `0x${"cd".repeat(32)}`,
+    async wait() {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      waited = true;
+      return { status: 0 };
+    },
+  });
+  const buyer = createBuyer({
+    evmPrivateKey: `0x${"11".repeat(32)}`,
+    amounts: { ethereum: 0.01 },
+    gasMultiple: 2,
+    slippagePercent: 10,
+    providerFor: () => provider,
+    onReceipt: (info) => settled(info),
+  });
+  await buyer.warm();
+  provider.calls.length = 0;
+  const started = Date.now();
+  const bought = await buyer.buy({ chain: "ethereum", contract: token, market: "KRW-OPEN", receivedAt: started });
+  assert.equal(bought.pending, true);
+  assert.equal(waited, false);
+  assert.ok(Date.now() - started < 100);
+  const receipt = await settledPromise;
+  buyer.stop();
+  assert.equal(waited, true);
+  assert.equal(receipt.ok, false);
+  assert.match(receipt.reason, /revert/);
+  assert.match(resultText(receipt), /không mua thêm/);
+
+  let quotes = 0;
+  const flaky = fakeProvider(() => {
+    quotes += 1;
+    if (quotes === 1) throw new Error("socket hang up");
+    return raw;
+  });
+  const flakyBuyer = createBuyer({
+    evmPrivateKey: `0x${"11".repeat(32)}`,
+    amounts: { ethereum: 0.01 },
+    gasMultiple: 2,
+    slippagePercent: 10,
+    providerFor: () => flaky,
+  });
+  await flakyBuyer.warm();
+  flaky.calls.length = 0;
+  quotes = 0;
+  const recovered = await flakyBuyer.buy({ chain: "ethereum", contract: token, receivedAt: Date.now() });
+  flakyBuyer.stop();
+  assert.equal(recovered.pending, true);
+  assert.equal(quotes, 2);
+});
+
+test("chưa có giá thì thử lại, pool mỏng thì dừng", async () => {
+  const body = "안내된 네트워크 (OPEN-Ethereum)\nOPEN 컨트랙트 주소는 0xa227cc36938f0c9e09ce0e64dfab226cad739447";
+  const notice = (id) => ({
+    type: "announcement",
+    event_type: "CREATED",
+    uuid: id,
+    title: "오픈(OPEN) 신규 거래지원 안내 (KRW 마켓)",
+    category: "trade",
+    listed_at: new Date().toISOString(),
+    body,
+  });
+  let tries = 0;
+  let push = () => {};
+  const engine = startEngine({
+    client: engineClient((handler) => {
+      push = handler;
+    }),
+    config: {
+      live: true,
+      gasMultiple: 2,
+      slippagePercent: 10,
+      amounts: { ethereum: 0.01 },
+      swap: async () => {
+        tries += 1;
+        if (tries === 1) return { ok: false, reason: "Chưa có giá USD nên không mua." };
+        return { ok: true, tx: "0xprice", pending: true };
+      },
+    },
+    log: () => {},
+    notify: () => {},
+    state: { bought: {}, tickerBoughtAt: {}, notified: {}, armed: [] },
+  });
+  push(notice("price-1"));
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  engine.stop();
+  assert.equal(tries, 2);
+
+  let thinTries = 0;
+  let pushThin = () => {};
+  const thin = startEngine({
+    client: engineClient((handler) => {
+      pushThin = handler;
+    }),
+    config: {
+      live: true,
+      gasMultiple: 2,
+      slippagePercent: 10,
+      amounts: { ethereum: 0.01 },
+      swap: async () => {
+        thinTries += 1;
+        return { ok: false, reason: "Thanh khoản thấp: ETH 1,000 USD, token 1,000 USD. Cần mỗi bên ít nhất 100,000 USD." };
+      },
+    },
+    log: () => {},
+    notify: () => {},
+    state: { bought: {}, tickerBoughtAt: {}, notified: {}, armed: [] },
+  });
+  pushThin(notice("thin-1"));
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  thin.stop();
+  assert.equal(thinTries, 1);
 });

@@ -2,7 +2,7 @@ import { ethers } from "ethers";
 import bs58 from "bs58";
 import { Connection, Keypair, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { chainById, minOut, priorityLamports, scaleUnits, SOL_MINT } from "./networks.js";
-import { amountFor, fdvAllows, fdvUsd, liquidityAllows, poolSidesUsd, solanaLiquidityAllows } from "./limits.js";
+import { amountFor, fdvAllows, fdvUsd, formatUsd, liquidityAllows, poolSidesUsd, routeImpactAllows, solanaLiquidityAllows } from "./limits.js";
 
 const V2_IFACE = new ethers.Interface([
   "function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] amounts)",
@@ -165,7 +165,20 @@ export function v3PoolAddress(chain, token, fee) {
   return ethers.getCreate2Address(chain.v3Deployer, salt, chain.v3InitCodeHash);
 }
 
-export function quoteCalls(chain, token, value, needSupply) {
+function isTransport(error) {
+  const text = `${error?.code || ""} ${error?.shortMessage || ""} ${error?.message || ""}`;
+  return /timeout|ETIMEDOUT|ECONN|socket|network|SERVER_ERROR|bad response|closed|disconnected|EAI_/i.test(text);
+}
+
+function raceDelay(promise, ms) {
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(undefined), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+export function quoteCalls(chain, token, value, needSupply, withReserves = true) {
   const plan = [];
   if (chain.v2Router) {
     plan.push({
@@ -184,7 +197,7 @@ export function quoteCalls(chain, token, value, needSupply) {
       });
     }
   }
-  const pair = v2PairAddress(chain, token);
+  const pair = withReserves ? v2PairAddress(chain, token) : null;
   if (pair) {
     plan.push({
       kind: "v2reserves",
@@ -193,7 +206,7 @@ export function quoteCalls(chain, token, value, needSupply) {
       data: RESERVE_IFACE.encodeFunctionData("getReserves"),
     });
   }
-  if (chain.v3Deployer && chain.v3InitCodeHash) {
+  if (withReserves && chain.v3Deployer && chain.v3InitCodeHash) {
     for (const fee of chain.v3Fees) {
       const pool = v3PoolAddress(chain, token, fee);
       if (!pool) continue;
@@ -260,8 +273,8 @@ export function decodeQuote(plan, raw) {
   return { v2, v3, supply, v2Reserves, v3Balances };
 }
 
-export async function quoteOnProvider(provider, chain, token, value, needSupply) {
-  const plan = quoteCalls(chain, token, value, needSupply);
+export async function quoteOnProvider(provider, chain, token, value, needSupply, withReserves = true) {
+  const plan = quoteCalls(chain, token, value, needSupply, withReserves);
   if (!plan.length) return { v2: null, v3: [], supply: null, v2Reserves: null, v3Balances: {} };
   const data = MC_IFACE.encodeFunctionData("aggregate3", [plan.map((step) => ({
     target: step.target,
@@ -271,7 +284,8 @@ export async function quoteOnProvider(provider, chain, token, value, needSupply)
   try {
     const raw = await provider.call({ to: MULTICALL, data });
     return decodeQuote(plan, raw);
-  } catch {
+  } catch (error) {
+    if (isTransport(error)) throw error;
     const [v2, v3, supply] = await Promise.all([
       quoteV2(provider, chain, token, value),
       chain.v3Quoter ? Promise.all(chain.v3Fees.map((fee) => quoteV3Fee(provider, chain, token, value, fee))) : [],
@@ -281,8 +295,8 @@ export async function quoteOnProvider(provider, chain, token, value, needSupply)
       v2,
       v3: (v3 || []).filter(Boolean),
       supply,
-      v2Reserves: await readV2Reserves(provider, chain, token),
-      v3Balances: await readV3Balances(provider, chain, token),
+      v2Reserves: withReserves ? await readV2Reserves(provider, chain, token) : null,
+      v3Balances: withReserves ? await readV3Balances(provider, chain, token) : {},
     };
   }
 }
@@ -351,6 +365,9 @@ export function createBuyer(config) {
       .map(([symbol, value]) => [symbol, Number(value)]),
   );
   const wsFailed = new Set();
+  const liquidityPending = new Map();
+  let nextPriceAt = 0;
+  let nextJupiterAt = 0;
   let priorityLamport = 5_000;
   let solana = null;
   let timer = null;
@@ -375,7 +392,9 @@ export function createBuyer(config) {
       provider = String(url).startsWith("ws")
         ? new ethers.WebSocketProvider(url, network, { staticNetwork: network })
         : new ethers.JsonRpcProvider(url, network, { staticNetwork: network });
-      provider.on?.("error", () => {});
+      provider.on?.("error", () => {
+        wsFailed.add(chain.id);
+      });
       providers.set(chain.id, provider);
     }
     return provider;
@@ -411,7 +430,7 @@ export function createBuyer(config) {
     }
     const provider = providerFor(chain);
     const one = 10n ** BigInt(chain.nativeDecimals);
-    const bundle = await quoteOnProvider(provider, chain, chain.stable, one, false);
+    const bundle = await quoteOnProvider(provider, chain, chain.stable, one, false, false);
     const choice = choosePool(bundle.v2, bundle.v3);
     return choice.ok ? usdFromRaw(choice.quoted, chain.stableDecimals) : 0;
   }
@@ -431,6 +450,25 @@ export function createBuyer(config) {
         // Giữ giá gần nhất. Không có giá thì trần FDV chặn lệnh.
       }
     }));
+  }
+
+  function solanaPoolLiquidity(mint) {
+    const existing = liquidityPending.get(mint);
+    if (existing) return existing;
+    const task = fetch(`${JUPITER_TOKEN}?query=${encodeURIComponent(mint)}`, { signal: AbortSignal.timeout(1000) })
+      .then((result) => (result.ok ? result.json() : null))
+      .then((rows) => {
+        const match = Array.isArray(rows) ? rows.find((item) => item?.id === mint) : null;
+        const total = Number(match?.liquidity);
+        return Number.isFinite(total) ? total : null;
+      })
+      .catch(() => null)
+      .then((value) => {
+        if (!(value > 0)) liquidityPending.delete(mint);
+        return value;
+      });
+    liquidityPending.set(mint, task);
+    return task;
   }
 
   async function warm() {
@@ -459,24 +497,37 @@ export function createBuyer(config) {
       }
     }
 
-    await Promise.all(active.map(async (chain) => {
-      if (chain.kind === "solana") {
-        try {
-          const connection = solanaConnection();
-          const samples = await connection.getRecentPrioritizationFees();
-          priorityLamport = priorityLamports(samples.map((item) => item.prioritizationFee), config.gasMultiple);
-        } catch {
-          priorityLamport = Math.max(priorityLamport, 5_000);
-        }
-        return;
-      }
-      if (!evmWallet) return;
-      await warmEvm(chain, true);
-    }));
-    if (Number(config.maxFdv) > 0 || Number(config.minLiquidity) > 0) await refreshPrices();
-    if (active.some((chain) => chain.kind === "solana")) {
-      fetch(JUPITER_ORDER, { signal: AbortSignal.timeout(1200) }).catch(() => {});
+    const needUsd = Number(config.maxFdv) > 0 || Number(config.minLiquidity) > 0;
+    let priceTask = Promise.resolve();
+    if (needUsd && Date.now() >= nextPriceAt) {
+      nextPriceAt = Date.now() + 15_000;
+      priceTask = refreshPrices().catch(() => {
+        nextPriceAt = Date.now();
+      });
     }
+    const solanaOn = active.some((chain) => chain.kind === "solana");
+    if (solanaOn && Date.now() >= nextJupiterAt) {
+      nextJupiterAt = Date.now() + 15_000;
+      fetch(JUPITER_ORDER, { signal: AbortSignal.timeout(1200) }).catch(() => {});
+      if (Number(config.minLiquidity) > 0) solanaPoolLiquidity(SOL_MINT).catch(() => {});
+    }
+    await Promise.all([
+      priceTask,
+      Promise.all(active.map(async (chain) => {
+        if (chain.kind === "solana") {
+          try {
+            const connection = solanaConnection();
+            const samples = await connection.getRecentPrioritizationFees();
+            priorityLamport = priorityLamports(samples.map((item) => item.prioritizationFee), config.gasMultiple);
+          } catch {
+            priorityLamport = Math.max(priorityLamport, 5_000);
+          }
+          return;
+        }
+        if (!evmWallet) return;
+        await warmEvm(chain, true);
+      })),
+    ]);
   }
 
   function start() {
@@ -535,12 +586,28 @@ export function createBuyer(config) {
     const needLiquidity = Number(config.minLiquidity) > 0;
     const cachedUsd = prices.get(chain.symbol) || 0;
     if ((needCap || needLiquidity) && !(cachedUsd > 0)) return { ok: false, reason: "Chưa có giá USD nên không mua." };
-    const provider = providerFor(chain);
+    let provider = providerFor(chain);
     const token = ethers.getAddress(listing.contract);
     const value = ethers.parseEther(String(amountFor(chain.id, config.amounts)));
-    const feePromise = fees.get(chain.id) ? Promise.resolve(fees.get(chain.id)) : provider.getFeeData();
-    const quotePromise = quoteOnProvider(provider, chain, token, value, needCap);
-    const [feeData, bundle] = await Promise.all([feePromise, quotePromise]);
+    const quoteOnce = (current) => quoteOnProvider(current, chain, token, value, needCap, true);
+    let feeData = fees.get(chain.id);
+    let bundle;
+    try {
+      [feeData, bundle] = await Promise.all([
+        feeData ? Promise.resolve(feeData) : provider.getFeeData(),
+        quoteOnce(provider),
+      ]);
+    } catch (error) {
+      const custom = config.rpc?.[chain.id];
+      if (custom || !chain.ws || wsFailed.has(chain.id) || !isTransport(error)) throw error;
+      wsFailed.add(chain.id);
+      dropProvider(chain);
+      provider = providerFor(chain);
+      [feeData, bundle] = await Promise.all([
+        provider.getFeeData(),
+        quoteOnce(provider),
+      ]);
+    }
     fees.set(chain.id, feeData);
     const choice = choosePool(bundle.v2, bundle.v3);
     if (!choice.ok) {
@@ -557,11 +624,27 @@ export function createBuyer(config) {
     if (!liquidity.ok) {
       return { ok: false, reason: liquidity.reason, nativeLiquidity: liquidity.native, tokenLiquidity: liquidity.token };
     }
+    const venue = venueName(chain, version);
+    if (listing.dry) {
+      const parts = [`Sẽ mua trên ${venue}.`];
+      if (gate.fdv > 0) parts.push(`FDV ${formatUsd(gate.fdv)} USD.`);
+      if (liquidity.native > 0 && liquidity.token > 0) {
+        parts.push(`Thanh khoản ${chain.symbol} ${formatUsd(liquidity.native)} USD, token ${formatUsd(liquidity.token)} USD.`);
+      }
+      return {
+        ok: false,
+        dry: true,
+        venue,
+        fdv: gate.fdv,
+        nativeLiquidity: liquidity.native,
+        tokenLiquidity: liquidity.token,
+        reason: parts.join(" "),
+      };
+    }
     let nonce = takeNonce(chain.id);
     if (nonce == null) nonce = await provider.getTransactionCount(evmWallet.address, "pending");
     const gas = feeFields(chain, feeData, config.gasMultiple);
     const floor = minOut(quoted, config.slippagePercent);
-    const venue = venueName(chain, version);
     const tx = version === 2
       ? {
         chainId: chain.chainId,
@@ -599,24 +682,38 @@ export function createBuyer(config) {
       return { ok: false, reason: error.shortMessage || error.message || "Không gửi được giao dịch.", venue };
     }
     const lagMs = Date.now() - started;
-    try {
-      const receipt = await sent.wait();
-      if (!receipt || receipt.status === 0) {
-        return { ok: false, reason: `Giao dịch revert trên ${venue}.`, tx: sent.hash, venue, lagMs, fdv: gate.fdv, nativeLiquidity: liquidity.native, tokenLiquidity: liquidity.token };
-      }
-    } catch (error) {
-      return {
+    const sentInfo = {
+      ok: true,
+      pending: true,
+      tx: sent.hash,
+      venue,
+      wallet: evmWallet.address,
+      lagMs,
+      fdv: gate.fdv,
+      nativeLiquidity: liquidity.native,
+      tokenLiquidity: liquidity.token,
+      market: listing.market,
+      chain: chain.id,
+      contract: listing.contract,
+      symbol: chain.symbol,
+    };
+    sent.wait().then((receipt) => {
+      const confirmed = Boolean(receipt && receipt.status === 1);
+      config.onReceipt?.({
+        ...sentInfo,
+        ok: confirmed,
+        pending: false,
+        reason: confirmed ? "" : `Giao dịch revert trên ${venue}.`,
+      });
+    }).catch((error) => {
+      config.onReceipt?.({
+        ...sentInfo,
         ok: false,
-        reason: `Đã gửi giao dịch nhưng chưa xác nhận: ${error.shortMessage || error.message}`,
-        tx: sent.hash,
-        venue,
-        lagMs,
-        fdv: gate.fdv,
-        nativeLiquidity: liquidity.native,
-        tokenLiquidity: liquidity.token,
-      };
-    }
-    return { ok: true, tx: sent.hash, venue, wallet: evmWallet.address, lagMs, fdv: gate.fdv, nativeLiquidity: liquidity.native, tokenLiquidity: liquidity.token };
+        pending: false,
+        reason: `Đã gửi nhưng chưa thấy xác nhận: ${error.shortMessage || error.message}`,
+      });
+    });
+    return sentInfo;
   }
 
   async function buySolana(listing, chain, started) {
@@ -642,10 +739,9 @@ export function createBuyer(config) {
     const supplyPromise = needCap
       ? connection.getTokenSupply(new PublicKey(listing.contract)).catch(() => null)
       : Promise.resolve(null);
+    const askedAt = Date.now();
     const liquidityPromise = Number(config.minLiquidity) > 0
-      ? fetch(`${JUPITER_TOKEN}?query=${encodeURIComponent(listing.contract)}`, { signal: AbortSignal.timeout(1000) })
-        .then((result) => (result.ok ? result.json() : null))
-        .catch(() => null)
+      ? solanaPoolLiquidity(listing.contract)
       : Promise.resolve(null);
     const response = await fetch(`${JUPITER_ORDER}?${params}`, { headers, signal: AbortSignal.timeout(1200) });
     const order = await response.json().catch(() => ({}));
@@ -653,7 +749,7 @@ export function createBuyer(config) {
     if (!response.ok || !encoded) {
       return { ok: false, reason: order.errorMessage || order.error || `Jupiter HTTP ${response.status}` };
     }
-    const [supply, rows] = await Promise.all([supplyPromise, liquidityPromise]);
+    const supply = await supplyPromise;
     const outAmount = BigInt(order.outAmount || 0);
     const inAmount = BigInt(order.inAmount || amount);
     const gate = gateFdv(
@@ -664,10 +760,23 @@ export function createBuyer(config) {
       cachedUsd,
     );
     if (!gate.ok) return { ok: false, reason: gate.reason };
-    const match = Array.isArray(rows) ? rows.find((item) => item?.id === listing.contract) : null;
-    const poolLiquidity = match && Number.isFinite(Number(match.liquidity)) ? Number(match.liquidity) : null;
+    const grace = Math.max(40, 450 - (Date.now() - askedAt));
+    const poolLiquidity = Number(config.minLiquidity) > 0 ? await raceDelay(liquidityPromise, grace) : null;
+    if (poolLiquidity === undefined) return { ok: false, reason: "Không đọc được thanh khoản Solana nên không mua." };
     const liquidity = solanaLiquidityAllows(poolLiquidity, config.minLiquidity);
     if (!liquidity.ok) return { ok: false, reason: liquidity.reason, poolLiquidity: liquidity.poolLiquidity };
+    const impact = routeImpactAllows(order.priceImpactPct);
+    if (!impact.ok) return { ok: false, reason: impact.reason, poolLiquidity: liquidity.poolLiquidity };
+    if (listing.dry) {
+      return {
+        ok: false,
+        dry: true,
+        venue: "Jupiter",
+        fdv: gate.fdv,
+        poolLiquidity: liquidity.poolLiquidity,
+        reason: "Sẽ mua trên Jupiter.",
+      };
+    }
     const transaction = VersionedTransaction.deserialize(Buffer.from(encoded, "base64"));
     transaction.sign([solanaKey]);
     let signature;
@@ -677,21 +786,44 @@ export function createBuyer(config) {
       return { ok: false, reason: error.message || "Không gửi được giao dịch Solana.", venue: "Jupiter" };
     }
     const lagMs = Date.now() - started;
-    try {
-      const confirmation = order.lastValidBlockHeight
-        ? await connection.confirmTransaction({
-          signature,
-          blockhash: transaction.message.recentBlockhash,
-          lastValidBlockHeight: Number(order.lastValidBlockHeight),
-        }, "confirmed")
-        : await connection.confirmTransaction(signature, "confirmed");
-      if (confirmation.value?.err) {
-        return { ok: false, reason: "Giao dịch Solana không thành công.", tx: signature, venue: "Jupiter", lagMs, fdv: gate.fdv, poolLiquidity: liquidity.poolLiquidity };
-      }
-    } catch (error) {
-      return { ok: false, reason: `Đã gửi giao dịch nhưng chưa xác nhận: ${error.message}`, tx: signature, venue: "Jupiter", lagMs, fdv: gate.fdv, poolLiquidity: liquidity.poolLiquidity };
-    }
-    return { ok: true, tx: signature, venue: "Jupiter", wallet: solanaKey.publicKey.toBase58(), lagMs, fdv: gate.fdv, poolLiquidity: liquidity.poolLiquidity };
+    const sentInfo = {
+      ok: true,
+      pending: true,
+      tx: signature,
+      venue: "Jupiter",
+      wallet: solanaKey.publicKey.toBase58(),
+      lagMs,
+      fdv: gate.fdv,
+      poolLiquidity: liquidity.poolLiquidity,
+      market: listing.market,
+      chain: chain.id,
+      contract: listing.contract,
+      symbol: chain.symbol,
+    };
+    const confirmation = order.lastValidBlockHeight
+      ? connection.confirmTransaction({
+        signature,
+        blockhash: transaction.message.recentBlockhash,
+        lastValidBlockHeight: Number(order.lastValidBlockHeight),
+      }, "confirmed")
+      : connection.confirmTransaction(signature, "confirmed");
+    confirmation.then((result) => {
+      const confirmed = !result.value?.err;
+      config.onReceipt?.({
+        ...sentInfo,
+        ok: confirmed,
+        pending: false,
+        reason: confirmed ? "" : "Giao dịch Solana không thành công.",
+      });
+    }).catch((error) => {
+      config.onReceipt?.({
+        ...sentInfo,
+        ok: false,
+        pending: false,
+        reason: `Đã gửi nhưng chưa thấy xác nhận: ${error.message}`,
+      });
+    });
+    return sentInfo;
   }
 
   async function buy(listing) {

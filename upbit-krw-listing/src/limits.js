@@ -70,6 +70,16 @@ export function liquidityAllows(sides, minUsd, symbol = "") {
   return { ok: true, native: sides.native, token: sides.token };
 }
 
+export function routeImpactAllows(impactFraction, maxFraction = 0.02) {
+  const impact = Math.abs(Number(impactFraction));
+  if (!Number.isFinite(impact)) return { ok: true };
+  if (impact > maxFraction) {
+    const percent = Math.round(impact * 1000) / 10;
+    return { ok: false, reason: `Route Solana trượt khoảng ${percent}% so với giá pool. Không mua.` };
+  }
+  return { ok: true };
+}
+
 export function solanaLiquidityAllows(totalUsd, minPerSide) {
   const min = Number(minPerSide);
   if (!Number.isFinite(min) || min <= 0) return { ok: true };

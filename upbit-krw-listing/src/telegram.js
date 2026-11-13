@@ -4,6 +4,7 @@ import { chainById } from "./networks.js";
 export function resultText(info) {
   const lines = [`DEX ${info.market || ""}`.trim()];
   if (info.dry) lines.push("Chưa mua: đang ở chế độ xem thử, không gửi giao dịch.");
+  else if (info.pending) lines.push("Đã gửi lệnh, đang chờ xác nhận.");
   else if (info.ok) lines.push("Mua được.");
   else if (info.tx) lines.push("Đã gửi giao dịch rồi, không mua thêm.");
   else lines.push("Không mua được.");
@@ -35,9 +36,12 @@ export function armedText(listing, config) {
   const amount = amountFor(listing.chain, config?.amounts);
   const cap = Number(config?.maxFdv) > 0 ? `, FDV tối đa ${formatUsd(config.maxFdv)} USD` : "";
   const floor = Number(config?.minLiquidity) > 0 ? `, mỗi bên pool ít nhất ${formatUsd(config.minLiquidity)} USD` : "";
+  const head = config?.live === false
+    ? `Xem thử ${listing.market}, chưa gửi lệnh.`
+    : `Upbit báo listing mới ${listing.market}.`;
   return [
-    `Upbit báo listing mới ${listing.market}.`,
-    `Mua ngay trên DEX ${listing.chain || "chưa rõ mạng"}, ${amount} ${chain?.symbol || ""}, contract ${listing.contract || "chưa có"}.`,
+    head,
+    `${config?.live === false ? "Nếu bật mua thật sẽ vào" : "Mua ngay trên"} DEX ${listing.chain || "chưa rõ mạng"}, ${amount} ${chain?.symbol || ""}, contract ${listing.contract || "chưa có"}.`,
     `Trượt giá ${config?.slippagePercent ?? 10}%, gas x${config?.gasMultiple ?? 2}${cap}${floor}.`,
   ].join(" ");
 }
