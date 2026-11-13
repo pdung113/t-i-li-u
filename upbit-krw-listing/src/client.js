@@ -108,6 +108,7 @@ export function createClient({ accessKey, secretKey }) {
           }, 30_000);
         });
         socket.on("message", (data) => {
+          const receivedAt = Date.now();
           const text = typeof data === "string" ? data : data.toString("utf8");
           let message = null;
           try {
@@ -119,7 +120,7 @@ export function createClient({ accessKey, secretKey }) {
             onStatus?.(`error:${message.error.name || "ws"}`);
             return;
           }
-          if ((message?.type || message?.ty) === "announcement") onNotice(message);
+          if ((message?.type || message?.ty) === "announcement") onNotice({ ...message, receivedAt });
         });
         socket.on("close", () => {
           clearInterval(ping);

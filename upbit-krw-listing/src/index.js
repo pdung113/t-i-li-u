@@ -4,8 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "./client.js";
 import { normalizeState, startEngine } from "./engine.js";
+import { MAX_NATIVE } from "./limits.js";
+import { CHAIN_IDS } from "./networks.js";
 import { decideNotice } from "./notice.js";
-import { buyOnDex, walletFromEvmKey, walletFromSolanaKey } from "./swap.js";
+import { createBuyer, walletFromEvmKey, walletFromSolanaKey } from "./swap.js";
 import { discoverChatId, sendTelegram } from "./telegram.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -13,7 +15,6 @@ const dir = path.resolve(root, "..");
 const envPath = path.join(dir, ".env");
 const statePath = path.join(dir, "data", "state.json");
 const htmlPath = path.join(root, "public", "index.html");
-const MAX_AMOUNT = 5;
 const KEPT_ENV = [
   "RPC_ETHEREUM",
   "RPC_BSC",
@@ -27,6 +28,7 @@ const KEPT_ENV = [
 
 const lines = [];
 let engine = null;
+let buyer = null;
 let current = null;
 let telegramWarned = false;
 
@@ -88,9 +90,10 @@ function writeEnv(config) {
     `UPBIT_SECRET_KEY=${config.secretKey}`,
     `EVM_PRIVATE_KEY=${config.evmPrivateKey}`,
     `SOLANA_PRIVATE_KEY=${config.solanaPrivateKey}`,
-    `BUY_AMOUNT=${config.amount}`,
+    ...CHAIN_IDS.map((id) => `AMOUNT_${id.toUpperCase()}=${config.amounts[id] > 0 ? config.amounts[id] : ""}`),
     `GAS_MULTIPLE=${config.gasMultiple}`,
     `SLIPPAGE_PERCENT=${config.slippagePercent}`,
+    `MAX_FDV_USD=${config.maxFdv || ""}`,
     `TELEGRAM_BOT_TOKEN=${config.telegramToken}`,
     `TELEGRAM_CHAT_ID=${config.telegramChatId}`,
     `LIVE=${config.live ? "true" : "false"}`,
@@ -112,9 +115,10 @@ function configFromEnv(env) {
     secretKey: env.UPBIT_SECRET_KEY || "",
     evmPrivateKey: env.EVM_PRIVATE_KEY || "",
     solanaPrivateKey: env.SOLANA_PRIVATE_KEY || "",
-    amount: Number(env.BUY_AMOUNT || 0),
+    amounts: Object.fromEntries(CHAIN_IDS.map((id) => [id, Number(env[`AMOUNT_${id.toUpperCase()}`] || 0)])),
     gasMultiple: Number(env.GAS_MULTIPLE || 2),
     slippagePercent: Number(env.SLIPPAGE_PERCENT || 10),
+    maxFdv: Number(env.MAX_FDV_USD || 0) || null,
     telegramToken: env.TELEGRAM_BOT_TOKEN || "",
     telegramChatId: env.TELEGRAM_CHAT_ID || "",
     live: env.LIVE === "true",
@@ -138,10 +142,27 @@ function parseDecimal(value) {
   return Number(text);
 }
 
+function parseAmounts(source) {
+  const amounts = Object.fromEntries(CHAIN_IDS.map((id) => [id, 0]));
+  for (const id of CHAIN_IDS) {
+    const raw = source?.[id];
+    if (raw == null || String(raw).trim() === "") continue;
+    amounts[id] = parseDecimal(raw);
+  }
+  return amounts;
+}
+
 function validate(config) {
   if (!config.accessKey || !config.secretKey) throw new Error("Cần Access Key và Secret Key của Upbit Open API.");
-  if (!Number.isFinite(config.amount) || config.amount <= 0 || config.amount > MAX_AMOUNT) {
-    throw new Error(`Số native mỗi coin phải lớn hơn 0 và không quá ${MAX_AMOUNT}.`);
+  for (const id of CHAIN_IDS) {
+    const amount = config.amounts[id];
+    if (!Number.isFinite(amount) || amount < 0 || amount > MAX_NATIVE) {
+      throw new Error(`Số lượng ${id} phải từ 0 đến ${MAX_NATIVE}. Để trống nếu không mua chain này.`);
+    }
+  }
+  if (!CHAIN_IDS.some((id) => config.amounts[id] > 0)) throw new Error("Nhập số lượng cho ít nhất một chain.");
+  if (config.maxFdv != null && (!Number.isFinite(config.maxFdv) || config.maxFdv <= 0)) {
+    throw new Error("FDV tối đa phải là số USD lớn hơn 0, hoặc để trống.");
   }
   if (!Number.isFinite(config.gasMultiple) || config.gasMultiple < 1 || config.gasMultiple > 20) {
     throw new Error("Hệ số gas phải từ 1 đến 20. Nhập 2 nếu muốn gấp đôi.");
@@ -153,7 +174,7 @@ function validate(config) {
     try {
       walletFromEvmKey(config.evmPrivateKey);
     } catch {
-      throw new Error("Private key ví EVM không đúng.");
+      throw new Error("Private key ví ERC không đúng.");
     }
   }
   if (config.solanaPrivateKey) {
@@ -163,9 +184,9 @@ function validate(config) {
       throw new Error("Private key ví Solana không đúng.");
     }
   }
-  if (config.live && !config.evmPrivateKey && !config.solanaPrivateKey) {
-    throw new Error("Cần private key ví EVM hoặc Solana để gửi giao dịch thật.");
-  }
+  const needsEvm = CHAIN_IDS.some((id) => id !== "solana" && config.amounts[id] > 0);
+  if (config.live && needsEvm && !config.evmPrivateKey) throw new Error("Cần private key ví ERC cho chain đang nhập số lượng.");
+  if (config.live && config.amounts.solana > 0 && !config.solanaPrivateKey) throw new Error("Cần private key ví Solana.");
 }
 
 async function notify(text) {
@@ -197,7 +218,10 @@ async function start(config) {
   current = config;
   telegramWarned = false;
   log("Đã xác thực API Upbit. Key này chỉ để nhận thông báo, không mua trên sàn KRW.");
-  log(`Listing mới có cặp KRW sẽ mua ngay trên DEX: ${config.amount} native, gas x${config.gasMultiple}, trượt giá ${config.slippagePercent}%.`);
+  const chosen = CHAIN_IDS.filter((id) => config.amounts[id] > 0).map((id) => `${config.amounts[id]} ${id}`);
+  const cap = config.maxFdv ? `${config.maxFdv} USD` : "không giới hạn";
+  log(`Số lượng theo chain: ${chosen.join(", ")}. Trượt giá ${config.slippagePercent}%. FDV tối đa ${cap}. Gas x${config.gasMultiple}.`);
+  log("RPC và gas được giữ sẵn để gửi trong khoảng 0,5 giây sau tin.");
   log(config.live ? "Đang gửi giao dịch thật trên DEX." : "Chế độ xem thử: không ký và không gửi giao dịch.");
   const state = readState();
   if (config.noticeUrl) {
@@ -216,22 +240,36 @@ async function start(config) {
       }
     }
   }
-  engine = startEngine({
-    client,
-    config: {
-      ...config,
-      saveState,
-      swap: (listing) => buyOnDex(listing, config),
-    },
-    log,
-    notify,
-    state,
-  });
+  buyer = createBuyer(config);
+  try {
+    await Promise.race([
+      buyer.warm(),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+    buyer.start();
+    engine = startEngine({
+      client,
+      config: {
+        ...config,
+        saveState,
+        swap: (listing) => buyer.buy(listing),
+      },
+      log,
+      notify,
+      state,
+    });
+  } catch (error) {
+    buyer.stop();
+    buyer = null;
+    throw error;
+  }
 }
 
 function stop() {
   engine?.stop();
   engine = null;
+  buyer?.stop();
+  buyer = null;
   log("Đã dừng.");
 }
 
@@ -276,9 +314,10 @@ function formConfig(body, env) {
     secretKey: String(body.secretKey || "").trim(),
     evmPrivateKey: String(body.evmPrivateKey || "").trim(),
     solanaPrivateKey: String(body.solanaPrivateKey || "").trim(),
-    amount: parseDecimal(body.amount),
+    amounts: parseAmounts(body.amounts),
     gasMultiple: parseDecimal(body.gasMultiple),
     slippagePercent: parseDecimal(body.slippagePercent),
+    maxFdv: String(body.maxFdv ?? "").trim() ? parseDecimal(body.maxFdv) : null,
     telegramToken: String(body.telegramToken || "").trim(),
     telegramChatId: String(body.telegramChatId || "").trim(),
     live: body.live === true,
@@ -300,9 +339,13 @@ function serve() {
           running: Boolean(engine),
           lines,
           live: current?.live === true,
-          amount: current?.amount || env.amount || "",
+          amounts: Object.fromEntries(CHAIN_IDS.map((id) => {
+            const value = current?.amounts?.[id] || env.amounts[id];
+            return [id, value || ""];
+          })),
           gasMultiple: current?.gasMultiple || env.gasMultiple || 2,
           slippagePercent: current?.slippagePercent || env.slippagePercent || 10,
+          maxFdv: current?.maxFdv || env.maxFdv || "",
           hasKeys: Boolean(env.accessKey && env.secretKey),
           hasEvmKey: Boolean(env.evmPrivateKey),
           hasSolanaKey: Boolean(env.solanaPrivateKey),

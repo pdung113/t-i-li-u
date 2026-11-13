@@ -6,6 +6,7 @@ export const CHAINS = {
     chainId: 1,
     symbol: "ETH",
     eip1559: true,
+    nativeDecimals: 18,
     rpc: "https://ethereum.publicnode.com",
     wrapped: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
     v2Router: "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
@@ -19,6 +20,7 @@ export const CHAINS = {
     chainId: 56,
     symbol: "BNB",
     eip1559: false,
+    nativeDecimals: 18,
     rpc: "https://bsc-dataseed.binance.org",
     wrapped: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
     v2Router: "0x10ED43C718714eb63d5aA57B78B54704E256024E",
@@ -32,6 +34,7 @@ export const CHAINS = {
     chainId: 8453,
     symbol: "ETH",
     eip1559: true,
+    nativeDecimals: 18,
     rpc: "https://mainnet.base.org",
     wrapped: "0x4200000000000000000000000000000000000006",
     v2Router: "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24",
@@ -45,6 +48,7 @@ export const CHAINS = {
     chainId: 42161,
     symbol: "ETH",
     eip1559: true,
+    nativeDecimals: 18,
     rpc: "https://arb1.arbitrum.io/rpc",
     wrapped: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
     v2Router: "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24",
@@ -58,6 +62,7 @@ export const CHAINS = {
     chainId: 10,
     symbol: "ETH",
     eip1559: true,
+    nativeDecimals: 18,
     rpc: "https://mainnet.optimism.io",
     wrapped: "0x4200000000000000000000000000000000000006",
     v2Router: "",
@@ -71,6 +76,7 @@ export const CHAINS = {
     chainId: 137,
     symbol: "POL",
     eip1559: true,
+    nativeDecimals: 18,
     rpc: "https://polygon-rpc.com",
     wrapped: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
     v2Router: "",
@@ -82,9 +88,12 @@ export const CHAINS = {
   solana: {
     kind: "solana",
     symbol: "SOL",
+    nativeDecimals: 9,
     rpc: "https://api.mainnet-beta.solana.com",
   },
 };
+
+export const CHAIN_IDS = Object.keys(CHAINS);
 
 export function chainById(id) {
   return CHAINS[id] ? { id, ...CHAINS[id] } : null;

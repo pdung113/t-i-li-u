@@ -1,3 +1,4 @@
+import { amountFor } from "./limits.js";
 import { chainById } from "./networks.js";
 import { decideNotice } from "./notice.js";
 import { armedText, resultText } from "./telegram.js";
@@ -30,6 +31,7 @@ function tickerOnCooldown(state, ticker, now) {
 }
 
 function finish(ctx, listing, info) {
+  const chain = chainById(listing.chain);
   const payload = {
     ...info,
     market: listing.market,
@@ -37,6 +39,9 @@ function finish(ctx, listing, info) {
     contract: listing.contract,
     url: listing.url,
     gasMultiple: ctx.gasMultiple,
+    slippagePercent: ctx.slippagePercent,
+    amount: ctx.amounts ? amountFor(listing.chain, ctx.amounts) : info.amount,
+    symbol: chain?.symbol || "",
   };
   if (info.ok) {
     const key = `${listing.noticeId}:${listing.ticker}`;
@@ -55,6 +60,9 @@ export async function executeListing(listing, ctx) {
   const key = `${listing.noticeId}:${listing.ticker}`;
   if (ctx.state.bought[key] || tickerOnCooldown(ctx.state, listing.ticker, ctx.now())) {
     return { ok: false, reason: "đã mua", skipped: true };
+  }
+  if (ctx.amounts && !(amountFor(listing.chain, ctx.amounts) > 0)) {
+    return finish(ctx, listing, { ok: false, reason: `Chưa nhập số lượng cho ${listing.chain}.` });
   }
   const chain = chainById(listing.chain);
   if (!listing.contract || !chain) {
@@ -96,16 +104,18 @@ export function startEngine({ client, config, log, notify, state }) {
       }
       return;
     }
+    if (config.amounts && !(amountFor(listing.chain, config.amounts) > 0)) {
+      sessionDone.add(key);
+      log(`Bỏ ${listing.market}: chưa nhập số lượng cho ${listing.chain}.`);
+      return;
+    }
     running.add(key);
     const chain = chainById(listing.chain);
-    log(`${listing.market}: mua ngay trên ${chain ? chain.id : "DEX"} ${listing.contract || ""}.`.trim());
-    if (!memory.notified[key]) {
-      memory.notified[key] = true;
-      notify(armedText(listing, config));
-    }
-    executeListing(listing, {
+    const task = executeListing(listing, {
       live: config.live,
       gasMultiple: config.gasMultiple,
+      slippagePercent: config.slippagePercent,
+      amounts: config.amounts,
       state: memory,
       now: clock,
       stopped: () => stopped,
@@ -113,14 +123,21 @@ export function startEngine({ client, config, log, notify, state }) {
       log,
       notify,
       save: () => config.saveState?.(memory),
-    }).then((result) => {
+    });
+    log(`${listing.market}: mua ngay trên ${chain ? chain.id : "DEX"} ${listing.contract || ""}.`.trim());
+    if (!memory.notified[key]) {
+      memory.notified[key] = true;
+      notify(armedText(listing, config));
+    }
+    task.then((result) => {
       if (result?.reason !== "stopped") sessionDone.add(key);
     }).finally(() => running.delete(key));
   }
 
   async function consider(raw, options = {}) {
+    const receivedAt = raw?.receivedAt || Date.now();
     if (raw?.market && raw?.ticker && raw?.noticeId) {
-      arm(raw, options);
+      arm({ ...raw, receivedAt }, options);
       return;
     }
     const decision = decideNotice(raw);
@@ -134,7 +151,7 @@ export function startEngine({ client, config, log, notify, state }) {
       }
       return;
     }
-    for (const listing of decision.listings) arm(listing, options);
+    for (const listing of decision.listings) arm({ ...listing, receivedAt }, options);
   }
 
   async function noticeLoop() {

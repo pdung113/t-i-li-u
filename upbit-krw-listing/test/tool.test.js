@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { queryString, readJwtPayload, signJwt } from "../src/auth.js";
 import { decideNotice, parseContract, parseNetwork } from "../src/notice.js";
 import { executeListing, listingIsFresh, FRESH_MS } from "../src/engine.js";
+import { amountFor, fdvAllows, fdvUsd } from "../src/limits.js";
 import { minOut, priorityLamports, scaleUnits } from "../src/networks.js";
 import { resultText } from "../src/telegram.js";
 
@@ -116,6 +117,49 @@ test("tin nhắn Telegram nói kết quả DEX và không chứa private key", (
   const missed = resultText({ ok: false, market: "KRW-SANC", reason: "Thiếu private key ví Solana." });
   assert.match(missed, /Không mua được/);
   assert.doesNotMatch(missed, /[1-9A-HJ-NP-Za-km-z]{64}/);
+});
+
+test("mỗi chain một số lượng và FDV cao thì không mua", () => {
+  const amounts = { ethereum: 0.02, bsc: 0.4, solana: 1, base: 0 };
+  assert.equal(amountFor("ethereum", amounts), 0.02);
+  assert.equal(amountFor("bsc", amounts), 0.4);
+  assert.equal(amountFor("solana", amounts), 1);
+  assert.equal(amountFor("base", amounts), 0);
+  const fdv = fdvUsd({
+    amountIn: 10n ** 18n,
+    amountOut: 10n ** 18n,
+    totalSupply: 1000n * 10n ** 18n,
+    nativeUsd: 2000,
+    nativeDecimals: 18,
+  });
+  assert.equal(Math.round(fdv), 2_000_000);
+  assert.equal(fdvAllows(fdv, 10_000_000).ok, true);
+  assert.equal(fdvAllows(fdv, 1_000_000).ok, false);
+  assert.equal(fdvAllows(null, 1_000_000).ok, false);
+  assert.equal(fdvAllows(fdv, null).ok, true);
+});
+
+test("chain chưa nhập số lượng thì không gọi swap", async () => {
+  let called = false;
+  const result = await executeListing({
+    noticeId: "n3",
+    ticker: "SANC",
+    market: "KRW-SANC",
+    chain: "solana",
+    contract: "CLoUDKc4Ane7HeQcPpE3YHnznRxhMimJ4MyaUqyHFzAu",
+    listedAt: Date.now(),
+  }, {
+    live: true,
+    gasMultiple: 2,
+    amounts: { solana: 0, ethereum: 0.1 },
+    state: { bought: {}, tickerBoughtAt: {} },
+    now: () => Date.now(),
+    stopped: () => false,
+    swap: async () => { called = true; return { ok: true }; },
+    notify: () => {},
+  });
+  assert.equal(called, false);
+  assert.match(result.reason, /solana/);
 });
 
 test("thông báo cũ hơn 3 phút không được coi là mới", () => {
