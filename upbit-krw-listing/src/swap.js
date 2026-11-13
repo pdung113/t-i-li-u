@@ -101,6 +101,42 @@ async function readSupply(provider, token) {
   return SUPPLY_IFACE.decodeFunctionResult("totalSupply", raw)[0];
 }
 
+export function choosePool(v2Out, v3Choices) {
+  const v2 = typeof v2Out === "bigint" && v2Out > 0n ? v2Out : null;
+  const best = (v3Choices || [])
+    .filter((item) => item && typeof item.out === "bigint" && item.out > 0n)
+    .sort((a, b) => (a.out > b.out ? -1 : 1))[0] || null;
+  if (v2 && best) {
+    if (best.out > (v2 * 120n) / 100n) return { ok: true, version: 3, quoted: best.out, feeTier: best.fee };
+    if (v2 > (best.out * 120n) / 100n) return { ok: false, reason: "Pool V2 lệch giá so với pool chính, không mua." };
+    return { ok: true, version: 2, quoted: v2, feeTier: 0 };
+  }
+  if (v2) return { ok: true, version: 2, quoted: v2, feeTier: 0 };
+  if (best) return { ok: true, version: 3, quoted: best.out, feeTier: best.fee };
+  return { ok: false, reason: "NO_POOL" };
+}
+
+function sameAsset(left, right) {
+  if (!left || !right) return false;
+  if (left.startsWith("0x") || left.startsWith("0X") || right.startsWith("0x") || right.startsWith("0X")) {
+    return left.toLowerCase() === right.toLowerCase();
+  }
+  return left === right;
+}
+
+export function isBaseAsset(chain, contract) {
+  const items = [chain?.wrapped, chain?.stable, chain?.kind === "solana" ? SOL_MINT : ""];
+  return items.some((item) => sameAsset(item, contract));
+}
+
+function within(promise, ms) {
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(undefined), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function venueName(chain, version) {
   if (chain.id === "bsc") return version === 2 ? "PancakeSwap V2" : "PancakeSwap V3";
   if (chain.kind === "solana") return "Jupiter";
@@ -283,16 +319,15 @@ export function createBuyer(config) {
     const pricePromise = Number(config.maxFdv) > 0 ? priceFor(chain.symbol) : Promise.resolve(0);
     const [feeData, v2Out, supply, nativeUsd] = await Promise.all([feePromise, v2Promise, supplyPromise, pricePromise]);
     fees.set(chain.id, feeData);
-    let version = 2;
-    let quoted = v2Out;
-    let feeTier = 0;
-    if (quoted == null || quoted <= 0n) {
-      const choices = (await v3Promise).filter(Boolean).sort((a, b) => (a.out > b.out ? -1 : 1));
-      if (!choices.length) return { ok: false, reason: `Không thấy pool DEX cho ${token} trên ${chain.id}.` };
-      version = 3;
-      quoted = choices[0].out;
-      feeTier = choices[0].fee;
+    const v3Choices = v2Out != null && v2Out > 0n ? ((await within(v3Promise, 150)) || []) : await v3Promise;
+    const choice = choosePool(v2Out, v3Choices);
+    if (!choice.ok) {
+      return {
+        ok: false,
+        reason: choice.reason === "NO_POOL" ? `Không thấy pool DEX cho ${token} trên ${chain.id}.` : choice.reason,
+      };
     }
+    const { version, quoted, feeTier } = choice;
     const gate = gateFdv(chain, value, quoted, supply, nativeUsd);
     if (!gate.ok) return { ok: false, reason: gate.reason, fdv: gate.fdv };
     let nonce = takeNonce(chain.id);
@@ -424,6 +459,7 @@ export function createBuyer(config) {
     if (!chain) return { ok: false, reason: listing.chain ? `Chưa hỗ trợ DEX trên mạng ${listing.chain}.` : "Thông báo không ghi mạng." };
     if (!listing.contract) return { ok: false, reason: "Thông báo không có địa chỉ contract." };
     if (!(amountFor(chain.id, config.amounts) > 0)) return { ok: false, reason: `Chưa nhập số lượng cho ${chain.id}.` };
+    if (isBaseAsset(chain, listing.contract)) return { ok: false, reason: "Contract là token nền hoặc stablecoin, không mua." };
     if (chain.kind === "solana") {
       if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(listing.contract)) return { ok: false, reason: "Contract Solana không đúng." };
       return buySolana(listing, chain, started);

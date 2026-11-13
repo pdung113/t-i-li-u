@@ -139,9 +139,9 @@ export function coerceNotice(raw) {
     title: stripMarkup(source?.title || source?.tt || ""),
     body: stripMarkup(source?.body || source?.bd || source?.contents || ""),
     category: String(source?.category || source?.cat || ""),
-    listedAt: Date.parse(source?.first_listed_at || source?.listed_at || source?.flat || source?.lat || source?.created_at || "") || null,
+    listedAt: noticeTime(source),
     url: source?.url || (id ? `https://www.upbit.com/service_center/notice?id=${id}&view=share` : ""),
-    eventType: source?.event_type || source?.et || "CREATED",
+    eventType: source?.event_type || source?.et || source?.eventType || "CREATED",
   };
 }
 
@@ -172,23 +172,38 @@ export function mapNetwork(value) {
   return "";
 }
 
+const ADDRESS = "(0x[a-fA-F0-9]{40}(?![a-fA-F0-9])|(?<![1-9A-HJ-NP-Za-km-z])[1-9A-HJ-NP-Za-km-z]{32,44}(?![1-9A-HJ-NP-Za-km-z]))";
+
+function noticeTime(source) {
+  const parsed = Date.parse(source?.first_listed_at || source?.listed_at || source?.flat || source?.lat || source?.created_at || "");
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  if (Number.isFinite(source?.listedAt) && source.listedAt > 0) return source.listedAt;
+  return null;
+}
+
 export function parseNetwork(text, ticker = "") {
+  const tags = [...String(text || "").matchAll(/안내된\s*네트워크\s*\(\s*([^-()]+)\s*-\s*([^)]+?)\s*\)/gi)];
   if (ticker) {
-    const specific = text.match(new RegExp(`안내된\\s*네트워크\\s*\\(\\s*${ticker}\\s*-\\s*([^)]+?)\\s*\\)`, "i"));
-    if (specific) return mapNetwork(specific[1]);
+    const mine = tags.find((match) => match[1].trim().toUpperCase() === ticker.toUpperCase());
+    if (mine) return mapNetwork(mine[2]);
+    const row = String(text || "").match(new RegExp(`(?:\\(${ticker}\\)|(?<![A-Z0-9])${ticker}(?![A-Z0-9]))\\s*\\|[^|\\n]*\\|\\s*([^|\\n]+)`, "i"));
+    if (row) {
+      const id = mapNetwork(row[1]);
+      if (id) return id;
+    }
+    return "";
   }
-  const tagged = text.match(/안내된\s*네트워크\s*\(\s*[^-()]+\s*-\s*([^)]+?)\s*\)/);
-  if (tagged) return mapNetwork(tagged[1]);
-  const head = text.split(/거래\s*제한|입금\s*유의|추가\s*디지털/)[0];
-  return mapNetwork(head);
+  if (tags.length === 1) return mapNetwork(tags[0][2]);
+  return "";
 }
 
 export function parseContract(text, ticker = "") {
+  const source = String(text || "");
   if (ticker) {
-    const near = text.match(new RegExp(`${ticker}[\\s\\S]{0,120}?컨트랙트\\s*주소(?:는|:)?\\s*(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})`, "i"));
-    if (near) return near[1];
+    const near = source.match(new RegExp(`${ticker}[\\s\\S]{0,120}?컨트랙트\\s*주소(?:는|:)?\\s*${ADDRESS}`, "i"));
+    return near ? near[1] : "";
   }
-  const labeled = text.match(/컨트랙트\s*주소(?:는|:)?\s*(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})/);
+  const labeled = source.match(new RegExp(`컨트랙트\\s*주소(?:는|:)?\\s*${ADDRESS}`));
   return labeled ? labeled[1] : "";
 }
 
@@ -212,16 +227,19 @@ export function decideNotice(raw) {
   if (!tickers.length) {
     return { action: "skip", reason: "no-ticker", listings: [], title: notice.title, markets };
   }
-  const listings = tickers.map((ticker) => ({
-    noticeId: notice.id,
-    title: notice.title,
-    url: notice.url,
-    ticker,
-    market: `KRW-${ticker}`,
-    chain: parseNetwork(notice.body, ticker),
-    contract: parseContract(notice.body, ticker),
-    listedAt: notice.listedAt,
-  }));
+  const listings = tickers.map((ticker) => {
+    const ownContract = parseContract(notice.body, ticker);
+    return {
+      noticeId: notice.id,
+      title: notice.title,
+      url: notice.url,
+      ticker,
+      market: `KRW-${ticker}`,
+      chain: parseNetwork(notice.body, ticker),
+      contract: ownContract || (tickers.length === 1 ? parseContract(notice.body) : ""),
+      listedAt: notice.listedAt,
+    };
+  });
   return { action: "buy", listings };
 }
 

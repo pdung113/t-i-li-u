@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { queryString, readJwtPayload, signJwt } from "../src/auth.js";
-import { decideNotice, parseContract, parseNetwork } from "../src/notice.js";
-import { executeListing, listingIsFresh, FRESH_MS, startEngine } from "../src/engine.js";
+import { coerceNotice, decideNotice, parseContract, parseNetwork } from "../src/notice.js";
+import { executeListing, listingIsFresh, FRESH_MS, shouldBuyNow, startEngine } from "../src/engine.js";
+import { choosePool, isBaseAsset } from "../src/swap.js";
+import { chainById } from "../src/networks.js";
 import { amountFor, fdvAllows, fdvUsd } from "../src/limits.js";
 import { minOut, priorityLamports, scaleUnits } from "../src/networks.js";
 import { resultText } from "../src/telegram.js";
@@ -167,7 +169,9 @@ test("thông báo cũ hơn 3 phút không được coi là mới", () => {
   assert.equal(listingIsFresh({ listedAt: now - FRESH_MS }, now), true);
   assert.equal(listingIsFresh({ listedAt: now - FRESH_MS - 1 }, now), false);
   assert.equal(listingIsFresh({ listedAt: null }, now), false);
-  assert.equal(listingIsFresh({ listedAt: null }, now, true), true);
+  assert.equal(listingIsFresh({ listedAt: now + 120_000 }, now), false);
+  assert.equal(shouldBuyNow({ listedAt: now }, now, now - 10_000), true);
+  assert.equal(shouldBuyNow({ listedAt: now - 60_000 }, now, now), false);
 });
 
 test("mua DEX ngay một lần và không mua lần hai", async () => {
@@ -288,4 +292,286 @@ test("kênh Upbit tự đẩy tin, không cần dán link, và chờ contract r�
   await new Promise((resolve) => setTimeout(resolve, 40));
   engine.stop();
   assert.deepEqual(calls, ["0xa227cc36938f0c9e09ce0e64dfab226cad739447"]);
+});
+
+test("câu chữ Ethereum trong bài không được đè mạng Solana, và không đoán mạng khi chưa có dòng mạng", () => {
+  const tagged = `이 프로젝트는 Ethereum에서 시작했습니다.
+안내된 네트워크 (SANC-Solana)
+SANC 컨트랙트 주소는 CLoUDKc4Ane7HeQcPpE3YHnznRxhMimJ4MyaUqyHFzAu`;
+  assert.equal(parseNetwork(tagged, "SANC"), "solana");
+  const table = "생텀(SANC) | KRW, BTC, USDT | Solana | 곧";
+  assert.equal(parseNetwork(table, "SANC"), "solana");
+  const vague = "이 프로젝트는 Ethereum에서 시작했습니다. SANC 컨트랙트 주소는 0x1111111111111111111111111111111111111111";
+  assert.equal(parseNetwork(vague, "SANC"), "");
+  assert.equal(parseContract(`${"1".repeat(80)}`, "SANC"), "");
+  assert.equal(parseContract(`SANC 컨트랙트 주소는 ${"1".repeat(64)}`), "");
+});
+
+test("giờ đăng còn sau khi đọc lại thông báo, và hai coin không dùng chung một contract", () => {
+  const once = coerceNotice({
+    title: SANC_TITLE,
+    body: SANC_BODY,
+    category: "trade",
+    listed_at: "2026-11-13T01:00:00Z",
+  });
+  const twice = decideNotice(once);
+  assert.equal(twice.listings[0].listedAt, once.listedAt);
+  const shared = decideNotice({
+    id: "two",
+    title: "에이(AAA), 비(BBB) 신규 거래지원 안내 (KRW 마켓)",
+    body: "컨트랙트 주소는 0x1111111111111111111111111111111111111111",
+    category: "trade",
+    listed_at: "2026-11-13T01:00:00Z",
+  });
+  assert.deepEqual(shared.listings.map((item) => item.contract), ["", ""]);
+});
+
+test("pool lệch giá thì không mua, pool gần nhau thì dùng V2, không mua WETH", () => {
+  const suspicious = choosePool(200n, [{ fee: 3000, out: 100n }]);
+  assert.equal(suspicious.ok, false);
+  const close = choosePool(100n, [{ fee: 500, out: 110n }]);
+  assert.equal(close.version, 2);
+  assert.equal(close.quoted, 100n);
+  const real = choosePool(100n, [{ fee: 3000, out: 180n }]);
+  assert.equal(real.version, 3);
+  assert.equal(real.feeTier, 3000);
+  assert.equal(choosePool(null, []).reason, "NO_POOL");
+  assert.equal(isBaseAsset(chainById("ethereum"), "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"), true);
+  assert.equal(isBaseAsset(chainById("ethereum"), "0x1111111111111111111111111111111111111111"), false);
+  const pumped = fdvUsd({
+    amountIn: 2n * 10n ** 16n,
+    amountOut: 1n * 10n ** 18n,
+    totalSupply: 1_000_000_000n * 10n ** 18n,
+    nativeUsd: 2000,
+    nativeDecimals: 18,
+  });
+  assert.equal(fdvAllows(pumped, 5_000_000).ok, false);
+});
+
+function engineClient(onNotice) {
+  return {
+    async listNotices() {
+      const error = new Error("blocked");
+      error.status = 403;
+      throw error;
+    },
+    async fetchNotice() {
+      return null;
+    },
+    listenAnnouncements(handler) {
+      onNotice(handler);
+      return () => {};
+    },
+  };
+}
+
+test("tin có trước khi bật tool không mua, tin không có giờ không mua, tin mới thì mua một lần", async () => {
+  const calls = [];
+  let push = () => {};
+  const oldAt = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+  const engine = startEngine({
+    client: engineClient((handler) => {
+      push = handler;
+    }),
+    config: {
+      live: true,
+      gasMultiple: 2,
+      slippagePercent: 10,
+      maxFdv: 5_000_000,
+      amounts: { ethereum: 0.01 },
+      swap: async (listing) => {
+        calls.push(listing.contract);
+        return { ok: true, tx: "0xabc", venue: "Uniswap V2" };
+      },
+    },
+    log: () => {},
+    notify: () => {},
+    state: { bought: {}, tickerBoughtAt: {}, notified: {}, armed: [] },
+  });
+  const fresh = new Date().toISOString();
+  push({
+    type: "announcement",
+    event_type: "CREATED",
+    uuid: "old-1",
+    title: "오픈(OPEN) 신규 거래지원 안내 (KRW 마켓)",
+    category: "trade",
+    listed_at: oldAt,
+    body: "안내된 네트워크 (OPEN-Ethereum)\nOPEN 컨트랙트 주소는 0xa227cc36938f0c9e09ce0e64dfab226cad739447",
+  });
+  push({
+    type: "announcement",
+    event_type: "CREATED",
+    uuid: "notime",
+    title: "오픈(OPEN) 신규 거래지원 안내 (KRW 마켓)",
+    category: "trade",
+    body: "안내된 네트워크 (OPEN-Ethereum)\nOPEN 컨트랙트 주소는 0xa227cc36938f0c9e09ce0e64dfab226cad739447",
+  });
+  push({
+    type: "announcement",
+    event_type: "CREATED",
+    uuid: "new-1",
+    title: "오픈(OPEN) 신규 거래지원 안내 (KRW 마켓)",
+    category: "trade",
+    listed_at: fresh,
+    body: "안내된 네트워크 (OPEN-Ethereum)\nOPEN 컨트랙트 주소는 0xa227cc36938f0c9e09ce0e64dfab226cad739447",
+  });
+  push({
+    type: "announcement",
+    event_type: "UPDATED",
+    uuid: "new-1",
+    title: "오픈(OPEN) 신규 거래지원 안내 (KRW 마켓)",
+    category: "trade",
+    listed_at: fresh,
+    body: "안내된 네트워크 (OPEN-Ethereum)\nOPEN 컨트랙트 주소는 0xa227cc36938f0c9e09ce0e64dfab226cad739447",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  engine.stop();
+  assert.deepEqual(calls, ["0xa227cc36938f0c9e09ce0e64dfab226cad739447"]);
+});
+
+test("tin chưa có contract không khoá lệnh, bản sau có contract thì mua", async () => {
+  const calls = [];
+  let push = () => {};
+  const listedAt = new Date().toISOString();
+  const engine = startEngine({
+    client: engineClient((handler) => {
+      push = handler;
+    }),
+    config: {
+      live: true,
+      gasMultiple: 2,
+      slippagePercent: 10,
+      amounts: { ethereum: 0.01 },
+      swap: async (listing) => {
+        calls.push(listing.contract);
+        return { ok: true, tx: "0xabc", venue: "Uniswap V2" };
+      },
+    },
+    log: () => {},
+    notify: () => {},
+    state: { bought: {}, tickerBoughtAt: {}, notified: {}, armed: [] },
+  });
+  push({
+    type: "announcement",
+    event_type: "CREATED",
+    uuid: "late-body",
+    title: "오픈(OPEN) 신규 거래지원 안내 (KRW 마켓)",
+    category: "trade",
+    listed_at: listedAt,
+    body: null,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  push({
+    type: "announcement",
+    event_type: "UPDATED",
+    uuid: "late-body",
+    title: "오픈(OPEN) 신규 거래지원 안내 (KRW 마켓)",
+    category: "trade",
+    listed_at: listedAt,
+    body: "안내된 네트워크 (OPEN-Ethereum)\nOPEN 컨트랙트 주소는 0xa227cc36938f0c9e09ce0e64dfab226cad739447",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  engine.stop();
+  assert.deepEqual(calls, ["0xa227cc36938f0c9e09ce0e64dfab226cad739447"]);
+});
+
+test("cùng ticker đang mua thì không mua thêm, pool chưa có thì thử lại, FDV cao thì dừng", async () => {
+  const contracts = [];
+  let release = () => {};
+  const hold = new Promise((resolve) => {
+    release = resolve;
+  });
+  let push = () => {};
+  const listedAt = new Date().toISOString();
+  const engine = startEngine({
+    client: engineClient((handler) => {
+      push = handler;
+    }),
+    config: {
+      live: true,
+      gasMultiple: 2,
+      slippagePercent: 10,
+      amounts: { ethereum: 0.01 },
+      swap: async (listing) => {
+        contracts.push(listing.contract);
+        await hold;
+        return { ok: true, tx: "0xhold", venue: "Uniswap V2" };
+      },
+    },
+    log: () => {},
+    notify: () => {},
+    state: { bought: {}, tickerBoughtAt: {}, notified: {}, armed: [] },
+  });
+  const body = "안내된 네트워크 (OPEN-Ethereum)\nOPEN 컨트랙트 주소는 0xa227cc36938f0c9e09ce0e64dfab226cad739447";
+  push({
+    type: "announcement", event_type: "CREATED", uuid: "hold-1", title: "오픈(OPEN) 신규 거래지원 안내 (KRW 마켓)",
+    category: "trade", listed_at: listedAt, body,
+  });
+  push({
+    type: "announcement", event_type: "CREATED", uuid: "hold-2", title: "오픈(OPEN) 신규 거래지원 안내 (KRW 마켓)",
+    category: "trade", listed_at: listedAt, body,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(contracts, ["0xa227cc36938f0c9e09ce0e64dfab226cad739447"]);
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  engine.stop();
+
+  let tries = 0;
+  let pushRetry = () => {};
+  const retry = startEngine({
+    client: engineClient((handler) => {
+      pushRetry = handler;
+    }),
+    config: {
+      live: true,
+      gasMultiple: 2,
+      slippagePercent: 10,
+      amounts: { ethereum: 0.01 },
+      swap: async () => {
+        tries += 1;
+        if (tries === 1) return { ok: false, reason: "Không thấy pool DEX cho token trên ethereum." };
+        return { ok: true, tx: "0xretry", venue: "Uniswap V3" };
+      },
+    },
+    log: () => {},
+    notify: () => {},
+    state: { bought: {}, tickerBoughtAt: {}, notified: {}, armed: [] },
+  });
+  pushRetry({
+    type: "announcement", event_type: "CREATED", uuid: "retry-1", title: "오픈(OPEN) 신규 거래지원 안내 (KRW 마켓)",
+    category: "trade", listed_at: new Date().toISOString(), body,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  retry.stop();
+  assert.equal(tries, 2);
+
+  let fdvTries = 0;
+  let pushFdv = () => {};
+  const fdv = startEngine({
+    client: engineClient((handler) => {
+      pushFdv = handler;
+    }),
+    config: {
+      live: true,
+      gasMultiple: 2,
+      slippagePercent: 10,
+      maxFdv: 1_000_000,
+      amounts: { ethereum: 0.01 },
+      swap: async () => {
+        fdvTries += 1;
+        return { ok: false, reason: "FDV 9,000,000 USD cao hơn mức tối đa 1,000,000 USD." };
+      },
+    },
+    log: () => {},
+    notify: () => {},
+    state: { bought: {}, tickerBoughtAt: {}, notified: {}, armed: [] },
+  });
+  pushFdv({
+    type: "announcement", event_type: "CREATED", uuid: "fdv-1", title: "오픈(OPEN) 신규 거래지원 안내 (KRW 마켓)",
+    category: "trade", listed_at: new Date().toISOString(), body,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  fdv.stop();
+  assert.equal(fdvTries, 1);
 });

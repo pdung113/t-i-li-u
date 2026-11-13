@@ -5,6 +5,7 @@ export function resultText(info) {
   const lines = [`DEX ${info.market || ""}`.trim()];
   if (info.dry) lines.push("Chưa mua: đang ở chế độ xem thử, không gửi giao dịch.");
   else if (info.ok) lines.push("Mua được.");
+  else if (info.tx) lines.push("Đã gửi giao dịch rồi, không mua thêm.");
   else lines.push("Không mua được.");
   if (info.chain) lines.push(`Mạng: ${info.chain}`);
   if (info.amount) lines.push(`Số lượng: ${info.amount} ${info.symbol || ""}`.trim());

@@ -13,7 +13,7 @@ const publicHeaders = {
 
 export function createClient({ accessKey, secretKey }) {
   async function publicGet(url) {
-    const response = await fetch(url, { headers: publicHeaders });
+    const response = await fetch(url, { headers: publicHeaders, signal: AbortSignal.timeout(4000) });
     const text = await response.text();
     let json = null;
     try {
