@@ -61,3 +61,33 @@ Phần chờ tweet xuất hiện phụ thuộc API đọc timeline (thường v�
 Token chỉ có pool V3, hoặc đang nằm trên bonding curve (Four.meme, pump.fun), sẽ không được mua.
 
 Mô phỏng bán dùng một ví sạch và nhích thời gian 3 phút để né cooldown cùng block. Token cố tình chặn hợp đồng lúc bán có thể bị bỏ qua dù ví thường vẫn bán được. Một số honeypot chỉ hiện sau khi mua thật; mô phỏng không bắt hết.
+
+## Sao chép lệnh mua trên Solana
+
+Tool nghe một ví Solana. Khi ví đó mua một token, tool mua cùng token bằng SOL của ví bạn. Tín hiệu là giao dịch của họ ở mức `processed`: lệnh của họ đã nằm trong block đang xử lý, rồi tool mới ký lệnh của bạn. Lệnh mình vì vậy đứng sau lệnh của họ.
+
+```bash
+npm install
+cp .env.example .env
+npm run copy -- <địa chỉ ví Solana>
+```
+
+`DRY_RUN` mặc định là `true`. Tool in token, số nhận tối thiểu, và impact, rồi không gửi. Muốn mua thật thì đặt `DRY_RUN=false` và điền `SOLANA_PRIVATE_KEY`. Dùng ví riêng, chỉ nạp số SOL chấp nhận mất.
+
+Chỉnh số SOL, trượt giá, tip, và trần impact trong `src/solana/settings.js`.
+
+| Hằng số | Ý nghĩa |
+| --- | --- |
+| `BUY_SOL` | Số SOL mỗi lệnh mua |
+| `SLIPPAGE_BPS` | Trần trượt giá. `1500` = 15% |
+| `JITO_TIP_LAMPORTS` | Tip để đường Jito nhận lệnh. `1000000` = 0.001 SOL |
+| `MAX_PRICE_IMPACT_PERCENT` | Bỏ qua nếu chính lệnh mình đội giá quá mức này |
+| `MIN_SOL_SPENT` | Bỏ qua nếu ví kia tiêu ít SOL hơn mức này |
+| `COPY_ONCE_PER_MINT` | Mỗi token chỉ mua một lần trong phiên |
+| `MAX_BUYS` | Trần số lệnh mua thật |
+
+Điền `HELIUS_API_KEY` để dùng `transactionSubscribe`. Không có key thì tool nghe `logsSubscribe` rồi gọi `getTransaction`, chậm hơn một nhịp. Route swap lấy từ Jupiter (`mode=fast`). Lệnh được gửi cùng lúc lên RPC và các máy Jito.
+
+Slot Solana khoảng 400ms, và hỏi route mất thêm vài trăm mili giây. Lệnh của bạn vào cùng slot nếu leader còn nhận, hoặc slot kế tiếp. Cả hai trường hợp đều sau lệnh đã thấy. Tool không nghe shred trước khi lệnh của họ được xử lý, nên không chen lên trước.
+
+Tool chỉ theo lệnh mua (ví nhận token và tiêu SOL, WSOL, USDC, hoặc USDT). Lệnh bán, chuyển token không tốn tiền, và stablecoin không được mua theo. Token chưa có route trên Jupiter thì bỏ qua.
