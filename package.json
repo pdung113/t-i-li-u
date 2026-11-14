@@ -6,6 +6,7 @@
   "description": "Theo dõi link X của dự án và mua token V2 khi họ đăng contract, nếu tax còn trong ngưỡng.",
   "scripts": {
     "start": "node src/index.js",
+    "copy": "node src/solana/index.js",
     "compile-probe": "node scripts/compile-probe.js",
     "test": "node --test"
   },
@@ -15,8 +16,11 @@
   },
   "license": "ISC",
   "dependencies": {
+    "@solana/web3.js": "^1.99.0",
+    "bs58": "^6.0.0",
     "dotenv": "^16.6.1",
-    "ethers": "^6.17.0"
+    "ethers": "^6.17.0",
+    "ws": "^8.23.0"
   },
   "devDependencies": {
     "solc": "^0.8.28"
