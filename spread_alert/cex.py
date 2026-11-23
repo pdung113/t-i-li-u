@@ -219,7 +219,11 @@ def _notional(price: float | None, size: float | None) -> float | None:
 async def kucoin_level1(session: aiohttp.ClientSession, symbol: str) -> PriceQuote | None:
     """Fresh KuCoin top of book. allTickers can print an ask the page is not trading."""
     payload = await _json(session, "https://api.kucoin.com/api/v1/market/orderbook/level1", {"symbol": symbol})
+    if not isinstance(payload, dict):
+        return None
     row = payload.get("data") or {}
+    if not isinstance(row, dict):
+        return None
     last = _num(row.get("price"))
     if not last or last <= 0:
         return None

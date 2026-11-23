@@ -96,39 +96,43 @@ class Scanner:
                 item = await pending.get()
                 if item is None:
                     return
-                checked = await self._kucoin_still_open(item)
-                if checked is None:
-                    continue
-                item = checked
-                async with lock:
-                    if item.edge_pct < self.config.spread_threshold_pct:
+                try:
+                    checked = await self._kucoin_still_open(item)
+                    if checked is None:
                         continue
-                    if not self._due(item):
-                        repeated += 1
-                        continue
-                    extra_room = len(alerts) < self.config.max_alerts_per_scan
-                    bigger = alerts and item.edge_pct > min(existing.edge_pct for existing in alerts)
-                    if not extra_room and (not bigger or len(alerts) >= self.config.max_alerts_per_scan + 5):
-                        hidden += 1
-                        continue
-                    self._mark(item)
-                    alerts.append(item)
-                if self.session is not None:
-                    found = await lookup_tax(self.session, item.chain, item.address)
-                    if found is not None:
-                        item = replace(
-                            item,
-                            buy_tax=found.buy,
-                            sell_tax=found.sell,
-                            transfer_tax=found.transfer,
-                        )
-                        async with lock:
-                            alerts[-1] = item
-                        shown = tax_line(item.buy_tax, item.sell_tax, item.transfer_tax)
-                        if shown:
-                            log.info("%s %s", item.base, shown)
-                if on_alert is not None:
-                    await on_alert(item)
+                    item = checked
+                    async with lock:
+                        if item.edge_pct < self.config.spread_threshold_pct:
+                            continue
+                        if not self._due(item):
+                            repeated += 1
+                            continue
+                        extra_room = len(alerts) < self.config.max_alerts_per_scan
+                        bigger = alerts and item.edge_pct > min(existing.edge_pct for existing in alerts)
+                        if not extra_room and (not bigger or len(alerts) >= self.config.max_alerts_per_scan + 5):
+                            hidden += 1
+                            continue
+                        self._mark(item)
+                        alerts.append(item)
+                    if self.session is not None:
+                        found = await lookup_tax(self.session, item.chain, item.address)
+                        if found is not None:
+                            item = replace(
+                                item,
+                                buy_tax=found.buy,
+                                sell_tax=found.sell,
+                                transfer_tax=found.transfer,
+                            )
+                            async with lock:
+                                if alerts:
+                                    alerts[-1] = item
+                            shown = tax_line(item.buy_tax, item.sell_tax, item.transfer_tax)
+                            if shown:
+                                log.info("%s %s", item.base, shown)
+                    if on_alert is not None:
+                        await on_alert(item)
+                except Exception:
+                    log.exception("Bỏ tin %s vì lỗi, vòng quét vẫn chạy", item.base)
 
         async def _consider(opportunity: Opportunity) -> None:
             nonlocal repeated
@@ -146,20 +150,23 @@ class Scanner:
 
         async def on_chunk(chunk: dict) -> None:
             for (chain, address), pool in chunk.items():
-                market = self.markets.get((chain, address))
-                if market is None:
-                    continue
-                opportunity = best_opportunity(
-                    market.listings,
-                    pool,
-                    token_address=address,
-                    chain=chain,
-                    min_volume=self.config.min_cex_quote_volume_usd,
-                    min_top_notional=self.config.min_top_notional_usd,
-                    max_spread=self.config.max_spread_pct,
-                )
-                if opportunity is not None:
-                    await _consider(opportunity)
+                try:
+                    market = self.markets.get((chain, address))
+                    if market is None:
+                        continue
+                    opportunity = best_opportunity(
+                        market.listings,
+                        pool,
+                        token_address=address,
+                        chain=chain,
+                        min_volume=self.config.min_cex_quote_volume_usd,
+                        min_top_notional=self.config.min_top_notional_usd,
+                        max_spread=self.config.max_spread_pct,
+                    )
+                    if opportunity is not None:
+                        await _consider(opportunity)
+                except Exception:
+                    log.exception("Bỏ %s trên %s vì lỗi tính lệch", address, chain)
 
         async def _emit_cex() -> None:
             spreads = cex_spreads(
@@ -192,7 +199,10 @@ class Scanner:
             except Exception:
                 log.exception("Quét chênh lệch giữa các sàn CEX lỗi")
             pending.put_nowait(None)
-            await sender_task
+            try:
+                await sender_task
+            except Exception:
+                log.exception("Hàng gửi tin bị lỗi, vòng này vẫn kết thúc")
 
         leaders.sort(key=lambda item: item.edge_pct, reverse=True)
         alerts.sort(key=lambda item: item.edge_pct, reverse=True)

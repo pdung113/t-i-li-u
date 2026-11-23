@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import time
 import unittest
@@ -23,6 +24,7 @@ from spread_alert.logic import (
     symbols_match,
     transfer_lines,
 )
+import spread_alert.scanner as scanner_mod
 from spread_alert.scanner import Scanner
 from spread_alert.tax import percent_from_fee_rate, percent_from_fraction, tax_from_payload, tax_line
 from spread_alert.telegram import format_opportunity, format_price
@@ -527,6 +529,53 @@ class LogicTest(unittest.TestCase):
         self.assertIsNotNone(fresh)
         self.assertLess(fresh[0], 5)
         self.assertAlmostEqual(fresh[1], 0.0009683)
+
+    def test_kucoin_refresh_builds_a_new_alert_instead_of_crashing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            scanner = Scanner(
+                Config(telegram_bot_token="", telegram_chat_id="", spread_threshold_pct=5),
+                object(),
+                Path(folder) / "seen.txt",
+            )
+            original = _opportunity(
+                exchange="kucoin",
+                base="OBI",
+                pair="OBI/USDT",
+                dex_symbol="OBI",
+                edge_pct=14.77,
+                cex_price=0.0008409,
+                dex_price=0.00110,
+            )
+            with self.assertRaises(AttributeError):
+                original.edge_pct = 1
+
+            async def fresh_book(_session, _symbol):
+                return PriceQuote(
+                    pair="OBI/USDT",
+                    quote="USDT",
+                    last=0.0009683,
+                    bid=0.00096,
+                    ask=0.0009683,
+                    bid_notional=5_000,
+                    ask_notional=5_000,
+                )
+
+            async def broken_book(_session, _symbol):
+                raise RuntimeError("KuCoin từ chối")
+
+            previous = scanner_mod.kucoin_level1
+            try:
+                scanner_mod.kucoin_level1 = fresh_book
+                updated = asyncio.run(scanner._kucoin_still_open(original))
+                scanner_mod.kucoin_level1 = broken_book
+                skipped = asyncio.run(scanner._kucoin_still_open(original))
+            finally:
+                scanner_mod.kucoin_level1 = previous
+            self.assertEqual(original.edge_pct, 14.77)
+            self.assertIsNotNone(updated)
+            self.assertAlmostEqual(updated.cex_price, 0.0009683)
+            self.assertGreater(updated.edge_pct, 5)
+            self.assertIsNone(skipped)
 
     def test_spread_must_still_be_there_after_a_price_refresh(self):
         with tempfile.TemporaryDirectory() as folder:
