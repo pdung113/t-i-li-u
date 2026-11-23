@@ -46,9 +46,11 @@ def _setup_logging() -> None:
 
 
 def _log_result(result, config: Config, top: int, once: bool) -> None:
+    mode = {"full": "đầy đủ", "light": "rút gọn", "idle": "nghỉ"}.get(result.mode, result.mode)
     logging.info(
-        "Vòng quét %.1fs | %s hợp đồng | %s pool | %s request DEX | %s cảnh báo",
+        "Vòng quét %.1fs (%s) | %s hợp đồng | %s pool | %s request DEX | %s cảnh báo",
         result.duration_sec,
+        mode,
         result.markets,
         result.pools,
         result.dex_requests,
@@ -121,7 +123,7 @@ async def _async_main(once: bool, top: int) -> None:
             except Exception as exc:
                 logging.error("Không gửi được tin nhắn khởi động: %s", exc)
 
-        async def on_alert(opportunity) -> None:
+        async def on_alert(opportunity) -> bool:
             text = format_opportunity(opportunity)
             logging.info(
                 "Cảnh báo %s %.2f%% trên %s",
@@ -129,22 +131,17 @@ async def _async_main(once: bool, top: int) -> None:
                 opportunity.edge_pct,
                 EXCHANGE_NAMES.get(opportunity.exchange, opportunity.exchange),
             )
-            if config.telegram_ready:
-                try:
-                    await send_message(session, config.telegram_bot_token, config.telegram_chat_id, text)
-                except Exception as exc:
-                    logging.error("Không gửi được Telegram: %s", exc)
-                    logging.info("Nội dung cảnh báo:\n%s", text)
-
-        while True:
+            if not config.telegram_ready:
+                return True
             try:
-                result = await scanner.scan(on_alert=on_alert)
-            except Exception:
-                logging.exception("Vòng quét lỗi")
-                if once:
-                    raise
-                await asyncio.sleep(5)
-                continue
+                await send_message(session, config.telegram_bot_token, config.telegram_chat_id, text)
+            except Exception as exc:
+                logging.error("Không gửi được Telegram: %s", exc)
+                logging.info("Nội dung cảnh báo:\n%s", text)
+                return False
+            return True
+
+        async def _report(result) -> None:
             _log_result(result, config, top=top, once=once)
             if result.hidden and config.telegram_ready:
                 try:
@@ -156,10 +153,33 @@ async def _async_main(once: bool, top: int) -> None:
                     )
                 except Exception as exc:
                     logging.error("Không gửi được Telegram: %s", exc)
+
+        while True:
+            try:
+                result = await scanner.scan(on_alert=on_alert)
+            except Exception:
+                logging.exception("Vòng quét lỗi")
+                if once:
+                    raise
+                await asyncio.sleep(5)
+                continue
+            await _report(result)
             if once:
+                if scanner.watch:
+                    await asyncio.sleep(max(0.0, config.price_refresh_sec))
+                    try:
+                        result = await scanner.scan(on_alert=on_alert)
+                    except Exception:
+                        logging.exception("Vòng xác nhận lỗi")
+                        return
+                    await _report(result)
                 return
             if result.markets == 0:
                 await asyncio.sleep(15)
+                continue
+            wait = scanner.seconds_until_next_scan()
+            if wait > 0:
+                await asyncio.sleep(wait)
 
 
 def main() -> None:

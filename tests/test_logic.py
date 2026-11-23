@@ -27,7 +27,7 @@ from spread_alert.logic import (
 import spread_alert.scanner as scanner_mod
 from spread_alert.scanner import Scanner
 from spread_alert.tax import percent_from_fee_rate, percent_from_fraction, tax_from_payload, tax_line
-from spread_alert.telegram import format_opportunity, format_price
+from spread_alert.telegram import format_opportunity, format_price, send_message
 from spread_alert.universe import assemble_markets
 
 
@@ -300,6 +300,30 @@ class LogicTest(unittest.TestCase):
         )
         self.assertAlmostEqual(book["BTC"].last, 101)
         self.assertAlmostEqual(book["BTC"].top_notional, 204)
+        garbage = _prices_binance(
+            [{"symbol": "OBIUSDT", "bidPrice": "100", "askPrice": "0.01", "bidQty": "1", "askQty": "1"}],
+            ("USDT",),
+        )
+        self.assertNotIn("OBI", garbage)
+        traded = _prices_binance(
+            [
+                {
+                    "symbol": "OBIUSDT",
+                    "lastPrice": "0.97",
+                    "bidPrice": "100",
+                    "askPrice": "0.01",
+                    "bidQty": "1",
+                    "askQty": "1",
+                    "quoteVolume": "50000",
+                    "lowPrice": "0.9",
+                    "highPrice": "1.1",
+                }
+            ],
+            ("USDT",),
+        )
+        self.assertAlmostEqual(traded["OBI"].last, 0.97)
+        self.assertAlmostEqual(traded["OBI"].quote_volume, 50000)
+        self.assertNotAlmostEqual(traded["OBI"].last, 50.005)
         blocked = best_opportunity(
             [_listing("binance", "PEPE", 1, bid=0.99, ask=1.01)],
             _pool(price_usd=1.2),
@@ -452,7 +476,17 @@ class LogicTest(unittest.TestCase):
     def test_repeat_scan_alerts_only_after_another_threshold(self):
         with tempfile.TemporaryDirectory() as folder:
             seen = Path(folder) / ".alerted-coins.txt"
-            scanner = Scanner(Config(telegram_bot_token="", telegram_chat_id="", spread_threshold_pct=5), None, seen)
+            scanner = Scanner(
+                Config(
+                    telegram_bot_token="",
+                    telegram_chat_id="",
+                    spread_threshold_pct=5,
+                    realert_step_pct=5,
+                    alert_cooldown_sec=0,
+                ),
+                None,
+                seen,
+            )
             first = _opportunity(base="BNB", edge_pct=5, address="0xabc")
             self.assertTrue(scanner._due(first))
             scanner._mark(first)
@@ -464,7 +498,17 @@ class LogicTest(unittest.TestCase):
             self.assertTrue(scanner._due(_opportunity(base="BNB", edge_pct=15)))
             self.assertFalse(scanner._due(_opportunity(base="OTHER", address="0xabc", chain="ethereum", edge_pct=6)))
             self.assertTrue(scanner._due(_opportunity(base="NEW", address="0xdef", edge_pct=6)))
-            restarted = Scanner(Config(telegram_bot_token="", telegram_chat_id="", spread_threshold_pct=5), None, seen)
+            restarted = Scanner(
+                Config(
+                    telegram_bot_token="",
+                    telegram_chat_id="",
+                    spread_threshold_pct=5,
+                    realert_step_pct=5,
+                    alert_cooldown_sec=0,
+                ),
+                None,
+                seen,
+            )
             self.assertFalse(restarted._due(first))
             self.assertTrue(restarted._due(_opportunity(base="BNB", edge_pct=15)))
             self.assertTrue(restarted._due(_opportunity(base="NEW", address="0xeee", edge_pct=6)))
@@ -586,8 +630,11 @@ class LogicTest(unittest.TestCase):
             )
             live = _opportunity(edge_pct=6, cex_price=1.0, address="0xabc")
             self.assertFalse(scanner._price_confirmed(live))
-            self.assertFalse(scanner._price_confirmed(live))
             key = scanner._watch_key(live)
+            first_seen = scanner.watch[key][2]
+            self.assertFalse(scanner._price_confirmed(live))
+            self.assertFalse(scanner._price_confirmed(live))
+            self.assertEqual(scanner.watch[key][2], first_seen)
             edge, price, _seen = scanner.watch[key]
             scanner.watch[key] = (edge, price, time.monotonic() - 10)
             self.assertTrue(scanner._price_confirmed(live))
@@ -622,6 +669,310 @@ class LogicTest(unittest.TestCase):
             cex_spreads({("ethereum", "0xabc"): market}, min_volume=0, min_top_notional=0, max_spread=80),
             [],
         )
+
+    def test_realert_waits_for_step_and_cooldown(self):
+        with tempfile.TemporaryDirectory() as folder:
+            seen = Path(folder) / "seen.txt"
+            config = Config(
+                telegram_bot_token="",
+                telegram_chat_id="",
+                spread_threshold_pct=5,
+                realert_step_pct=2,
+                alert_cooldown_sec=900,
+            )
+            scanner = Scanner(config, None, seen)
+            first = _opportunity(base="BNB", edge_pct=5, address="0xabc")
+            scanner._mark(first)
+            self.assertFalse(scanner._due(_opportunity(base="BNB", edge_pct=5, address="0xabc")))
+            self.assertFalse(scanner._due(_opportunity(base="BNB", edge_pct=8, address="0xabc")))
+            for key, (edge, _seen_at) in list(scanner.seen_edges.items()):
+                scanner.seen_edges[key] = (edge, time.time() - 1000)
+            self.assertFalse(scanner._due(_opportunity(base="BNB", edge_pct=6.9, address="0xabc")))
+            self.assertTrue(scanner._due(_opportunity(base="BNB", edge_pct=7, address="0xabc")))
+            scanner._save_seen()
+            restarted = Scanner(config, None, seen)
+            self.assertFalse(restarted._due(first))
+            self.assertTrue(restarted._due(_opportunity(base="BNB", edge_pct=7, address="0xabc")))
+
+    def test_legacy_seen_file_keeps_the_same_level_quiet(self):
+        with tempfile.TemporaryDirectory() as folder:
+            seen = Path(folder) / "seen.txt"
+            seen.write_text("BNB 5.0000\n", encoding="utf-8")
+            scanner = Scanner(
+                Config(
+                    telegram_bot_token="",
+                    telegram_chat_id="",
+                    spread_threshold_pct=5,
+                    realert_step_pct=2,
+                    alert_cooldown_sec=900,
+                ),
+                None,
+                seen,
+            )
+            self.assertFalse(scanner._due(_opportunity(base="BNB", edge_pct=5, address="0xabc")))
+            self.assertTrue(scanner._due(_opportunity(base="BNB", edge_pct=7, address="0xabc")))
+
+    def test_failed_telegram_does_not_remember_the_coin(self):
+        with tempfile.TemporaryDirectory() as folder:
+            seen = Path(folder) / "seen.txt"
+            scanner = Scanner(
+                Config(telegram_bot_token="", telegram_chat_id="", spread_threshold_pct=5, alert_cooldown_sec=0),
+                None,
+                seen,
+            )
+            opportunity = _opportunity(base="ENJ", edge_pct=6, address="0xabc")
+
+            async def fail(_item):
+                return False
+
+            async def ok(_item):
+                return True
+
+            self.assertIsNone(asyncio.run(scanner._finish_alert(opportunity, fail)))
+            self.assertFalse(seen.exists())
+            self.assertTrue(scanner._due(opportunity))
+            self.assertIsNotNone(asyncio.run(scanner._finish_alert(opportunity, ok)))
+            self.assertIn("ENJ", seen.read_text(encoding="utf-8"))
+            self.assertFalse(scanner._due(opportunity))
+
+    def test_kucoin_cex_pair_is_rechecked(self):
+        with tempfile.TemporaryDirectory() as folder:
+            scanner = Scanner(
+                Config(telegram_bot_token="", telegram_chat_id="", spread_threshold_pct=5, min_top_notional_usd=200),
+                object(),
+                Path(folder) / "seen.txt",
+            )
+            buy = _tradable(_listing("gate", "OBI", 1.0, bid=0.99, ask=1.0, ask_notional=5_000))
+            sell = _tradable(_listing("kucoin", "OBI", 1.2, bid=1.19, ask=1.21, bid_notional=5_000, ask_notional=5_000))
+            scanner.markets = {("ethereum", "0xabc"): Market(chain="ethereum", address="0xabc", listings=[buy, sell])}
+            found = cex_spreads(
+                scanner.markets,
+                min_volume=0,
+                min_top_notional=200,
+                max_spread=80,
+            )
+            self.assertEqual(found[0].sell_exchange, "kucoin")
+            self.assertGreater(found[0].edge_pct, 5)
+
+            async def collapsed(_session, _symbol):
+                return PriceQuote(
+                    pair="OBI/USDT",
+                    quote="USDT",
+                    last=1.01,
+                    bid=1.0,
+                    ask=1.02,
+                    bid_notional=5_000,
+                    ask_notional=5_000,
+                )
+
+            async def still_there(_session, _symbol):
+                return PriceQuote(
+                    pair="OBI/USDT",
+                    quote="USDT",
+                    last=1.2,
+                    bid=1.19,
+                    ask=1.21,
+                    bid_notional=5_000,
+                    ask_notional=5_000,
+                )
+
+            previous = scanner_mod.kucoin_level1
+            try:
+                scanner_mod.kucoin_level1 = collapsed
+                skipped = asyncio.run(scanner._confirm_before_send(found[0]))
+                sell.last, sell.bid, sell.ask = 1.2, 1.19, 1.21
+                scanner_mod.kucoin_level1 = still_there
+                kept = asyncio.run(scanner._confirm_before_send(found[0]))
+            finally:
+                scanner_mod.kucoin_level1 = previous
+            self.assertIsNone(skipped)
+            self.assertIsNotNone(kept)
+            self.assertEqual(kept.sell_exchange, "kucoin")
+            self.assertGreater(kept.edge_pct, 5)
+
+    def test_dex_pool_is_reread_before_send(self):
+        with tempfile.TemporaryDirectory() as folder:
+            scanner = Scanner(
+                Config(telegram_bot_token="", telegram_chat_id="", spread_threshold_pct=5, min_top_notional_usd=0),
+                object(),
+                Path(folder) / "seen.txt",
+            )
+            listing = _tradable(
+                _listing(
+                    "kucoin",
+                    "OBI",
+                    0.0009683,
+                    bid=0.0009695,
+                    ask=0.0008409,
+                    bid_notional=70,
+                    ask_notional=1.5,
+                    low=0.0009,
+                    high=0.0012,
+                ),
+                chain="bsc",
+            )
+            scanner.markets = {("bsc", "0xabc"): Market(chain="bsc", address="0xabc", listings=[listing])}
+            prices = []
+
+            async def fetch_one(_chain, _address, _listings):
+                return _pool(chain="bsc", price_usd=prices[-1], base_symbol="OBI", liquidity_usd=80_000)
+
+            async def fresh_book(_session, _symbol):
+                return PriceQuote(
+                    pair="OBI/USDT",
+                    quote="USDT",
+                    last=0.0009683,
+                    bid=0.00096,
+                    ask=0.00097,
+                    bid_notional=5_000,
+                    ask_notional=5_000,
+                )
+
+            scanner.dex.fetch_one = fetch_one
+            previous = scanner_mod.kucoin_level1
+            scanner_mod.kucoin_level1 = fresh_book
+            try:
+                prices.append(0.00110)
+                kept = asyncio.run(
+                    scanner._confirm_before_send(
+                        _opportunity(
+                            exchange="kucoin",
+                            base="OBI",
+                            pair="OBI/USDT",
+                            chain="bsc",
+                            address="0xabc",
+                            dex_symbol="OBI",
+                            direction="buy_cex",
+                            edge_pct=13,
+                            cex_price=0.0009683,
+                            dex_price=0.00110,
+                        )
+                    )
+                )
+                prices.append(0.00097)
+                gone = asyncio.run(
+                    scanner._confirm_before_send(
+                        _opportunity(
+                            exchange="kucoin",
+                            base="OBI",
+                            pair="OBI/USDT",
+                            chain="bsc",
+                            address="0xabc",
+                            dex_symbol="OBI",
+                            direction="buy_cex",
+                            edge_pct=13,
+                            cex_price=0.0009683,
+                            dex_price=0.00110,
+                        )
+                    )
+                )
+            finally:
+                scanner_mod.kucoin_level1 = previous
+            self.assertIsNotNone(kept)
+            self.assertAlmostEqual(kept.cex_price, 0.00097)
+            self.assertNotAlmostEqual(kept.cex_price, 0.0008409)
+            self.assertGreater(kept.edge_pct, 5)
+            self.assertIsNone(gone)
+
+    def test_follow_up_scan_skips_quiet_coins(self):
+        with tempfile.TemporaryDirectory() as folder:
+            scanner = Scanner(
+                Config(
+                    telegram_bot_token="",
+                    telegram_chat_id="",
+                    spread_threshold_pct=5,
+                    realert_step_pct=2,
+                    price_refresh_sec=8,
+                    universe_refresh_sec=600,
+                    min_top_notional_usd=0,
+                ),
+                None,
+                Path(folder) / "seen.txt",
+            )
+            hot = Market(
+                chain="ethereum",
+                address="0xhot",
+                listings=[_tradable(_listing("gate", "PEPE", 1, bid=0.99, ask=1.0))],
+            )
+            quiet = Market(
+                chain="ethereum",
+                address="0xquiet",
+                listings=[_tradable(_listing("binance", "PEPE", 1, bid=0.99, ask=1.0))],
+            )
+            scanner.markets = {("ethereum", "0xhot"): hot, ("ethereum", "0xquiet"): quiet}
+            scanner.universe_at = time.monotonic()
+            fetched = []
+            refreshed = []
+
+            async def fetch_pools(groups, on_chunk=None, on_batch=None):
+                addresses = [address for by_chain in groups.values() for address in by_chain]
+                fetched.append(addresses)
+                chunk = {}
+                for chain, by_address in groups.items():
+                    if on_batch is not None:
+                        await on_batch(chain, list(by_address))
+                    for address in by_address:
+                        price = 1.2 if address == "0xhot" else 1.001
+                        pool = _pool(chain=chain, price_usd=price, base_symbol="PEPE")
+                        chunk[(chain, address)] = pool
+                if on_chunk and chunk:
+                    await on_chunk(chunk)
+                return chunk
+
+            async def refresh(exchanges=None):
+                refreshed.append(list(exchanges or []))
+
+            scanner.dex.fetch_pools = fetch_pools
+            scanner._refresh_prices = refresh
+            asyncio.run(scanner.scan())
+            asyncio.run(scanner.scan())
+            self.assertEqual(sorted(fetched[0]), ["0xhot", "0xquiet"])
+            self.assertEqual(fetched[1], ["0xhot"])
+            self.assertEqual(refreshed, [["gate"]])
+            self.assertLess(scanner.seconds_until_next_scan(), 9)
+            scanner.last_edge[("ethereum", "0xhot")] = 0.1
+            scanner.watch.clear()
+            self.assertGreater(scanner.seconds_until_next_scan(), 500)
+
+    def test_telegram_retries_429(self):
+        class _Resp:
+            def __init__(self, status, body):
+                self.status = status
+                self._body = body
+                self.headers = {}
+
+            async def json(self, content_type=None):
+                return self._body
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+        class _Session:
+            def __init__(self):
+                self.calls = 0
+                self._responses = [
+                    _Resp(
+                        429,
+                        {
+                            "ok": False,
+                            "error_code": 429,
+                            "description": "Too Many Requests",
+                            "parameters": {"retry_after": 0},
+                        },
+                    ),
+                    _Resp(200, {"ok": True, "result": {}}),
+                ]
+
+            def post(self, _url, json=None):
+                self.calls += 1
+                return self._responses.pop(0)
+
+        session = _Session()
+        asyncio.run(send_message(session, "token", "1", "hi"))
+        self.assertEqual(session.calls, 2)
 
 
 if __name__ == "__main__":

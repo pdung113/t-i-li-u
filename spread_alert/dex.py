@@ -50,6 +50,7 @@ class DexClient:
         self,
         groups: dict[str, dict[str, list[Listing]]],
         on_chunk: Callable[[dict[tuple[str, str], Pool]], Awaitable[None]] | None = None,
+        on_batch: Callable[[str, list[str]], Awaitable[None]] | None = None,
     ) -> dict[tuple[str, str], Pool]:
         """Fetch the deepest eligible pool for every (chain, address)."""
         batches: list[tuple[str, list[str]]] = []
@@ -88,6 +89,8 @@ class DexClient:
                         if pool is not None:
                             found[(chain, address)] = pool
                             chunk[(chain, address)] = pool
+                if on_batch is not None:
+                    await on_batch(chain, addresses)
                 if chunk and on_chunk is not None:
                     await on_chunk(chunk)
                 done += 1
@@ -102,6 +105,13 @@ class DexClient:
 
         await asyncio.gather(*(worker() for _ in range(workers)))
         return found
+
+    async def fetch_one(self, chain: str, address: str, listings: list[Listing]) -> Pool | None:
+        """Re-read one pool just before an alert is sent."""
+        if self.session is None or not chain or not address or chain in self.blocked_chains:
+            return None
+        pairs = await self._fetch(chain, [address])
+        return pick_pool(pairs, address, listings, self.min_liquidity)
 
     async def _fetch(self, chain: str, addresses: Iterable[str]) -> list[dict]:
         joined = ",".join(addresses)

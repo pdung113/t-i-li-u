@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 
@@ -199,7 +200,7 @@ def format_startup(threshold: float, exchanges: tuple[str, ...]) -> str:
         "<b>Đã bật theo dõi chênh lệch DEX / CEX</b>\n"
         f"Ngưỡng báo: {threshold:.2f}%\n"
         f"Sàn: {html.escape(names)}\n"
-        "Mỗi vòng quét toàn bộ coin khớp hợp đồng, sát trần tốc độ DexScreener cho phép."
+        "Vòng đầy đủ chạy theo chu kỳ. Giữa các vòng chỉ đọc lại coin đang gần ngưỡng."
     )
 
 
@@ -207,7 +208,31 @@ def format_hidden(count: int, threshold: float) -> str:
     return f"Còn {count} cơ hội khác ≥ {threshold:.2f}% trong vòng quét này."
 
 
-async def send_message(session: aiohttp.ClientSession, token: str, chat_id: str, text: str) -> None:
+def telegram_retry_after(headers: object, body: object) -> float:
+    """Seconds to wait after Telegram 429. Missing values wait one second, never more than a minute."""
+    raw = None
+    if isinstance(body, dict):
+        params = body.get("parameters") or {}
+        if isinstance(params, dict):
+            raw = params.get("retry_after")
+    if raw is None and headers is not None:
+        getter = getattr(headers, "get", None)
+        if getter is not None:
+            raw = getter("Retry-After")
+    try:
+        delay = float(raw)
+    except (TypeError, ValueError):
+        delay = 1.0
+    return min(60.0, max(0.0, delay))
+
+
+async def send_message(
+    session: aiohttp.ClientSession,
+    token: str,
+    chat_id: str,
+    text: str,
+    attempts: int = 4,
+) -> None:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
         "chat_id": chat_id,
@@ -215,11 +240,23 @@ async def send_message(session: aiohttp.ClientSession, token: str, chat_id: str,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
-    async with session.post(url, json=payload) as response:
-        body = await response.json(content_type=None)
-        if response.status != 200 or not body.get("ok"):
+    last_status = 0
+    description: object = "không rõ"
+    for attempt in range(max(1, attempts)):
+        async with session.post(url, json=payload) as response:
+            body = await response.json(content_type=None)
+            last_status = response.status
+            if isinstance(body, dict) and body.get("ok") and response.status == 200:
+                return
             description = body.get("description") if isinstance(body, dict) else body
-            raise RuntimeError(f"Telegram {response.status}: {description}")
+            retryable = response.status == 429 or (isinstance(body, dict) and body.get("error_code") == 429)
+            if retryable and attempt + 1 < attempts:
+                delay = telegram_retry_after(response.headers, body)
+                log.warning("Telegram 429, thử lại sau %.0fs", delay)
+                await asyncio.sleep(delay)
+                continue
+            break
+    raise RuntimeError(f"Telegram {last_status}: {description}")
 
 
 async def send_alerts(

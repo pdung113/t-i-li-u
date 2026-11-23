@@ -8,6 +8,10 @@ from typing import Any
 
 import aiohttp
 
+# Bid/ask may stand in for a missing last trade only when they sit this close.
+# A wider book is not a price: the midpoint of a garbage quote is not a fill.
+_MAX_SYNTHETIC_WIDTH = 0.04
+
 from spread_alert.logic import ChainGate, Listing, clean_address, is_ignored_asset, make_gate
 
 log = logging.getLogger(__name__)
@@ -121,6 +125,16 @@ async def _json(session: aiohttp.ClientSession, url: str, params: dict | None = 
         return await response.json(content_type=None)
 
 
+def _tight_mid(bid: float | None, ask: float | None) -> float | None:
+    """Midpoint of a tight book. A wide or one-sided book is not a last trade."""
+    if not bid or not ask or bid <= 0 or ask <= 0:
+        return None
+    mid = (bid + ask) / 2
+    if mid <= 0 or abs(ask - bid) / mid > _MAX_SYNTHETIC_WIDTH:
+        return None
+    return mid
+
+
 def _prices_binance(rows: list[dict], quotes: tuple[str, ...]) -> dict[str, PriceQuote]:
     found: dict[str, dict[str, PriceQuote]] = {}
     for row in rows:
@@ -132,15 +146,14 @@ def _prices_binance(rows: list[dict], quotes: tuple[str, ...]) -> dict[str, Pric
         ask = _num(row.get("askPrice"))
         bid_qty = _num(row.get("bidQty"))
         ask_qty = _num(row.get("askQty"))
-        if bid and ask:
-            last = (bid + ask) / 2
-        else:
-            last = bid or ask or 0
-        notionals = []
-        if bid and bid_qty:
-            notionals.append(bid * bid_qty)
-        if ask and ask_qty:
-            notionals.append(ask * ask_qty)
+        last = _num(row.get("lastPrice")) or _num(row.get("last"))
+        if not last or last <= 0:
+            last = _tight_mid(bid, ask)
+        if not last or last <= 0:
+            continue
+        bid_notional = _notional(bid, bid_qty)
+        ask_notional = _notional(ask, ask_qty)
+        notionals = [item for item in (bid_notional, ask_notional) if item]
         _store(
             found,
             base,
@@ -148,10 +161,15 @@ def _prices_binance(rows: list[dict], quotes: tuple[str, ...]) -> dict[str, Pric
             PriceQuote(
                 pair=f"{base}/{quote}",
                 quote=quote,
-                last=last or 0,
+                last=last,
                 bid=bid,
                 ask=ask,
+                quote_volume=_num(row.get("quoteVolume")),
                 top_notional=max(notionals) if notionals else None,
+                bid_notional=bid_notional,
+                ask_notional=ask_notional,
+                low=_num(row.get("lowPrice")) or _num(row.get("low")),
+                high=_num(row.get("highPrice")) or _num(row.get("high")),
             ),
         )
     return _prefer(found, quotes)
@@ -390,9 +408,20 @@ def _coins_from_prices(exchange: str, prices: dict[str, PriceQuote]) -> list[Lis
     return coins
 
 
+async def _binance_tickers(session: aiohttp.ClientSession) -> list:
+    """24h ticker carries the last trade. bookTicker is only a fallback."""
+    try:
+        payload = await _json(session, "https://data-api.binance.vision/api/v3/ticker/24hr")
+    except (aiohttp.ClientError, PermissionError, TimeoutError):
+        payload = None
+    if not isinstance(payload, list):
+        payload = await _json(session, "https://data-api.binance.vision/api/v3/ticker/bookTicker")
+    return payload if isinstance(payload, list) else []
+
+
 async def load_prices(session: aiohttp.ClientSession, exchange: str, quotes: tuple[str, ...]) -> dict[str, PriceQuote]:
     if exchange == "binance":
-        payload = await _json(session, "https://data-api.binance.vision/api/v3/ticker/bookTicker")
+        payload = await _binance_tickers(session)
         return _prices_binance(payload, quotes)
     if exchange == "gate":
         payload = await _json(session, "https://api.gateio.ws/api/v4/spot/tickers")

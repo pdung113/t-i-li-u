@@ -147,7 +147,7 @@ Vũ trụ: 5000 hợp đồng trên 36 chain
 
 BTC, ETH, SOL lệch quanh 0% là tool đang đọc đúng giá. Coin lệch từ 5% được ghi trong cửa sổ và gửi vào Telegram.
 
-Tin đầu trên Telegram có dạng `Đã bật theo dõi` chỉ khi bạn chạy lệnh liên tục ở bước 7. Lệnh `--once` gửi từng cơ hội lệch từ 5%, không gửi tin khởi động.
+Tin đầu trên Telegram có dạng `Đã bật theo dõi` chỉ khi bạn chạy lệnh liên tục ở bước 7. Lệnh `--once` không gửi tin khởi động. Cơ hội lệch từ 5% được gửi sau một nhịp xác nhận khoảng 8 giây, khi pool DEX đọc lại vẫn còn lệch.
 
 ## 7. Chạy liên tục (một lệnh, dùng hằng ngày)
 
@@ -157,9 +157,9 @@ Mở PowerShell và dán đúng một dòng này. Cửa sổ tự quét hết v�
 cd $HOME\Desktop\t-i-li-u; .\chay.bat
 ```
 
-Một vòng toàn bộ coin thường khoảng 45 giây đến 1 phút.
+Vòng đầu quét toàn bộ coin, thường khoảng 45 giây đến 1 phút. Các vòng sau, trong `UNIVERSE_REFRESH_SEC` (mặc định 10 phút), chỉ đọc lại coin đang gần ngưỡng. Coin đang yên không bị hỏi DexScreener hay ticker sàn.
 
-Telegram nhận tin `Đã bật theo dõi chênh lệch DEX / CEX`. Chỉ báo khi đường đi dùng được: pool DEX và sàn CEX cùng một mạng, và lệnh đó rút được hoặc nạp được trên đúng mạng đó. Hai sàn CEX cũng được so với nhau khi cùng mạng, sàn rẻ rút được và sàn đắt nạp được. Khác mạng, bị khóa, hoặc sàn không công bố trạng thái thì bỏ qua. Mua trên DEX rồi bán lên CEX chỉ được báo khi sàn đang cho nạp đúng chain của pool. Mua trên CEX rồi bán ra DEX chỉ được báo khi sàn đang cho rút đúng chain đó, và dòng `CEX cho rút cùng chain` hiện chữ xanh. Không rút hoặc không nạp được thì không báo. Mỗi coin báo khi lệch đạt 5%. Vòng sau nếu vẫn quanh mức đó thì không báo lại. Chỉ báo lại khi lệch tăng thêm 5% so với lần vừa báo: 5% rồi thì lần sau là 10%, rồi 15%. Mức đã báo được ghi vào file `.alerted-coins.txt`, nên tắt tool rồi chạy lại vẫn không báo lại đúng mức cũ. Muốn xóa bộ nhớ thì tắt tool, xóa file đó, rồi chạy lại.
+Telegram nhận tin `Đã bật theo dõi chênh lệch DEX / CEX`. Chỉ báo khi đường đi dùng được: pool DEX và sàn CEX cùng một mạng, và lệnh đó rút được hoặc nạp được trên đúng mạng đó. Hai sàn CEX cũng được so với nhau khi cùng mạng, sàn rẻ rút được và sàn đắt nạp được. Khác mạng, bị khóa, hoặc sàn không công bố trạng thái thì bỏ qua. Mua trên DEX rồi bán lên CEX chỉ được báo khi sàn đang cho nạp đúng chain của pool. Mua trên CEX rồi bán ra DEX chỉ được báo khi sàn đang cho rút đúng chain đó, và dòng `CEX cho rút cùng chain` hiện chữ xanh. Không rút hoặc không nạp được thì không báo. Mỗi coin báo khi lệch đạt 5%. Cùng mức lệch không báo lại, kể cả sau khi tắt tool rồi chạy lại. Muốn báo lại thì lệch phải tăng thêm `REALERT_STEP_PCT` (mặc định 2 điểm: 5% rồi thì 7%) và phải qua `ALERT_COOLDOWN_SEC` (mặc định 900 giây) kể từ lần gửi thành công. Gửi Telegram bị lỗi thì không ghi `.alerted-coins.txt`, lần sau vẫn thử. Muốn xóa bộ nhớ thì tắt tool, xóa file đó, rồi chạy lại.
 
 Muốn dừng: bấm vào cửa sổ đang chạy rồi nhấn `Ctrl + C`.
 
@@ -167,7 +167,7 @@ Ngày hôm sau cũng chỉ dán lại đúng dòng đó. Không cần bật `.ve
 
 ## 8. Đọc một tin nhắn
 
-`Mua Gate.io → bán Uniswap (Ethereum)` nghĩa là giá mua trên Gate đang thấp hơn giá pool. Dòng `Liquidity DEX` là tổng thanh khoản của pool, kèm số coin đang nằm trong pool và vol DEX 24 giờ. Khi tra được tax, tin luôn ghi `Tax DEX` kèm số phần trăm mua, bán và chuyển, kể cả 0%. Không tra được thì không có dòng này. Dòng `Chain DEX` ghi chain của pool DEX. Chữ xanh là cùng chain với sàn CEX. Chữ đỏ là khác chain. Dòng Rút và Nạp vẫn xanh khi đang mở, đỏ khi đang khóa. Giá CEX trong tin là giá khớp gần nhất trên trang sàn. Lệnh chỉ vài đô ở đầu sổ, hoặc một giá nằm ngoài biên độ trong ngày, không được dùng. Với KuCoin, tool đọc lại giá này ngay trước khi gửi. Chênh lệch phải còn ở lần lấy giá kế tiếp mới gửi Telegram, nên tin thật có thể chậm khoảng một vòng quét. Chưa trừ phí rút coin, phí gas, và trượt giá khi mua số lượng lớn. Hãy tự kiểm tra pool và hợp đồng trước khi đặt lệnh.
+`Mua Gate.io → bán Uniswap (Ethereum)` nghĩa là giá mua trên Gate đang thấp hơn giá pool. Dòng `Liquidity DEX` là tổng thanh khoản của pool, kèm số coin đang nằm trong pool và vol DEX 24 giờ. Khi tra được tax, tin luôn ghi `Tax DEX` kèm số phần trăm mua, bán và chuyển, kể cả 0%. Không tra được thì không có dòng này. Dòng `Chain DEX` ghi chain của pool DEX. Chữ xanh là cùng chain với sàn CEX. Chữ đỏ là khác chain. Dòng Rút và Nạp vẫn xanh khi đang mở, đỏ khi đang khóa. Giá CEX trong tin là giá khớp gần nhất trên trang sàn. Lệnh chỉ vài đô ở đầu sổ, hoặc một giá nằm ngoài biên độ trong ngày, không được dùng. Binance không lấy trung bình bid/ask khi sổ lệnh rộng. Trước khi gửi, tool đọc lại pool DEX. KuCoin được đọc lại giá khớp trên cả route DEX và khi so hai sàn CEX. Chênh lệch phải còn sau ít nhất một nhịp `PRICE_REFRESH_SEC` (mặc định 8 giây). Vòng quét ngắn hơn 8 giây không xóa mốc thời gian đó, nên tin thật có thể chậm khoảng một nhịp. Chưa trừ phí rút coin, phí gas, và trượt giá khi mua số lượng lớn. Hãy tự kiểm tra pool và hợp đồng trước khi đặt lệnh.
 
 ## Việc hay gặp
 
