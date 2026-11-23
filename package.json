@@ -6,6 +6,7 @@
   "description": "Theo dõi link X của dự án và mua token V2 khi họ đăng contract, nếu tax còn trong ngưỡng.",
   "scripts": {
     "start": "node src/index.js",
+    "follow": "node src/follow-alert.js",
     "compile-probe": "node scripts/compile-probe.js",
     "test": "node --test"
   },
