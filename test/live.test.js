@@ -94,6 +94,7 @@ test("đọc timeline X", { timeout: 30_000 }, async () => {
       error = null;
     } catch (err) {
       error = err;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   }
   if (tweets.length === 0) throw error || new Error("timeline trống");

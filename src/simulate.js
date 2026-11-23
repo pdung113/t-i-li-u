@@ -74,9 +74,10 @@ export function parseSimulateResult(result, { withSell }) {
     }
   }
 
-  const beforeBal = decodeUint(before) ?? 0n;
+  const beforeBal = decodeUint(before);
   const afterBal = decodeUint(after);
-  const gotTokens = afterBal == null || afterBal <= beforeBal ? 0n : afterBal - beforeBal;
+  const balanceRead = beforeBal != null && afterBal != null;
+  const gotTokens = balanceRead && afterBal > beforeBal ? afterBal - beforeBal : 0n;
   const buyFailed = !callOk(buy);
   let expectedSell = null;
   let gotEth = null;
@@ -98,6 +99,7 @@ export function parseSimulateResult(result, { withSell }) {
 
   return {
     buyFailed,
+    balanceRead,
     sellFailed: withSell ? sellFailed : false,
     sellChecked: withSell,
     expectedBuy,
@@ -212,9 +214,30 @@ export async function underlyingToken(provider, chain, address) {
     const [pair] = coder.decode(["address"], rawPair);
     if (pair.toLowerCase() !== address.toLowerCase()) return null;
     return tokenFromPair({ token0, token1 }, chain.weth);
-  } catch {
+  } catch (error) {
+    if (error?.code === "NETWORK_ERROR" || error?.code === "TIMEOUT" || error?.code === "SERVER_ERROR") {
+      throw error;
+    }
     return null;
   }
+}
+
+/** Địa chỉ pair thì trả về token cần mua. Null nếu không phải pair của factory này. */
+export function redirectFromPair(address, underlying) {
+  if (!underlying || !address) return null;
+  if (underlying.toLowerCase() === address.toLowerCase()) return null;
+  return underlying;
+}
+
+export function isUnsupportedSimulate(error) {
+  const code = error?.error?.code ?? error?.info?.error?.code;
+  const msg = `${error?.shortMessage || ""} ${error?.message || ""} ${error?.info?.error?.message || ""}`.toLowerCase();
+  return (
+    code === -32601 ||
+    msg.includes("method not found") ||
+    msg.includes("method does not exist") ||
+    msg.includes("not supported")
+  );
 }
 
 export function tokenFromPair(pair, weth) {

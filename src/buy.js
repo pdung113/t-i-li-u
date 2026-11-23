@@ -4,6 +4,14 @@ const routerIface = new ethers.Interface([
   "function swapExactETHForTokensSupportingFeeOnTransferTokens(uint256 amountOutMin, address[] path, address to, uint256 deadline) payable",
 ]);
 
+/** Gas cấu hình thấp hơn base fee (EIP-1559) hoặc gas price mạng (legacy) thì lệnh dễ kẹt. */
+export function gasShortfall({ eip1559, gasGwei, baseFeePerGas = 0n, networkGasPrice = 0n }) {
+  const configured = ethers.parseUnits(String(gasGwei).trim(), "gwei");
+  const need = eip1559 ? baseFeePerGas ?? 0n : networkGasPrice ?? 0n;
+  if (need > configured) return { configured, need };
+  return null;
+}
+
 export function minOutFromReceived(gotTokens, slippagePercent) {
   const keepBps = BigInt(Math.round((100 - Number(slippagePercent)) * 100));
   if (keepBps <= 0n) return 0n;

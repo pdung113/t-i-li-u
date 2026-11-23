@@ -74,7 +74,7 @@ const CHAIN_ALIASES = {
 };
 
 export function resolveChain(name) {
-  const raw = String(name || "").toLowerCase();
+  const raw = String(name || "").trim().toLowerCase();
   const key = CHAIN_ALIASES[raw] || raw;
   const chain = CHAINS[key];
   if (!chain) {
