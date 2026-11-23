@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ethers } from "ethers";
-import { buildBuyTx, minOutFromReceived } from "../src/buy.js";
+import { buildBuyTx, gasShortfall, minOutFromReceived } from "../src/buy.js";
 import { resolveChain } from "../src/chains.js";
 import { decide, formatTax, taxBps } from "../src/decide.js";
-import { parseSimulateResult } from "../src/simulate.js";
-import { main } from "../src/index.js";
-import { extractAddresses, parseTwitterTarget } from "../src/twitter.js";
+import { parseCli, main } from "../src/index.js";
+import { parseSimulateResult, redirectFromPair } from "../src/simulate.js";
+import { authorHandle, extractAddresses, fetchStatuses, parseTwitterTarget, readTimelineBody } from "../src/twitter.js";
 
 test("main nhận link và từ chối link lạ", async () => {
   const previous = process.exitCode;
@@ -33,7 +33,11 @@ test("parse link X", () => {
     statusId: "1234567890123456789",
   });
   assert.deepEqual(parseTwitterTarget("@abc"), { handle: "abc", statusId: null });
+  assert.deepEqual(parseTwitterTarget("https://x.com/i/web/status/20"), { handle: null, statusId: "20" });
+  assert.deepEqual(parseTwitterTarget("https://twitter.com/i/status/20"), { handle: null, statusId: "20" });
+  assert.equal(authorHandle({ author: { screen_name: "jack" } }), "jack");
   assert.throws(() => parseTwitterTarget("https://example.com/foo"), /Không phải link X/);
+  assert.throws(() => parseTwitterTarget("https://x.com/i/flow"), /không phải trang dự án/);
 });
 
 test("lấy contract trong tweet, bỏ địa chỉ trong bio", () => {
@@ -44,6 +48,11 @@ test("lấy contract trong tweet, bỏ địa chỉ trong bio", () => {
     author: { description: "old 0x1111111111111111111111111111111111111111" },
   };
   assert.deepEqual(extractAddresses(tweet), ["0x000000000000000000000000000000000000dEaD"]);
+
+  const tx = `0x${"ab".repeat(32)}`;
+  const ca = "0x2222222222222222222222222222222222222222";
+  assert.deepEqual(extractAddresses({ text: `tx ${tx} ca ${ca}` }), [ca]);
+  assert.deepEqual(extractAddresses({ text: `${ca}abcd` }), []);
 });
 
 test("tax và quyết định mua", () => {
@@ -79,6 +88,13 @@ test("tax và quyết định mua", () => {
   );
   assert.equal(honeypot.reason, "khong_ban_duoc");
   assert.equal(honeypot.terminal, true);
+
+  const unread = decide(
+    { buyFailed: false, balanceRead: false, sellFailed: false, buyTaxBps: null, sellTaxBps: null, gotTokens: 0n },
+    10,
+  );
+  assert.equal(unread.terminal, false);
+  assert.equal(unread.reason, "khong_doc_duoc_so_du");
 });
 
 test("đọc kết quả mô phỏng", () => {
@@ -106,6 +122,24 @@ test("đọc kết quả mô phỏng", () => {
   assert.equal(parsed.buyTaxBps, 1000);
   assert.equal(parsed.sellFailed, false);
   assert.equal(parsed.sellTaxBps, 2000);
+  assert.equal(parsed.balanceRead, true);
+
+  const unread = parseSimulateResult(
+    [
+      {
+        calls: [
+          { status: "0x1", returnData: quote },
+          { status: "0x0", returnData: "0x" },
+          { status: "0x1", returnData: "0x" },
+          { status: "0x0", returnData: "0x" },
+        ],
+      },
+    ],
+    { withSell: false },
+  );
+  assert.equal(unread.balanceRead, false);
+  assert.equal(unread.buyFailed, false);
+  assert.equal(unread.gotTokens, 0n);
 });
 
 test("minOut và tx mua BSC dùng gas legacy", async () => {
@@ -133,4 +167,62 @@ test("minOut và tx mua BSC dùng gas legacy", async () => {
   assert.equal(parsed.to, chain.router);
   assert.equal(parsed.value, ethers.parseEther("0.05"));
   assert.equal(parsed.gasPrice, ethers.parseUnits("3", "gwei"));
+});
+
+test("gas thấp hơn mạng và pair không bị mua nhầm", () => {
+  const low = gasShortfall({
+    eip1559: true,
+    gasGwei: "3",
+    baseFeePerGas: ethers.parseUnits("20", "gwei"),
+    networkGasPrice: 0n,
+  });
+  assert.ok(low);
+  assert.equal(
+    gasShortfall({ eip1559: false, gasGwei: "3", baseFeePerGas: 0n, networkGasPrice: ethers.parseUnits("1", "gwei") }),
+    null,
+  );
+  const pair = "0x0eD7e52944161450477ee417DE9Cd3a859b14fD0";
+  const cake = "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82";
+  assert.equal(redirectFromPair(pair, cake), cake);
+  assert.equal(redirectFromPair(cake, null), null);
+  assert.equal(redirectFromPair(cake, cake), null);
+});
+
+test("cờ dòng lệnh", () => {
+  assert.deepEqual(parseCli(["--chain", "bsc", "https://x.com/foo"]), {
+    help: false,
+    chain: "bsc",
+    token: null,
+    target: "https://x.com/foo",
+  });
+  assert.equal(parseCli(["--chain=eth", "--token=0x1111111111111111111111111111111111111111"]).chain, "eth");
+  assert.throws(() => parseCli(["--chain", "https://x.com/foo"]), /Thiếu tên chain/);
+  assert.throws(() => parseCli(["--chain"]), /Thiếu tên chain/);
+  assert.throws(() => parseCli(["--nope", "https://x.com/foo"]), /Cờ không hỗ trợ/);
+  assert.equal(parseCli(["--help"]).help, true);
+});
+
+test("timeline trống và since exclusive", async () => {
+  assert.throws(() => readTimelineBody("abc", 404, { results: [] }), (error) => error.empty === true);
+  assert.deepEqual(readTimelineBody("abc", 200, { results: [{ id: "1", text: "hi" }] }), [{ id: "1", text: "hi" }]);
+  assert.throws(() => readTimelineBody("abc", 200, { code: 200 }), /thiếu results/);
+
+  const original = globalThis.fetch;
+  let seen = "";
+  let seenUa = "";
+  globalThis.fetch = async (url, opts) => {
+    seen = String(url);
+    seenUa = opts?.headers?.["user-agent"] || "";
+    return new Response(JSON.stringify({ results: [] }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const tweets = await fetchStatuses("binance", { since: 100 });
+    assert.deepEqual(tweets, []);
+    const query = new URL(seen);
+    assert.equal(query.searchParams.get("since"), "99");
+    assert.match(query.pathname, /\/binance\/statuses$/);
+    assert.match(seenUa, /Mozilla\/5\.0/);
+  } finally {
+    globalThis.fetch = original;
+  }
 });

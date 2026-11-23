@@ -48,5 +48,8 @@ export const WAIT_FOR_PAIR_MS = 120_000;
 /** Nghỉ giữa các lần thử lại khi chưa có thanh khoản, ms. */
 export const RETRY_MS = 400;
 
-/** true = chỉ in lệnh, không gửi tx. Đổi thành false khi muốn mua thật. */
+/**
+ * true = chỉ in lệnh, không gửi tx. Đổi thành false khi muốn mua thật.
+ * Nếu .env đặt DRY_RUN thì giá trị đó thắng dòng này. Để trống trong .env thì dùng dòng này.
+ */
 export const DRY_RUN = true;

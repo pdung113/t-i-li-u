@@ -32,6 +32,9 @@ export function decide(sim, maxTaxPercent) {
   if (sim.buyFailed) {
     return { ok: false, terminal: false, reason: "chua_mua_duoc" };
   }
+  if (sim.balanceRead === false) {
+    return { ok: false, terminal: false, reason: "khong_doc_duoc_so_du" };
+  }
   if (sim.gotTokens === 0n) {
     return { ok: false, terminal: true, reason: "mua_khong_nhan_token" };
   }
@@ -55,6 +58,7 @@ export function decide(sim, maxTaxPercent) {
 
 export const REASON_TEXT = {
   chua_mua_duoc: "chưa mua được (chưa có pool, chưa mở trade, hoặc lệnh revert)",
+  khong_doc_duoc_so_du: "không đọc được số dư token sau mô phỏng",
   mua_khong_nhan_token: "mô phỏng mua xong nhưng ví nhận 0 token",
   khong_do_duoc_buy_tax: "không đo được buy tax",
   buy_tax_cao: "buy tax vượt ngưỡng",

@@ -1,13 +1,26 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import { ethers } from "ethers";
-import { pathToFileURL } from "node:url";
-import { buildBuyTx, minOutFromReceived } from "./buy.js";
+import { realpathSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { buildBuyTx, gasShortfall, minOutFromReceived } from "./buy.js";
 import { resolveChain } from "./chains.js";
 import { REASON_TEXT, decide, formatTax } from "./decide.js";
 import { log } from "./log.js";
 import * as settings from "./settings.js";
-import { SIM_EOA, describePool, simulateSwap, underlyingToken } from "./simulate.js";
-import { extractAddresses, fetchStatus, fetchStatuses, parseTwitterTarget, tweetTimestamp } from "./twitter.js";
+import {
+  SIM_EOA,
+  describePool,
+  isUnsupportedSimulate,
+  redirectFromPair,
+  simulateSwap,
+  underlyingToken,
+} from "./simulate.js";
+import { authorHandle, extractAddresses, fetchStatus, fetchStatuses, parseTwitterTarget, tweetTimestamp } from "./twitter.js";
+
+dotenv.config({
+  path: path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".env"),
+});
 
 const DEAD = new Set([
   "0x0000000000000000000000000000000000000000",
@@ -30,26 +43,127 @@ function readPrivateKey() {
   return key;
 }
 
+function parsePositiveEther(label, value) {
+  let wei;
+  try {
+    wei = ethers.parseEther(String(value).trim());
+  } catch {
+    throw new Error(`${label} không đọc được: ${value}`);
+  }
+  if (wei <= 0n) throw new Error(`${label} phải lớn hơn 0`);
+  return wei;
+}
+
+function assertRpcUrl(rpc) {
+  let url;
+  try {
+    url = new URL(rpc);
+  } catch {
+    throw new Error(`RPC_URL không đọc được: ${rpc}`);
+  }
+  if (!["http:", "https:", "ws:", "wss:"].includes(url.protocol)) {
+    throw new Error("RPC_URL phải bắt đầu bằng http://, https://, ws:// hoặc wss://");
+  }
+  return url;
+}
+
+function assertNumber(name, value) {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${name} phải là số không âm`);
+  }
+}
+
 export function loadConfig(chainName) {
   const chain = resolveChain(chainName || process.env.CHAIN || settings.CHAIN);
-  const buyWei = ethers.parseEther(settings.BUY_AMOUNT);
-  const probeWei = ethers.parseEther(settings.PROBE_AMOUNT);
-  if (buyWei <= 0n) throw new Error("BUY_AMOUNT phải lớn hơn 0");
-  if (probeWei <= 0n) throw new Error("PROBE_AMOUNT phải lớn hơn 0");
+  const buyWei = parsePositiveEther("BUY_AMOUNT", settings.BUY_AMOUNT);
+  const probeWei = parsePositiveEther("PROBE_AMOUNT", settings.PROBE_AMOUNT);
   if (settings.MAX_TAX_PERCENT < 0 || settings.MAX_TAX_PERCENT > 100) {
     throw new Error("MAX_TAX_PERCENT phải từ 0 đến 100");
   }
   if (settings.SLIPPAGE_PERCENT < 0 || settings.SLIPPAGE_PERCENT >= 100) {
     throw new Error("SLIPPAGE_PERCENT phải từ 0 đến dưới 100");
   }
+  try {
+    const gasWei = ethers.parseUnits(String(settings.GAS_GWEI).trim(), "gwei");
+    if (gasWei <= 0n) throw new Error("GAS_GWEI phải lớn hơn 0");
+  } catch (error) {
+    if (error.message === "GAS_GWEI phải lớn hơn 0") throw error;
+    throw new Error(`GAS_GWEI không đọc được: ${settings.GAS_GWEI}`);
+  }
+  if (!Number.isInteger(settings.GAS_LIMIT) || settings.GAS_LIMIT < 21_000) {
+    throw new Error("GAS_LIMIT phải là số nguyên từ 21000 trở lên");
+  }
+  assertNumber("POLL_MS", settings.POLL_MS);
+  assertNumber("LOOKBACK_SEC", settings.LOOKBACK_SEC);
+  assertNumber("WAIT_FOR_PAIR_MS", settings.WAIT_FOR_PAIR_MS);
+  assertNumber("RETRY_MS", settings.RETRY_MS);
+  const rpc = process.env.RPC_URL || chain.rpc;
+  assertRpcUrl(rpc);
   return {
     chain,
-    rpc: process.env.RPC_URL || chain.rpc,
+    rpc,
     dryRun: envBool("DRY_RUN", settings.DRY_RUN),
     buyWei,
     probeWei: probeWei < buyWei ? probeWei : buyWei,
     privateKey: readPrivateKey(),
   };
+}
+
+function flagValue(argv, index, flag) {
+  const inline = argv[index].slice(flag.length + 1);
+  if (argv[index].startsWith(`${flag}=`)) return inline;
+  return argv[index + 1];
+}
+
+export function parseCli(argv) {
+  const positionals = [];
+  let chain = null;
+  let token = null;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = String(argv[i] ?? "");
+    if (arg === "--help" || arg === "-h") {
+      return { help: true, chain: null, token: null, target: null };
+    }
+    if (arg === "--chain" || arg.startsWith("--chain=")) {
+      const value = flagValue(argv, i, "--chain");
+      if (arg === "--chain") i += 1;
+      if (value == null || value === "" || String(value).startsWith("--")) {
+        throw new Error("Thiếu tên chain sau --chain. Dùng bsc, eth, base, hoặc robinhood.");
+      }
+      if (/^https?:\/\//i.test(value) || String(value).startsWith("@")) {
+        throw new Error("Thiếu tên chain sau --chain. Ví dụ: --chain bsc https://x.com/ten_du_an");
+      }
+      chain = String(value).trim();
+      continue;
+    }
+    if (arg === "--token" || arg.startsWith("--token=")) {
+      const value = flagValue(argv, i, "--token");
+      if (arg === "--token") i += 1;
+      if (value == null || value === "" || String(value).startsWith("--")) {
+        throw new Error("Dùng: npm start -- --token 0x...");
+      }
+      token = String(value).trim();
+      continue;
+    }
+    if (arg.startsWith("--")) {
+      throw new Error(`Cờ không hỗ trợ: ${arg}. Dùng --chain hoặc --token.`);
+    }
+    if (arg.trim()) positionals.push(arg.trim());
+  }
+  if (positionals.length > 1) throw new Error("Chỉ nhận một link X.");
+  if (token && positionals.length > 0) throw new Error("Dùng --token hoặc link X, không dùng cả hai.");
+  return { help: false, chain, token, target: positionals[0] ?? null };
+}
+
+function printUsage() {
+  console.log("Cách dùng: node src/index.js --chain bsc https://x.com/ten_du_an");
+  console.log("           npm start -- --chain bsc https://x.com/ten_du_an");
+  console.log("Chain:     bsc | eth | base | robinhood");
+  console.log("Thử tax:   node src/index.js --chain bsc --token 0x...");
+  console.log("Cờ:        --chain <tên>    chọn chain, đè CHAIN trong .env và src/settings.js");
+  console.log("           --token <0x...>  chỉ đo tax, không theo dõi X và không gửi giao dịch");
+  console.log("File:      .env (PRIVATE_KEY, RPC_URL, CHAIN, DRY_RUN) và src/settings.js");
+  process.exitCode = 1;
 }
 
 function isBlacklisted(chain, address) {
@@ -62,14 +176,60 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function rpcMessage(error) {
+  if (isUnsupportedSimulate(error)) {
+    return "RPC không hỗ trợ eth_simulateV1. Điền RPC_URL khác trong .env.";
+  }
+  return error.shortMessage || error.message;
+}
+
+async function openProvider(config) {
+  const provider = new ethers.JsonRpcProvider(config.rpc, config.chain.chainId, { staticNetwork: true });
+  try {
+    const hex = await provider.send("eth_chainId", []);
+    const id = Number(hex);
+    if (!Number.isFinite(id) || id !== config.chain.chainId) {
+      throw new Error(
+        `RPC trả chainId ${hex}, không khớp ${config.chain.name} (${config.chain.chainId}). Kiểm tra --chain và RPC_URL.`,
+      );
+    }
+    return provider;
+  } catch (error) {
+    await provider.destroy();
+    if (String(error.message || "").startsWith("RPC trả chainId")) throw error;
+    throw new Error(`Không kết nối được RPC: ${error.shortMessage || error.message}`);
+  }
+}
+
+async function readGasShortfall(provider, chain) {
+  const [block, gasHex] = await Promise.all([provider.getBlock("latest"), provider.send("eth_gasPrice", [])]);
+  const short = gasShortfall({
+    eip1559: chain.eip1559,
+    gasGwei: settings.GAS_GWEI,
+    baseFeePerGas: block?.baseFeePerGas ?? 0n,
+    networkGasPrice: BigInt(gasHex),
+  });
+  return { block, short };
+}
+
+async function warnGas(provider, chain) {
+  try {
+    const { short } = await readGasShortfall(provider, chain);
+    if (!short) return;
+    log(
+      `Cảnh báo: GAS_GWEI=${settings.GAS_GWEI} thấp hơn mạng (${ethers.formatUnits(short.need, "gwei")} gwei). Lệnh thật có thể không vào block.`,
+    );
+  } catch {
+    // Gas mạng chỉ là cảnh báo. Lỗi RPC ở đây không chặn việc đo tax.
+  }
+}
+
 async function evaluateToken(provider, config, token, nowSec) {
   const sameSize = config.probeWei === config.buyWei;
   const base = { chain: config.chain, token, nowSec, eoa: SIM_EOA };
   let [probe, full] = await Promise.all([
     simulateSwap(provider, { ...base, valueWei: config.probeWei, withSell: true }),
-    sameSize
-      ? Promise.resolve(null)
-      : simulateSwap(provider, { ...base, valueWei: config.buyWei, withSell: false }),
+    sameSize ? Promise.resolve(null) : simulateSwap(provider, { ...base, valueWei: config.buyWei, withSell: false }),
   ]);
 
   if (probe.buyFailed && full && !full.buyFailed) {
@@ -86,20 +246,32 @@ async function inspectToken(config, tokenArg) {
   if (!tokenArg || !/^0x[a-fA-F0-9]{40}$/.test(tokenArg)) {
     throw new Error("Dùng: npm start -- --token 0x...");
   }
-  const provider = new ethers.JsonRpcProvider(config.rpc, config.chain.chainId, { staticNetwork: true });
+  const provider = await openProvider(config);
   try {
     const block = await provider.getBlock("latest");
+    if (!block) throw new Error("RPC không trả block mới nhất");
+    await warnGas(provider, config.chain);
     const now = Number(block.timestamp);
-    const token = ethers.getAddress(tokenArg);
+    let token = ethers.getAddress(tokenArg);
+    const underlying = await underlyingToken(provider, config.chain, token);
+    const nextRaw = redirectFromPair(token, underlying);
+    if (nextRaw) {
+      const next = ethers.getAddress(nextRaw);
+      log(`${token} là pair V2. Đo token ${next}.`);
+      if (isBlacklisted(config.chain, next)) {
+        log(`Watcher sẽ bỏ qua ${next} vì nằm trong danh sách địa chỉ hệ thống.`);
+      }
+      token = next;
+    }
     const started = Date.now();
     const { probe, full, fill, decision } = await evaluateToken(provider, config, token, now);
     const symbol = config.chain.nativeSymbol;
     log(
-      `${token} buy ${formatTax(probe.buyTaxBps)} sell ${formatTax(probe.sellTaxBps)} | ${REASON_TEXT[decision.reason] || decision.reason} | ${Date.now() - started}ms`,
+      `${config.chain.name} ${token} buy ${formatTax(probe.buyTaxBps)} sell ${formatTax(probe.sellTaxBps)} | ${REASON_TEXT[decision.reason] || decision.reason} | ${Date.now() - started}ms`,
     );
     if (probe.buyRevert) log(`Buy revert: ${probe.buyRevert}`);
     if (probe.sellRevert) log(`Sell revert: ${probe.sellRevert}`);
-    if (full?.buyFailed) {
+    if (decision.ok && full?.buyFailed) {
       log(`Khối lượng ${settings.BUY_AMOUNT} ${symbol} không mua được trong mô phỏng.`);
     } else if (decision.ok) {
       const minOut = minOutFromReceived(fill.gotTokens, settings.SLIPPAGE_PERCENT);
@@ -111,37 +283,29 @@ async function inspectToken(config, tokenArg) {
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  const tokenIdx = argv.indexOf("--token");
-  const tokenArg = tokenIdx >= 0 ? argv[tokenIdx + 1] : null;
-  const chainIdx = argv.indexOf("--chain");
-  const chainArg = chainIdx >= 0 ? argv[chainIdx + 1] : null;
-  const skip = new Set();
-  if (tokenIdx >= 0) skip.add(tokenIdx + 1);
-  if (chainIdx >= 0) skip.add(chainIdx + 1);
-  const targetArg = argv.find((arg, index) => !arg.startsWith("--") && !skip.has(index));
-  if (!targetArg && tokenIdx === -1) {
-    console.log("Cách dùng: node src/index.js --chain bsc https://x.com/ten_du_an");
-    console.log("Chain:     bsc | eth | base | robinhood");
-    console.log("Thử tax:   node src/index.js --chain eth --token 0x...");
-    console.log("Chỉnh gas, số lượng, và ngưỡng tax trong src/settings.js");
-    process.exitCode = 1;
+  const cli = parseCli(argv);
+  if (cli.help || (cli.token == null && !cli.target)) {
+    printUsage();
     return;
-  }
-  if (chainIdx >= 0 && !chainArg) {
-    throw new Error("Thiếu tên chain sau --chain. Dùng bsc, eth, base, hoặc robinhood.");
   }
 
-  const config = loadConfig(chainArg);
-  if (tokenIdx !== -1) {
-    await inspectToken(config, tokenArg);
+  const config = loadConfig(cli.chain);
+  if (cli.token != null) {
+    await inspectToken(config, cli.token);
     return;
   }
-  const target = parseTwitterTarget(targetArg);
+  let target = parseTwitterTarget(cli.target);
   if (!config.dryRun && !config.privateKey) {
     throw new Error("Đặt PRIVATE_KEY trong .env, hoặc giữ DRY_RUN = true trong src/settings.js");
   }
+  if (!target.handle) {
+    const status = await fetchStatus(target.statusId);
+    const handle = authorHandle(status);
+    if (!handle) throw new Error(`Không lấy được username từ tweet ${target.statusId}`);
+    target = { handle, statusId: target.statusId, status };
+  }
 
-  const provider = new ethers.JsonRpcProvider(config.rpc, config.chain.chainId, { staticNetwork: true });
+  const provider = await openProvider(config);
   const wallet = config.privateKey ? new ethers.Wallet(config.privateKey, provider) : null;
 
   let timeOffset = 0;
@@ -149,7 +313,13 @@ export async function main(argv = process.argv.slice(2)) {
     const block = await provider.getBlock("latest");
     timeOffset = Number(block.timestamp) - Math.floor(Date.now() / 1000);
   };
-  await syncClock();
+  try {
+    await syncClock();
+  } catch (error) {
+    await provider.destroy();
+    throw error;
+  }
+  await warnGas(provider, config.chain);
   const clockTimer = setInterval(() => {
     syncClock().catch(() => {});
   }, 15_000);
@@ -179,6 +349,7 @@ export async function main(argv = process.argv.slice(2)) {
   let bootstrapped = false;
   let queue = Promise.resolve();
   let lastBeat = Date.now();
+  let lastSoftLog = 0;
   let stopped = false;
 
   const stop = () => {
@@ -188,6 +359,11 @@ export async function main(argv = process.argv.slice(2)) {
   process.on("SIGINT", () => {
     log("Dừng.");
     stop();
+    try {
+      provider.destroy();
+    } catch {
+      // Đóng kết nối là phụ. Ctrl+C vẫn phải thoát.
+    }
     process.exit(0);
   });
 
@@ -232,46 +408,61 @@ export async function main(argv = process.argv.slice(2)) {
 
     const until = detectedAt + settings.WAIT_FOR_PAIR_MS;
     let attempt = 0;
+    let checkedPair = false;
+    let hops = 0;
     while (!stopped && Date.now() < until) {
       attempt += 1;
-      const noncePromise =
-        wallet && !config.dryRun ? provider.getTransactionCount(wallet.address, "pending") : Promise.resolve(null);
+      if (!checkedPair) {
+        try {
+          const underlying = await underlyingToken(provider, config.chain, token);
+          checkedPair = true;
+          const nextRaw = redirectFromPair(token, underlying);
+          if (nextRaw) {
+            hops += 1;
+            if (hops > 2) {
+              log(`Pair ${token} redirect quá sâu. Bỏ qua.`);
+              return;
+            }
+            const next = ethers.getAddress(nextRaw);
+            if (isBlacklisted(config.chain, next)) {
+              log(`Pair ${token} trỏ tới địa chỉ hệ thống ${next}. Bỏ qua.`);
+              return;
+            }
+            if (handledTokens.has(next.toLowerCase()) && next.toLowerCase() !== token.toLowerCase()) {
+              log(`Token ${next} đã được xử lý.`);
+              return;
+            }
+            log(`${token} là pair. Dùng token ${next}.`);
+            token = next;
+            handledTokens.add(next.toLowerCase());
+            checkedPair = false;
+            continue;
+          }
+        } catch (error) {
+          log(`Chưa đọc được pair: ${error.shortMessage || error.message}`);
+          await sleep(settings.RETRY_MS);
+          continue;
+        }
+      }
+
       let result;
       try {
         result = await evaluateToken(provider, config, token, nowSec());
       } catch (error) {
-        log(`Mô phỏng lỗi: ${error.shortMessage || error.message}`);
+        if (isUnsupportedSimulate(error)) {
+          log(rpcMessage(error));
+          return;
+        }
+        log(`Mô phỏng lỗi: ${rpcMessage(error)}`);
         await sleep(settings.RETRY_MS);
         continue;
       }
 
-      if (result.probe.buyFailed) {
-        const underlying = await underlyingToken(provider, config.chain, token);
-        if (underlying) {
-          const next = ethers.getAddress(underlying);
-          if (isBlacklisted(config.chain, next)) {
-            log(`Pair ${token} trỏ tới địa chỉ hệ thống ${next}. Bỏ qua.`);
-            return;
-          }
-          if (handledTokens.has(next.toLowerCase()) && next.toLowerCase() !== token.toLowerCase()) {
-            log(`Token ${next} đã được xử lý.`);
-            return;
-          }
-          log(`${token} là pair. Dùng token ${next}.`);
-          token = next;
-          handledTokens.add(next.toLowerCase());
-          try {
-            result = await evaluateToken(provider, config, token, nowSec());
-          } catch (error) {
-            log(`Mô phỏng lỗi: ${error.shortMessage || error.message}`);
-            await sleep(settings.RETRY_MS);
-            continue;
-          }
-        }
-      }
-
       const { probe, full, fill, decision } = result;
-      const sizeNote = full && full !== probe ? ` | lệnh ${settings.BUY_AMOUNT} ${symbol} ${full.buyFailed ? "không mua được" : "mua được"}` : "";
+      const sizeNote =
+        full && full !== probe
+          ? ` | lệnh ${settings.BUY_AMOUNT} ${symbol} ${full.buyFailed ? "không mua được" : "mua được"}`
+          : "";
       if (attempt === 1 || decision.terminal || decision.ok) {
         log(
           `Tax buy ${formatTax(probe.buyTaxBps)} sell ${formatTax(probe.sellTaxBps)} trong ${probe.ms}ms.${probe.buyRevert ? ` Buy: ${probe.buyRevert}.` : ""}${probe.sellRevert ? ` Sell: ${probe.sellRevert}.` : ""}${sizeNote}`,
@@ -285,8 +476,10 @@ export async function main(argv = process.argv.slice(2)) {
 
       if (!decision.ok) {
         if (!decision.terminal) {
-          const pool = await describePool(provider, config.chain, token);
-          log(`Chưa vào lệnh (${pool}). Thử lại...`);
+          if (attempt === 1 || attempt % 12 === 0) {
+            const pool = await describePool(provider, config.chain, token);
+            log(`Chưa vào lệnh (${pool}). Thử lại...`);
+          }
           await sleep(settings.RETRY_MS);
           continue;
         }
@@ -295,6 +488,10 @@ export async function main(argv = process.argv.slice(2)) {
       }
 
       const minOut = minOutFromReceived(fill.gotTokens, settings.SLIPPAGE_PERCENT);
+      if (minOut <= 0n) {
+        log("Không mua: minOut = 0. Tăng BUY_AMOUNT hoặc giảm SLIPPAGE_PERCENT trong src/settings.js.");
+        return;
+      }
       const deadline = BigInt(nowSec() + 180);
       if (config.dryRun || !wallet) {
         log(
@@ -303,7 +500,30 @@ export async function main(argv = process.argv.slice(2)) {
         return;
       }
 
-      const nonce = await noncePromise;
+      let short = null;
+      try {
+        short = (await readGasShortfall(provider, config.chain)).short;
+      } catch (error) {
+        log(`Chưa đọc được gas mạng: ${error.shortMessage || error.message}`);
+        await sleep(settings.RETRY_MS);
+        continue;
+      }
+      if (short) {
+        log(
+          `Không gửi lệnh: GAS_GWEI=${settings.GAS_GWEI} thấp hơn mạng (${ethers.formatUnits(short.need, "gwei")} gwei).`,
+        );
+        return;
+      }
+
+      let nonce;
+      try {
+        nonce = await provider.getTransactionCount(wallet.address, "pending");
+      } catch (error) {
+        log(`Chưa lấy được nonce: ${error.shortMessage || error.message}`);
+        await sleep(settings.RETRY_MS);
+        continue;
+      }
+
       const tx = buildBuyTx({
         chain: config.chain,
         token,
@@ -315,20 +535,33 @@ export async function main(argv = process.argv.slice(2)) {
         nonce,
         deadline,
       });
-      const raw = await wallet.signTransaction(tx);
-      const sent = await provider.broadcastTransaction(raw);
-      const elapsed = Date.now() - detectedAt;
-      log(`Đã gửi ${sent.hash} sau ${elapsed}ms.`);
-      if (elapsed > 1000) {
-        log("Lệnh vượt 1s kể từ lúc đọc được contract. Dùng RPC riêng nếu cần nhanh hơn.");
+      try {
+        const raw = await wallet.signTransaction(tx);
+        const sent = await provider.broadcastTransaction(raw);
+        const elapsed = Date.now() - detectedAt;
+        log(`Đã gửi ${sent.hash} sau ${elapsed}ms.`);
+        if (elapsed > 1000) {
+          log("Lệnh vượt 1s kể từ lúc đọc được contract. Dùng RPC riêng nếu cần nhanh hơn.");
+        }
+        return;
+      } catch (error) {
+        const message = error.shortMessage || error.message;
+        if (/insufficient funds/i.test(message)) {
+          log(`Không mua: ví không đủ số dư. ${message}`);
+          return;
+        }
+        // Không gửi lại sau khi đã broadcast: node có thể đã nhận lệnh dù lời gọi báo lỗi.
+        log(`Chưa gửi được lệnh: ${message}`);
+        return;
       }
-      return;
     }
 
     if (!stopped) log(`Hết ${Math.round(settings.WAIT_FOR_PAIR_MS / 1000)}s, không mua ${token}.`);
   };
 
-  if (target.statusId) {
+  if (target.status) {
+    considerTweet(target.status, { buy: true });
+  } else if (target.statusId) {
     try {
       const status = await fetchStatus(target.statusId);
       if (status) considerTweet(status, { buy: true });
@@ -353,13 +586,14 @@ export async function main(argv = process.argv.slice(2)) {
     baseline(await fetchStatuses(target.handle, { signal: AbortSignal.timeout(8000) }));
   } catch (error) {
     log(`Chưa đọc được timeline: ${error.message}`);
+    if (error.code === 404 && error.empty) lastSoftLog = Date.now();
   }
 
   while (!stopped) {
     const started = Date.now();
     try {
       const tweets = await fetchStatuses(target.handle, {
-        since: bootstrapped && since ? since : undefined,
+        since: bootstrapped && since > 0 ? since : undefined,
         signal: AbortSignal.timeout(8000),
       });
       if (!bootstrapped) {
@@ -373,8 +607,14 @@ export async function main(argv = process.argv.slice(2)) {
       }
     } catch (error) {
       if (error.code === 429) {
-        log("Timeline bị giới hạn tốc độ, chờ 5s.");
-        await sleep(5000);
+        log("Timeline bị giới hạn tốc độ, chờ rồi thử lại.");
+        await sleep(error.retryAfterMs || 5000);
+      } else if (error.code === 404 && error.empty) {
+        if (Date.now() - lastSoftLog > 15_000) {
+          log(error.message);
+          lastSoftLog = Date.now();
+        }
+        await sleep(2000);
       } else if (error.name === "TimeoutError" || error.name === "AbortError") {
         log("Timeline quá thời gian chờ, thử lại.");
       } else {
@@ -390,9 +630,23 @@ export async function main(argv = process.argv.slice(2)) {
     const pause = settings.POLL_MS - (Date.now() - started);
     if (pause > 0) await sleep(pause);
   }
+  await provider.destroy();
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function runningAsCli() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  const toUrl = (file) => {
+    try {
+      return pathToFileURL(realpathSync(file)).href;
+    } catch {
+      return pathToFileURL(file).href;
+    }
+  };
+  return toUrl(fileURLToPath(import.meta.url)) === toUrl(entry);
+}
+
+if (runningAsCli()) {
   main().catch((error) => {
     console.error(error.message || error);
     process.exitCode = 1;
