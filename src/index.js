@@ -3,9 +3,9 @@ import { pathToFileURL } from "node:url";
 import { buildBuyTx, describeGas, fixedGas, minOutFromReceived, pricedGas } from "./buy.js";
 import { REASON_TEXT, decide, formatTax } from "./decide.js";
 import { log } from "./log.js";
-import { formatUsd, marketCapUsd, mcapDecision } from "./mcap.js";
+import { formatUsd, marketCapUsd, mcapDecision, warmNativePrice } from "./mcap.js";
 import { loadConfig } from "./setup.js";
-import { SIM_EOA, describePool, hasBuyLiquidity, simulateSwap, underlyingToken } from "./simulate.js";
+import { SIM_EOA, buyTarget, describePool, simulateSwap, underlyingToken } from "./simulate.js";
 import { extractAddresses, fetchStatus, fetchStatuses, parseTwitterTarget, tweetTimestamp } from "./twitter.js";
 
 const DEAD = new Set([
@@ -21,6 +21,39 @@ function isBlacklisted(chain, address) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function makeProvider(rpc, chainId) {
+  const request = new ethers.FetchRequest(rpc);
+  request.timeout = 8_000;
+  request.setHeader("user-agent", "x-snipe/1.0");
+  return new ethers.JsonRpcProvider(request, chainId, {
+    staticNetwork: true,
+    batchStallTime: 0,
+    batchMaxCount: 20,
+  });
+}
+
+async function broadcastRaw(provider, raw) {
+  let last = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return { sent: await provider.broadcastTransaction(raw) };
+    } catch (error) {
+      last = error;
+      const msg = `${error.shortMessage || ""} ${error.message || ""}`.toLowerCase();
+      if (
+        msg.includes("insufficient funds") ||
+        msg.includes("already known") ||
+        msg.includes("nonce too low") ||
+        msg.includes("replacement")
+      ) {
+        return { error };
+      }
+      if (attempt < 2) await sleep(120);
+    }
+  }
+  return { error: last };
 }
 
 async function quoteBuyGas(provider, config) {
@@ -53,7 +86,7 @@ async function inspectToken(config, tokenArg) {
   if (!tokenArg || !/^0x[a-fA-F0-9]{40}$/.test(tokenArg)) {
     throw new Error("Dùng: npm start -- --token 0x...");
   }
-  const provider = new ethers.JsonRpcProvider(config.rpc, config.chain.chainId, { staticNetwork: true });
+  const provider = makeProvider(config.rpc, config.chain.chainId);
   try {
     const block = await provider.getBlock("latest");
     const now = Number(block.timestamp);
@@ -116,7 +149,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     throw new Error("Điền PRIVATE_KEY trong setup.txt, hoặc giữ DRY_RUN=true");
   }
 
-  const provider = new ethers.JsonRpcProvider(config.rpc, config.chain.chainId, { staticNetwork: true });
+  const provider = makeProvider(config.rpc, config.chain.chainId);
   const wallet = config.privateKey ? new ethers.Wallet(config.privateKey, provider) : null;
 
   let timeOffset = 0;
@@ -124,6 +157,8 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     const block = await provider.getBlock("latest");
     timeOffset = Number(block.timestamp) - Math.floor(Date.now() / 1000);
   };
+  const quotedPromise = quoteBuyGas(provider, config).catch((error) => error);
+  const warmPromise = warmNativePrice(provider, config.chain);
   await syncClock();
   const clockTimer = setInterval(() => {
     syncClock().catch(() => {});
@@ -134,15 +169,16 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   const symbol = config.chain.nativeSymbol;
   let gasNote = config.gasX == null ? `${config.gasGwei} gwei` : `x${config.gasX} giá hiện tại`;
   let gasCap = 0n;
-  try {
-    const quoted = await quoteBuyGas(provider, config);
+  await warmPromise;
+  const quoted = await quotedPromise;
+  if (quoted instanceof Error) {
+    log(`Chưa đọc được giá gas: ${quoted.shortMessage || quoted.message}`);
+  } else {
     gasNote = describeGas(config, quoted);
     gasCap = (quoted.gasPrice ?? quoted.maxFeePerGas) * BigInt(config.gasLimit);
-  } catch (error) {
-    log(`Chưa đọc được giá gas: ${error.shortMessage || error.message}`);
   }
   log(
-    `Chế độ ${config.mode} | chain ${config.chain.name} | mua ${config.buyAmount} ${symbol} | gas ${gasNote} | tax tối đa ${config.maxTaxPercent}% | mcap tối đa ${config.maxMcapUsd > 0 ? `$${formatUsd(config.maxMcapUsd)}` : "không giới hạn"} | ${config.dryRun ? "DRY RUN" : "MUA THẬT"}`,
+    `Chế độ ${config.mode} | chain ${config.chain.name} | mua ${config.buyAmount} ${symbol} | gas ${gasNote} | tax tối đa ${config.maxTaxPercent}% | trượt giá ${config.slippagePercent}% | mcap tối đa ${config.maxMcapUsd > 0 ? `$${formatUsd(config.maxMcapUsd)}` : "không giới hạn"} | ${config.dryRun ? "DRY RUN" : "MUA THẬT"}`,
   );
   log(`RPC ${config.rpc}`);
   if (config.mode === "twitter") {
@@ -217,19 +253,31 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     const waitForever = options.waitForever === true;
     const detectedAt = Date.now();
     const fromLiquid = tweet?.id === "liquid";
-    if (!fromLiquid) log(`Contract ${token} từ tweet ${tweet.id}. Đang đo tax...`);
+    if (!fromLiquid) log(`Contract ${token} từ tweet ${tweet.id}.`);
 
     const until = waitForever ? Number.POSITIVE_INFINITY : detectedAt + config.waitForPairMs;
-    let attempt = 0;
     let sawLiquidity = false;
     let reported = false;
     let lastWaitLog = 0;
     let lastRetryLog = 0;
     while (!stopped && Date.now() < until) {
-      attempt += 1;
-      if (waitForever && !sawLiquidity) {
-        const ready = await hasBuyLiquidity(provider, config.chain, token);
-        if (!ready) {
+      if (!sawLiquidity) {
+        const found = await buyTarget(provider, config.chain, token);
+        if (found.token.toLowerCase() !== token.toLowerCase()) {
+          const next = ethers.getAddress(found.token);
+          if (isBlacklisted(config.chain, next)) {
+            log(`Pair ${token} trỏ tới địa chỉ hệ thống ${next}. Bỏ qua.`);
+            return;
+          }
+          if (handledTokens.has(next.toLowerCase())) {
+            log(`Token ${next} đã được xử lý.`);
+            return;
+          }
+          log(`${token} là pair. Dùng token ${next}.`);
+          token = next;
+          handledTokens.add(next.toLowerCase());
+        }
+        if (!found.ready) {
           if (Date.now() - lastWaitLog > 15_000) {
             log(`Chưa có thanh khoản ${token}. Vẫn đang chờ add liquidity...`);
             lastWaitLog = Date.now();
@@ -240,11 +288,16 @@ export async function main(argv = process.argv.slice(2), options = {}) {
         sawLiquidity = true;
         log(`Đã có thanh khoản ${token}. Đo tax và mua ngay.`);
       }
+
       const noncePromise =
         wallet && !config.dryRun
           ? provider.getTransactionCount(wallet.address, "pending").catch((error) => error)
           : Promise.resolve(null);
       const gasPromise = quoteBuyGas(provider, config).catch((error) => error);
+      const capPromise =
+        config.maxMcapUsd > 0
+          ? marketCapUsd(provider, config.chain, token).catch((error) => error)
+          : Promise.resolve(null);
       let result;
       try {
         result = await evaluateToken(provider, config, token, nowSec());
@@ -269,13 +322,8 @@ export async function main(argv = process.argv.slice(2), options = {}) {
           log(`${token} là pair. Dùng token ${next}.`);
           token = next;
           handledTokens.add(next.toLowerCase());
-          try {
-            result = await evaluateToken(provider, config, token, nowSec());
-          } catch (error) {
-            log(`Mô phỏng lỗi: ${error.shortMessage || error.message}`);
-            await sleep(config.retryMs);
-            continue;
-          }
+          sawLiquidity = false;
+          continue;
         }
       }
 
@@ -308,11 +356,9 @@ export async function main(argv = process.argv.slice(2), options = {}) {
       }
 
       if (config.maxMcapUsd > 0) {
-        let cap;
-        try {
-          cap = await marketCapUsd(provider, config.chain, token);
-        } catch (error) {
-          log(`Không đo được vốn hóa: ${error.shortMessage || error.message}`);
+        const cap = await capPromise;
+        if (cap instanceof Error) {
+          log(`Không đo được vốn hóa: ${cap.shortMessage || cap.message}`);
           await sleep(config.retryMs);
           continue;
         }
@@ -331,16 +377,16 @@ export async function main(argv = process.argv.slice(2), options = {}) {
 
       const minOut = minOutFromReceived(fill.gotTokens, config.slippagePercent);
       const deadline = BigInt(nowSec() + 180);
-      const quoted = await gasPromise;
-      if (quoted instanceof Error) {
-        log(`Không đọc được giá gas: ${quoted.shortMessage || quoted.message}`);
+      const gasQuote = await gasPromise;
+      if (gasQuote instanceof Error) {
+        log(`Không đọc được giá gas: ${gasQuote.shortMessage || gasQuote.message}`);
         await sleep(config.retryMs);
         continue;
       }
-      const gasNote = describeGas(config, quoted);
+      const attemptGas = describeGas(config, gasQuote);
       if (config.dryRun || !wallet) {
         log(
-          `DRY RUN khớp. Sẽ mua ${config.buyAmount} ${symbol}, minOut ${minOut}, gas ${gasNote}. Từ lúc thấy contract: ${Date.now() - detectedAt}ms.`,
+          `DRY RUN khớp. Sẽ mua ${config.buyAmount} ${symbol}, minOut ${minOut}, gas ${attemptGas}. Từ lúc thấy contract: ${Date.now() - detectedAt}ms.`,
         );
         return;
       }
@@ -357,15 +403,19 @@ export async function main(argv = process.argv.slice(2), options = {}) {
         walletAddress: wallet.address,
         valueWei: config.buyWei,
         minOut,
-        gas: quoted,
+        gas: gasQuote,
         gasLimit: config.gasLimit,
         nonce,
         deadline,
       });
       const raw = await wallet.signTransaction(tx);
-      const sent = await provider.broadcastTransaction(raw);
+      const outcome = await broadcastRaw(provider, raw);
+      if (!outcome.sent) {
+        log(`Gửi lệnh lỗi: ${outcome.error?.shortMessage || outcome.error?.message || "không rõ"}`);
+        return;
+      }
       const elapsed = Date.now() - detectedAt;
-      log(`Đã gửi ${sent.hash} sau ${elapsed}ms, gas ${gasNote}.`);
+      log(`Đã gửi ${outcome.sent.hash} sau ${elapsed}ms, gas ${attemptGas}.`);
       if (elapsed > 1000) {
         log("Lệnh vượt 1s kể từ lúc đọc được contract. Dùng RPC riêng nếu cần nhanh hơn.");
       }

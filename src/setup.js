@@ -124,9 +124,9 @@ export function buildConfig(values, chainName) {
     maxMcapUsd,
     lookbackSec: Math.round(num(values.LOOKBACK_SEC, 180, "LOOKBACK_SEC")),
     waitForPairMs: Math.round(num(values.WAIT_FOR_PAIR_MS, 120_000, "WAIT_FOR_PAIR_MS")),
-    retryMs: Math.round(num(values.RETRY_MS, 400, "RETRY_MS")),
+    retryMs: Math.round(num(values.RETRY_MS, 150, "RETRY_MS")),
     pollMs: Math.round(num(values.POLL_MS, 0, "POLL_MS")),
-    liquidPollMs: Math.round(num(values.LIQUID_POLL_MS, 250, "LIQUID_POLL_MS")),
+    liquidPollMs: Math.round(num(values.LIQUID_POLL_MS, 100, "LIQUID_POLL_MS")),
     privateKey: privateKey(values.PRIVATE_KEY),
   };
 }

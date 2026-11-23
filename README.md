@@ -10,7 +10,7 @@ npm start
 Hai chế độ, sửa `MODE` trong `setup.txt`:
 
 - `MODE=twitter` và điền `LINK`: chờ tài khoản X đăng contract rồi mua.
-- `MODE=liquid` và điền `CONTRACT=0x...`: contract đã biết. Tool chờ đến lúc add liquidity hoặc mở trade thì mua ngay.
+- `MODE=liquid` và điền `CONTRACT=0x...`: contract đã biết. Tool hỏi pool bằng lệnh nhẹ, có thanh khoản thì đo tax, vốn hóa và gas cùng lúc rồi mua ngay.
 
 `CHAIN` là `bsc`, `eth`, `base`, hoặc `robinhood`.
 

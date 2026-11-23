@@ -87,6 +87,14 @@ async function nativePriceE8(provider, chain) {
   return price;
 }
 
+export async function warmNativePrice(provider, chain) {
+  try {
+    await nativePriceE8(provider, chain);
+  } catch {
+    // Lần mua đầu sẽ đo lại.
+  }
+}
+
 export async function marketCapUsd(provider, chain, token) {
   const [supply, pairRaw] = await Promise.all([
     callUint(provider, token, erc20Iface.encodeFunctionData("totalSupply"), "uint256"),

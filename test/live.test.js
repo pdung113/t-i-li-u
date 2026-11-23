@@ -116,8 +116,15 @@ test("CAKE đã có thanh khoản, địa chỉ lạ thì chưa", { timeout: 20_
 });
 
 test("chế độ liquid dry-run với CAKE rồi dừng", { timeout: 45_000 }, async () => {
-  await main([], {
-    setupText: `
+  const lines = [];
+  const previous = console.log;
+  console.log = (...args) => {
+    lines.push(args.join(" "));
+    previous(...args);
+  };
+  try {
+    await main([], {
+      setupText: `
 MODE=liquid
 CHAIN=bsc
 CONTRACT=${CAKE}
@@ -127,7 +134,13 @@ MAX_TAX_PERCENT=10
 MAX_MCAP_USD=0
 DRY_RUN=true
 `,
-  });
+    });
+  } finally {
+    console.log = previous;
+  }
+  const text = lines.join("\n");
+  assert.match(text, /DRY RUN khớp/);
+  assert.match(text, /Tax buy 0\.00% sell 0\.00%/);
 });
 
 test("đọc timeline X", { timeout: 30_000 }, async () => {

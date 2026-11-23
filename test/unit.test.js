@@ -54,7 +54,8 @@ DRY_RUN=false
   });
   assert.equal(liquid.mode, "liquid");
   assert.equal(liquid.contract, "0x0d6b6f604C1BF5b3533C445334bb4e1044145688");
-  assert.equal(liquid.liquidPollMs, 250);
+  assert.equal(liquid.liquidPollMs, 100);
+  assert.equal(liquid.retryMs, 150);
   assert.equal(liquid.gasX, 2);
   assert.equal(buildConfig({ GAS_X: "5", CHAIN: "bsc" }).gasX, 5);
   assert.equal(buildConfig({ GAS_GWEI: "3", CHAIN: "bsc" }).gasX, null);

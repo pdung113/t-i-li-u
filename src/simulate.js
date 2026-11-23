@@ -234,24 +234,33 @@ async function reservesReady(provider, pair) {
   return reserve0 > 0n && reserve1 > 0n;
 }
 
-export async function hasBuyLiquidity(provider, chain, token) {
+export async function buyTarget(provider, chain, address) {
+  const pending = { ready: false, token: address };
   try {
     const raw = await provider.call({
       to: chain.factory,
-      data: factoryIface.encodeFunctionData("getPair", [token, chain.weth]),
+      data: factoryIface.encodeFunctionData("getPair", [address, chain.weth]),
     });
     const [pair] = coder.decode(["address"], raw);
-    if (pair !== ethers.ZeroAddress) return await reservesReady(provider, pair);
+    if (pair !== ethers.ZeroAddress) {
+      return { ready: await reservesReady(provider, pair), token: address };
+    }
     const reservesRaw = await provider
-      .call({ to: token, data: pairIface.encodeFunctionData("getReserves") })
+      .call({ to: address, data: pairIface.encodeFunctionData("getReserves") })
       .catch(() => null);
-    if (!reservesRaw) return false;
+    if (!reservesRaw) return pending;
     const [reserve0, reserve1] = coder.decode(["uint112", "uint112", "uint32"], reservesRaw);
-    if (reserve0 === 0n || reserve1 === 0n) return false;
-    return Boolean(await underlyingToken(provider, chain, token));
+    if (reserve0 === 0n || reserve1 === 0n) return pending;
+    const underlying = await underlyingToken(provider, chain, address);
+    if (!underlying) return pending;
+    return { ready: true, token: ethers.getAddress(underlying) };
   } catch {
-    return false;
+    return pending;
   }
+}
+
+export async function hasBuyLiquidity(provider, chain, token) {
+  return (await buyTarget(provider, chain, token)).ready;
 }
 
 export async function describePool(provider, chain, token) {
