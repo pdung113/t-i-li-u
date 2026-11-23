@@ -87,6 +87,8 @@ def _opportunity(**overrides) -> Opportunity:
         quote_symbol="USDT",
     )
     data.update(overrides)
+    if "base" in overrides and "dex_symbol" not in overrides:
+        data["dex_symbol"] = overrides["base"]
     return Opportunity(**data)
 
 
@@ -445,20 +447,25 @@ class LogicTest(unittest.TestCase):
         self.assertIsNone(tax_line(None, None, None))
         self.assertIsNone(tax_from_payload({"code": 0}, "0xabc", "ethereum"))
 
-    def test_repeat_scan_alerts_only_new_coins_or_a_larger_jump(self):
+    def test_repeat_scan_alerts_only_after_another_threshold(self):
         with tempfile.TemporaryDirectory() as folder:
             seen = Path(folder) / ".alerted-coins.txt"
             scanner = Scanner(Config(telegram_bot_token="", telegram_chat_id="", spread_threshold_pct=5), None, seen)
-            first = _opportunity(edge_pct=6, address="0xabc")
+            first = _opportunity(base="BNB", edge_pct=5, address="0xabc")
             self.assertTrue(scanner._due(first))
             scanner._mark(first)
-            self.assertFalse(scanner._due(_opportunity(edge_pct=80, chain="bsc", direction="buy_dex", exchange="gate")))
-            self.assertFalse(scanner._due(_opportunity(base="1000ENJ", edge_pct=20, direction="cex_cex")))
-            self.assertFalse(scanner._due(_opportunity(base="OTHER", address="0xabc", chain="ethereum", edge_pct=30)))
+            self.assertFalse(scanner._due(_opportunity(base="BNB", edge_pct=5, chain="bsc", direction="buy_dex", exchange="gate")))
+            self.assertFalse(scanner._due(_opportunity(base="WBNB", edge_pct=9.9, address="0xdef", chain="ethereum")))
+            self.assertTrue(scanner._due(_opportunity(base="WBNB", edge_pct=10, address="0xdef", chain="ethereum")))
+            scanner._mark(_opportunity(base="BNB", edge_pct=10, address="0xabc"))
+            self.assertFalse(scanner._due(_opportunity(base="1000BNB", edge_pct=14, direction="cex_cex")))
+            self.assertTrue(scanner._due(_opportunity(base="BNB", edge_pct=15)))
+            self.assertFalse(scanner._due(_opportunity(base="OTHER", address="0xabc", chain="ethereum", edge_pct=6)))
             self.assertTrue(scanner._due(_opportunity(base="NEW", address="0xdef", edge_pct=6)))
-            restarted = Scanner(Config(telegram_bot_token="", telegram_chat_id=""), None, seen)
+            restarted = Scanner(Config(telegram_bot_token="", telegram_chat_id="", spread_threshold_pct=5), None, seen)
             self.assertFalse(restarted._due(first))
-            self.assertTrue(restarted._due(_opportunity(base="NEW", address="0xdef", edge_pct=6)))
+            self.assertTrue(restarted._due(_opportunity(base="BNB", edge_pct=15)))
+            self.assertTrue(restarted._due(_opportunity(base="NEW", address="0xeee", edge_pct=6)))
 
     def test_book_far_from_last_trade_is_not_a_spread(self):
         fake = _tradable(_listing("kucoin", "OBI", 0.0009683, bid=0.0009695, ask=0.0008409))

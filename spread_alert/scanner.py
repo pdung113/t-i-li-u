@@ -19,11 +19,10 @@ from spread_alert.logic import (
     Opportunity,
     best_opportunity,
     cex_spreads,
+    coin_identity,
     normalize_address,
-    normalize_symbol,
     raw_spread_pct,
     repriced,
-    stripped_base,
     symbols_match,
 )
 from spread_alert.tax import lookup_tax, tax_line
@@ -62,11 +61,15 @@ class Scanner:
         self.price_index = {}
         self.universe_at = 0.0
         self.seen_path = seen_path or Path.cwd() / ".alerted-coins.txt"
-        self.seen_coins = self._load_seen()
+        self.seen_edges = self._load_seen()
         self.watch: dict[tuple, tuple[float, float, float]] = {}
-        remembered = sum(1 for key in self.seen_coins if ":" not in key)
+        remembered = sum(1 for key in self.seen_edges if ":" not in key)
         if remembered:
-            log.info("Đã nhớ %s coin đã báo. Vòng sau bỏ qua những coin này.", remembered)
+            log.info(
+                "Đã nhớ %s coin. Chỉ báo lại khi lệch tăng thêm %.0f%%.",
+                remembered,
+                self.config.spread_threshold_pct,
+            )
 
     async def scan(self, on_alert=None) -> ScanResult:
         started = time.monotonic()
@@ -377,40 +380,68 @@ class Scanner:
         return abs(opportunity.cex_price - prev_px) / prev_px <= 0.03
 
     def _coin_keys(self, opportunity: Opportunity) -> set[str]:
-        symbol = normalize_symbol(opportunity.base)
-        keys = {stripped_base(symbol) or symbol} if symbol else set()
+        keys = set()
+        for symbol in (opportunity.base, opportunity.dex_symbol):
+            name = coin_identity(symbol)
+            if name:
+                keys.add(name)
         if opportunity.address:
             keys.add(f"{opportunity.chain}:{normalize_address(opportunity.address)}")
         return keys
 
     def _due(self, opportunity: Opportunity) -> bool:
-        """A coin sent on an earlier scan, even after a restart, stays quiet."""
+        """Alert again only after the spread grows by another full threshold.
+
+        BNB at 5% stays quiet on the next scan. It is sent again at 10%.
+        """
         keys = self._coin_keys(opportunity)
-        return not keys or keys.isdisjoint(self.seen_coins)
+        if not keys:
+            return True
+        known = [self.seen_edges[key] for key in keys if key in self.seen_edges]
+        if not known:
+            return True
+        return opportunity.edge_pct + 1e-6 >= max(known) + self.config.spread_threshold_pct
 
     def _mark(self, opportunity: Opportunity) -> None:
-        fresh = [key for key in self._coin_keys(opportunity) if key not in self.seen_coins]
-        if not fresh:
-            return
-        self.seen_coins.update(fresh)
+        edge = opportunity.edge_pct
+        for key in self._coin_keys(opportunity):
+            current = self.seen_edges.get(key)
+            if current is None or edge > current:
+                self.seen_edges[key] = edge
+        self._save_seen()
+
+    def _save_seen(self) -> None:
         try:
             self.seen_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.seen_path.open("a", encoding="utf-8") as handle:
-                for key in fresh:
-                    handle.write(key + "\n")
-                handle.flush()
+            lines = [f"{key} {edge:.4f}" for key, edge in sorted(self.seen_edges.items())]
+            self.seen_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         except OSError as exc:
             log.warning("Không lưu được danh sách coin đã báo: %s", exc)
 
-    def _load_seen(self) -> set[str]:
+    def _load_seen(self) -> dict[str, float]:
         if not self.seen_path.is_file():
-            return set()
+            return {}
         try:
             text = self.seen_path.read_text(encoding="utf-8")
         except OSError as exc:
             log.warning("Không đọc được danh sách coin đã báo: %s", exc)
-            return set()
-        return {line.strip() for line in text.splitlines() if line.strip()}
+            return {}
+        found: dict[str, float] = {}
+        for line in text.splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            key = parts[0]
+            if len(parts) >= 2:
+                try:
+                    edge = float(parts[1])
+                except ValueError:
+                    edge = self.config.spread_threshold_pct
+            else:
+                # Older files stored only the name. Treat that as an alert at the threshold.
+                edge = self.config.spread_threshold_pct
+            found[key] = max(found.get(key, edge), edge)
+        return found
 
 
 def sanity_lines(markets: dict, pools: dict) -> list[str]:

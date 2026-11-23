@@ -329,6 +329,14 @@ def stripped_base(base: str) -> str | None:
     return matched.group(2)
 
 
+def coin_identity(symbol: str) -> str:
+    """One name for the same asset, so BNB and WBNB share a single alert."""
+    bare = stripped_base(symbol) or normalize_symbol(symbol)
+    if bare.startswith("W") and _is_wrapped_alias(bare, bare[1:]):
+        return bare[1:]
+    return bare
+
+
 @dataclass(frozen=True, slots=True)
 class ChainGate:
     """Deposit and withdrawal status for one network on a CEX."""
