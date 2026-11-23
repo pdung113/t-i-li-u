@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import { buildBuyTx, describeGas, fixedGas, minOutFromReceived, pricedGas } from "./buy.js";
 import { REASON_TEXT, decide, formatTax } from "./decide.js";
 import { log } from "./log.js";
-import { buildMintTx, mintReady } from "./mint.js";
+import { buildMintTx, mintGasLimit, mintReady } from "./mint.js";
 import { formatUsd, marketCapUsd, mcapDecision, warmNativePrice } from "./mcap.js";
 import { loadConfig } from "./setup.js";
 import { SIM_EOA, buyTarget, describePool, simulateSwap, underlyingToken } from "./simulate.js";
@@ -452,6 +452,9 @@ export async function main(argv = process.argv.slice(2), options = {}) {
 
   const runMint = async () => {
     const from = wallet ? wallet.address : SIM_EOA;
+    if (!wallet) {
+      log("Chưa có PRIVATE_KEY. Đang thử mint bằng ví mô phỏng. Muốn thử đúng ví của bạn thì điền khóa, vẫn để DRY_RUN=true.");
+    }
     let lastLog = 0;
     while (!stopped) {
       const ready = await mintReady(provider, {
@@ -484,14 +487,31 @@ export async function main(argv = process.argv.slice(2), options = {}) {
         log(`DRY RUN khớp. Sẽ mint ${config.mintCount} NFT, trả ${priceNote}, gas ${attemptGas}.`);
         return;
       }
-      const nonce = await provider.getTransactionCount(wallet.address, "pending");
+      let nonce;
+      try {
+        nonce = await provider.getTransactionCount(wallet.address, "pending");
+      } catch (error) {
+        log(`Không lấy được nonce: ${error.shortMessage || error.message}`);
+        await sleeper.wait(config.retryMs);
+        continue;
+      }
+      const gasLimit = await mintGasLimit(
+        provider,
+        {
+          from: wallet.address,
+          to: config.contract,
+          data: config.mintData,
+          value: config.mintValueWei,
+        },
+        config.gasLimit,
+      );
       const tx = buildMintTx({
         chain: config.chain,
         contract: config.contract,
         data: config.mintData,
         valueWei: config.mintValueWei,
         gas: gasQuote,
-        gasLimit: config.gasLimit,
+        gasLimit,
         nonce,
       });
       const raw = await wallet.signTransaction(tx);

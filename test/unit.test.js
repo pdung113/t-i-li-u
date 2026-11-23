@@ -7,7 +7,7 @@ import { decide, formatTax, taxBps } from "../src/decide.js";
 import { parseSimulateResult } from "../src/simulate.js";
 import { main } from "../src/index.js";
 import { fdvUsd, formatUsd, mcapDecision } from "../src/mcap.js";
-import { encodeMint } from "../src/mint.js";
+import { encodeMint, mintGasLimit } from "../src/mint.js";
 import { buildConfig, parseSetup } from "../src/setup.js";
 import { extractAddresses, parseTwitterTarget } from "../src/twitter.js";
 import { createSleeper } from "../src/wait.js";
@@ -30,7 +30,7 @@ test("chain eth, base, robinhood", async () => {
   await assert.rejects(() => main(["--chain", "nope", "https://x.com/foo"]), /Chain không hỗ trợ/);
 });
 
-test("setup.txt và ngưỡng vốn hóa", () => {
+test("setup.txt và ngưỡng vốn hóa", async () => {
   const values = parseSetup(`
 # ghi chú
 CHAIN=base
@@ -83,7 +83,12 @@ DRY_RUN=false
     new ethers.Interface(["function publicMint(uint256 quantity) payable"]).encodeFunctionData("publicMint", [2n]),
   );
   assert.equal(encodeMint("mint", 1).slice(0, 10), "0xa0712d68");
+  assert.equal(encodeMint("mint()", 1).slice(0, 10), "0x1249c58b");
+  assert.throws(() => encodeMint("mint()", 2), /MINT_COUNT/);
   assert.throws(() => encodeMint("airdrop", 1), /MINT_FUNCTION/);
+  assert.equal(await mintGasLimit({ estimateGas: async () => 2_000_000n }, {}, 1_200_000), 2_400_000);
+  assert.equal(await mintGasLimit({ estimateGas: async () => 100_000n }, {}, 1_200_000), 1_200_000);
+  assert.equal(await mintGasLimit({ estimateGas: async () => { throw new Error("no"); } }, {}, 1_200_000), 1_200_000);
   assert.equal(mcapDecision(50000, 50000).ok, true);
   assert.equal(mcapDecision(50001, 50000).reason, "too_high");
   assert.equal(mcapDecision(null, 50000).retry, true);

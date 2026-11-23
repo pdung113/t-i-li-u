@@ -34,7 +34,7 @@ MAX_MCAP_USD=100000
 # Chỉ dùng khi MODE=mint. Giá mỗi NFT bằng BNB hoặc ETH. 0 = miễn phí.
 MINT_PRICE=0.01
 MINT_COUNT=1
-# Hàm: mint | publicMint | mintPublic | freeMint
+# Hàm: mint | mint() | publicMint | publicMint() | mintPublic | freeMint
 MINT_FUNCTION=mint
 
 # true = chưa gửi tiền. Muốn mua hoặc mint thật thì đổi thành false và điền PRIVATE_KEY.
