@@ -68,7 +68,7 @@ Mở `theo-doi.txt` bằng Notepad. Mỗi dòng là một tài khoản X. @vladt
 
 GitHub giữ một phiên chạy và hỏi follow mới khoảng 15 giây một lần, kể cả khi máy tính đang tắt. GitHub không cho mở phiên mới nhanh hơn 5 phút, nên mỗi phiên ngồi khoảng 6 tiếng rồi phiên sau nối tiếp. Lúc đổi phiên, hoặc lúc GitHub khởi động chậm, tin có thể tới sau khoảng một phút.
 
-Chạy thêm `chay.bat` trên máy thì tin tới khoảng 3 giây. Cùng một follow có thể thành hai tin: một từ máy, một từ GitHub.
+Chạy thêm `chay.bat` trên máy thì tin tới khoảng 3 giây. Người đã được follow rồi không bị báo lại. Follow mới chỉ gửi một lần trên mỗi bản đang chạy.
 
 Người được theo dõi là những dòng trong `theo-doi.txt` trên GitHub. Hiện có @vladtenev. Sửa file trên máy không đổi bản GitHub đang chạy.
 
@@ -80,7 +80,7 @@ npm run follow
 
 Trên Windows có thể double-click `chay.bat`. Cửa sổ đen phải để mở. Sau mỗi lần hỏi, cửa sổ in một dòng. Chưa có follow mới thì dòng đó nói đang nhớ bao nhiêu người. Tắt cửa sổ là bản trên máy dừng.
 
-Lần chạy đầu chỉ nhớ follow hiện tại của từng người, không gửi tin cũ. Follow mới sau đó được gửi qua Telegram, kèm link X. Nếu tài khoản vừa được follow để contract trong bio hoặc bài viết, tin thêm dòng `Contract: 0x...`.
+Lần chạy đầu nhớ hết follow hiện tại, không gửi tin cũ. Mở lại tool cũng không gửi lại những người đó. Chỉ follow mới, làm số follow tăng lên, mới được gửi một lần qua Telegram, kèm link X. Nếu tài khoản vừa được follow để contract trong bio hoặc bài viết, tin thêm dòng `Contract: 0x...`.
 
 Tài khoản khoá không theo dõi được, vì danh sách follow không công khai. Token Telegram nằm trong `.env`, không ghi vào `theo-doi.txt`.
 

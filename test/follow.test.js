@@ -12,9 +12,11 @@ import {
   extractContracts,
   fileStore,
   formatFollowAlert,
+  chooseAlerts,
   freshState,
   newFollows,
   parseState,
+  replaceFile,
   pollFollows,
   sendTelegram,
   serializeState,
@@ -46,8 +48,11 @@ function memoryStore(initial = freshState()) {
     },
     async save(next) {
       state = {
-        bootstrapped: next.bootstrapped,
-        emptyOk: next.emptyOk,
+        bootstrapped: next.bootstrapped === true,
+        emptyOk: next.emptyOk === true,
+        synced: next.synced === true,
+        followingCount: Number.isFinite(next.followingCount) ? next.followingCount : null,
+        crawledAt: typeof next.crawledAt === "string" ? next.crawledAt : null,
         seen: new Set(next.seen),
         people: Array.isArray(next.people) ? next.people.map((item) => ({ ...item, contracts: [...(item.contracts || [])] })) : [],
         corrupt: false,
@@ -141,6 +146,8 @@ test("follow một dự án thì tin có link X và contract, rồi được nh�
   const strangerCa = "0x3333333333333333333333333333333333333333";
   const state = freshState();
   state.bootstrapped = true;
+  state.synced = true;
+  state.followingCount = 1;
   state.seen.add("1");
   const store = memoryStore(state);
   const sent = [];
@@ -276,6 +283,8 @@ test("lần đầu chỉ nhớ, không báo", async () => {
 test("follow mới được báo, follow cũ thì không", async () => {
   const state = freshState();
   state.bootstrapped = true;
+  state.synced = true;
+  state.followingCount = 1;
   state.seen.add("1");
   const client = {
     async profile() {
@@ -295,6 +304,8 @@ test("follow mới được báo, follow cũ thì không", async () => {
 test("quá một trang follow mới thì cảnh báo còn sót", async () => {
   const state = freshState();
   state.bootstrapped = true;
+  state.synced = true;
+  state.followingCount = 1;
   state.seen.add("9");
   let pages = 0;
   const client = {
@@ -387,6 +398,8 @@ test("mốc rỗng nhưng họ follow cả một danh sách dài thì nhớ lạ
 test("Telegram lỗi thì lần sau báo lại đúng người đó", async () => {
   const state = freshState();
   state.bootstrapped = true;
+  state.synced = true;
+  state.followingCount = 1;
   state.seen.add("1");
   const store = memoryStore(state);
   const sent = [];
@@ -596,4 +609,219 @@ test("lệnh chạy một vòng với link X và không gửi follow cũ", async
     },
   });
   assert.match(onlineText, /Tắt máy tính vẫn nhận tin/);
+});
+
+test("số follow không tăng thì người lạ chen vào không được báo", () => {
+  const crowd = Array.from({ length: 8 }, (_item, index) => user(100 + index, `old${index}`));
+  assert.deepEqual(chooseAlerts(crowd, { hitKnown: true, delta: 0 }), []);
+  assert.deepEqual(chooseAlerts([user(3, "c"), user(2, "b")], { hitKnown: true, delta: 2 }).map((item) => item.id), ["3", "2"]);
+  assert.deepEqual(chooseAlerts([user(4, "d")], { hitKnown: true, delta: 1 }).map((item) => item.handle), ["d"]);
+  assert.deepEqual(chooseAlerts(crowd, { hitKnown: false, delta: 1 }), []);
+});
+
+test("trang đầu đã có người quen thì follow cũ nằm giữa không bị báo", async () => {
+  const state = freshState();
+  state.bootstrapped = true;
+  state.synced = true;
+  state.followingCount = 58;
+  for (const id of ["1", "2", "3"]) state.seen.add(id);
+  const result = await pollFollows({
+    client: {
+      async profile() {
+        return profile("vladtenev", { following: 58 });
+      },
+      async following() {
+        return {
+          users: [user(1, "known"), user(99, "already"), user(2, "also")],
+          cursor: null,
+        };
+      },
+    },
+    handle: "vladtenev",
+    state,
+  });
+  assert.deepEqual(result.alerts, []);
+  assert.equal(state.seen.has("99"), true);
+});
+
+test("nhớ gần hết danh sách thì thôi không đọc lại và không báo", async () => {
+  const state = freshState();
+  state.bootstrapped = true;
+  const users = Array.from({ length: 8 }, (_item, index) => user(index + 1, `u${index}`));
+  let calls = 0;
+  const result = await pollFollows({
+    client: {
+      async profile() {
+        return profile("vladtenev", { following: 20 });
+      },
+      async following() {
+        calls += 1;
+        return { users, cursor: "more" };
+      },
+    },
+    handle: "vladtenev",
+    state,
+    baselinePages: 1,
+  });
+  assert.equal(result.alerts.length, 0);
+  assert.equal(state.synced, true);
+  assert.equal(state.seen.size, 8);
+  const again = await pollFollows({
+    client: {
+      async profile() {
+        return profile("vladtenev", { following: 20 });
+      },
+      async following() {
+        calls += 1;
+        return { users: [user(1, "u0"), user(99, "old")], cursor: null };
+      },
+    },
+    handle: "vladtenev",
+    state,
+  });
+  assert.deepEqual(again.alerts, []);
+  assert.equal(state.seen.has("99"), true);
+  assert.equal(calls, 2);
+});
+
+test("file cũ chỉ nhớ một phần thì nhớ nốt, không gửi lại", async () => {
+  const raw = JSON.stringify({ version: 1, bootstrapped: true, emptyOk: false, seen: ["1"] });
+  const state = parseState(raw);
+  assert.equal(state.synced, false);
+  assert.equal(state.followingCount, null);
+  const result = await pollFollows({
+    client: {
+      async profile() {
+        return profile("vladtenev", { following: 4 });
+      },
+      async following(_handle, opts) {
+        if (!opts.cursor) return { users: [user(1, "known"), user(9, "old")], cursor: "next" };
+        return { users: [user(8, "older"), user(7, "rest")], cursor: null };
+      },
+    },
+    handle: "vladtenev",
+    state,
+    baselinePages: 5,
+  });
+  assert.deepEqual(result.alerts, []);
+  for (const id of ["1", "9", "8", "7"]) assert.equal(state.seen.has(id), true, id);
+  assert.equal(state.synced, true);
+  assert.equal(state.followingCount, 4);
+});
+
+test("mở lại nhiều lần chỉ báo đúng một follow mới", async () => {
+  const store = memoryStore();
+  let users = [user(1, "old")];
+  let count = 1;
+  const sent = [];
+  const client = {
+    async profile() {
+      return profile("vladtenev", { following: count });
+    },
+    async following() {
+      return { users, cursor: null };
+    },
+  };
+  const run = (cycles) =>
+    watch({
+      handle: "vladtenev",
+      client,
+      store,
+      maxCycles: cycles,
+      sleep: async () => {},
+      log() {},
+      notify: async (text) => sent.push(text),
+    });
+
+  await run(1);
+  assert.deepEqual(sent, []);
+  users = [user(2, "fresh", { name: "Fresh" }), user(1, "old")];
+  count = 2;
+  await run(1);
+  assert.deepEqual(sent, ["@vladtenev vừa follow Fresh (@fresh)\nhttps://x.com/fresh"]);
+  for (let i = 0; i < 20; i++) await run(1);
+  users = [user(1, "old"), user(2, "fresh")];
+  await run(5);
+  users = [user(3, "already"), user(2, "fresh"), user(1, "old")];
+  await run(5);
+  assert.equal(sent.length, 1);
+  assert.equal(store.get().seen.has("3"), false);
+  count = 3;
+  users = [user(4, "real", { name: "Real" }), user(3, "already"), user(2, "fresh"), user(1, "old")];
+  await run(1);
+  assert.equal(sent.length, 2);
+  assert.match(sent[1], /@real/);
+  await run(10);
+  assert.equal(sent.length, 2);
+  assert.equal(store.get().seen.has("3"), true);
+  assert.equal(store.get().people.some((item) => item.handle === "real"), true);
+});
+
+test("người đã báo một lần thì xoá khỏi seen cũng không báo lại", async () => {
+  const state = freshState();
+  state.bootstrapped = true;
+  state.synced = true;
+  state.followingCount = 2;
+  state.seen.add("1");
+  state.people.push({
+    id: "2",
+    handle: "fresh",
+    name: "Fresh",
+    url: "https://x.com/fresh",
+    contracts: [],
+    contractTweet: null,
+    at: "2026-11-07T00:00:00.000Z",
+  });
+  const sent = [];
+  await watch({
+    handle: "vladtenev",
+    client: {
+      async profile() {
+        return profile("vladtenev", { following: 2 });
+      },
+      async following() {
+        return { users: [user(2, "fresh"), user(1, "old")], cursor: null };
+      },
+    },
+    store: memoryStore(state),
+    maxCycles: 4,
+    sleep: async () => {},
+    log() {},
+    notify: async (text) => sent.push(text),
+  });
+  assert.deepEqual(sent, []);
+});
+
+test("ghi đè file trạng thái khi Windows không cho rename", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "follows-win-"));
+  const target = join(dir, "a.json");
+  const tmp = join(dir, "a.tmp");
+  let attempts = 0;
+  await replaceFile(target, "{\"ok\":1}\n", {
+    tmp,
+    async rename() {
+      attempts += 1;
+      const error = new Error("exists");
+      error.code = attempts === 1 ? "EEXIST" : "EPERM";
+      throw error;
+    },
+  });
+  assert.equal(await readFile(target, "utf8"), "{\"ok\":1}\n");
+  assert.equal(attempts, 2);
+
+  const store = fileStore(join(dir, "vladtenev.json"));
+  const state = freshState();
+  state.bootstrapped = true;
+  state.synced = true;
+  state.followingCount = 58;
+  state.seen.add("42");
+  await store.save(state);
+  state.seen.add("43");
+  state.followingCount = 59;
+  await store.save(state);
+  const loaded = await store.load();
+  assert.equal(loaded.synced, true);
+  assert.equal(loaded.followingCount, 59);
+  assert.equal(loaded.seen.has("42"), true);
+  assert.equal(loaded.seen.has("43"), true);
 });

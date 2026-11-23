@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 const API = "https://api.fxtwitter.com";
@@ -18,7 +18,16 @@ export class FollowError extends Error {
 }
 
 export function freshState() {
-  return { bootstrapped: false, emptyOk: false, seen: new Set(), people: [], corrupt: false };
+  return {
+    bootstrapped: false,
+    emptyOk: false,
+    synced: false,
+    followingCount: null,
+    crawledAt: null,
+    seen: new Set(),
+    people: [],
+    corrupt: false,
+  };
 }
 
 /**
@@ -73,6 +82,26 @@ export function newFollows(seen, usersNewestFirst) {
   }
   fresh.reverse();
   return { fresh, hitKnown };
+}
+
+function knownId(state, id) {
+  if (state.seen.has(id)) return true;
+  return Array.isArray(state.people) && state.people.some((item) => item && item.id === id);
+}
+
+/**
+ * Chỉ chọn prefix mới nhất. Danh sách xáo trộn hoặc dài hơn số follow tăng thêm
+ * được coi là follow cũ, không gửi.
+ * `prefix` xếp người mới nhất trước.
+ * Số follow không tăng thì không báo. Đó là danh sách cũ bị xáo, không phải follow mới.
+ * @param {{ id: string }[]} prefix
+ * @param {{ hitKnown?: boolean, delta?: number | null }} opts
+ */
+export function chooseAlerts(prefix, { hitKnown = false, delta = null } = {}) {
+  const count = prefix.length;
+  if (count === 0 || !Number.isFinite(delta) || delta <= 0) return [];
+  if (!hitKnown && count > 3) return [];
+  return prefix.slice(0, Math.min(count, delta));
 }
 
 /**
@@ -350,22 +379,78 @@ export function parseStatuses(http, body) {
   throw new FollowError("Bài viết chưa tải được", "unavailable");
 }
 
+const BACKFILL_WAIT_MS = 10 * 60 * 1000;
+
+function listCovered(seenSize, following) {
+  return typeof following === "number" && (seenSize >= following || following - seenSize <= 15);
+}
+
+async function crawlFollowing(loadPage, { maxPages, stopWhen }) {
+  const users = [];
+  const seenIds = new Set();
+  const cursors = new Set();
+  let cursor;
+  let done = false;
+  let truncated = false;
+  for (let i = 0; i < maxPages; i++) {
+    let page;
+    try {
+      page = await loadPage(i === 0 ? undefined : cursor);
+    } catch (error) {
+      if (i === 0) throw error;
+      return { users, done: false, truncated: true };
+    }
+    if (page.users.length === 0) {
+      done = !page.cursor;
+      break;
+    }
+    let added = 0;
+    for (const user of page.users) {
+      if (seenIds.has(user.id)) continue;
+      seenIds.add(user.id);
+      users.push(user);
+      added += 1;
+    }
+    if (typeof stopWhen === "function" && stopWhen(users)) {
+      return { users, done: true, truncated: false };
+    }
+    if (!page.cursor || cursors.has(page.cursor) || added === 0) {
+      done = !page.cursor;
+      break;
+    }
+    cursors.add(page.cursor);
+    cursor = page.cursor;
+    if (i === maxPages - 1) truncated = true;
+  }
+  return { users, done, truncated };
+}
+
+function rememberUsers(state, users) {
+  let added = 0;
+  for (const user of users) {
+    if (!user?.id || state.seen.has(user.id)) continue;
+    state.seen.add(user.id);
+    added += 1;
+  }
+  return added;
+}
+
 /**
  * @param {{
  *   client: { profile: Function, following: Function },
  *   handle: string,
  *   state: ReturnType<typeof freshState>,
  *   maxPages?: number,
+ *   baselinePages?: number,
  * }} opts
  */
-export async function pollFollows({ client, handle, state, maxPages = 8 }) {
+export async function pollFollows({ client, handle, state, maxPages = 8, baselinePages = 30 }) {
   const profile = await client.profile(handle);
   if (profile.protected) {
     throw new FollowError(`@${profile.handle} đang khoá. Danh sách follow không công khai.`, "private");
   }
   const canonical = profile.handle;
   const allowEmpty = profile.following === 0;
-
   const loadPage = (cursor) =>
     client.following(canonical, {
       count: 100,
@@ -374,52 +459,126 @@ export async function pollFollows({ client, handle, state, maxPages = 8 }) {
       retries: allowEmpty ? 1 : undefined,
     });
 
-  if (!state.bootstrapped) {
-    const page = await loadPage();
-    if (page.users.length === 0 && profile.following > 0) {
+  const crawledAt = Date.parse(state.crawledAt || "");
+  const throttled = Number.isFinite(crawledAt) && Date.now() - crawledAt < BACKFILL_WAIT_MS;
+
+  if (!state.bootstrapped || (state.synced !== true && typeof state.followingCount !== "number" && !throttled)) {
+    const crawled = await crawlFollowing(loadPage, {
+      maxPages: baselinePages,
+      stopWhen:
+        typeof profile.following === "number" && profile.following > 0
+          ? (users) => users.length >= profile.following
+          : undefined,
+    });
+    if (crawled.users.length === 0 && profile.following > 0) {
       throw new FollowError("Danh sách follow đang trống tạm thời. Thử lại.", "unavailable");
     }
-    for (const user of page.users) state.seen.add(user.id);
+    const absorbed = rememberUsers(state, crawled.users);
+    for (const person of state.people || []) {
+      if (person?.id) state.seen.add(String(person.id));
+    }
     state.bootstrapped = true;
-    state.emptyOk = page.users.length === 0;
-    return { kind: "baseline", handle: canonical, seeded: page.users.length, alerts: [], truncated: false };
+    state.emptyOk = state.seen.size === 0;
+    state.crawledAt = new Date().toISOString();
+    state.synced = crawled.done || listCovered(state.seen.size, profile.following) || profile.following === 0;
+    if (typeof profile.following === "number") state.followingCount = profile.following;
+    return {
+      kind: "baseline",
+      handle: canonical,
+      seeded: state.seen.size,
+      alerts: [],
+      truncated: !state.synced,
+      dirty: true,
+      announce: true,
+      absorbed,
+      nextFollowingCount: profile.following,
+    };
   }
 
-  const collected = [];
-  let cursor;
-  for (let i = 0; i < maxPages; i++) {
-    const page = await loadPage(i === 0 ? undefined : cursor);
-    if (i === 0 && page.users.length === 0 && profile.following > 0) {
-      throw new FollowError("Danh sách follow đang trống tạm thời. Thử lại.", "unavailable");
-    }
-    // Bản ghi nhớ rỗng nhưng tài khoản đang follow nhiều hơn một trang:
-    // nhớ lại trang mới nhất, không gửi hàng loạt follow cũ.
-    if (i === 0 && state.seen.size === 0 && profile.following > page.users.length) {
-      for (const user of page.users) state.seen.add(user.id);
-      state.emptyOk = false;
-      return { kind: "baseline", handle: canonical, seeded: page.users.length, alerts: [], truncated: false };
-    }
-    collected.push(...page.users);
-    const diff = newFollows(state.seen, collected);
-    if (diff.hitKnown || !page.cursor) {
-      return { kind: "diff", handle: canonical, seeded: 0, alerts: diff.fresh, truncated: false };
-    }
-    if (i === maxPages - 1) {
-      return { kind: "diff", handle: canonical, seeded: 0, alerts: diff.fresh, truncated: true };
-    }
-    cursor = page.cursor;
+  const crawled = await crawlFollowing(loadPage, {
+    maxPages,
+    stopWhen: (users) => users.some((user) => knownId(state, user.id)),
+  });
+  if (crawled.users.length === 0 && profile.following > 0) {
+    throw new FollowError("Danh sách follow đang trống tạm thời. Thử lại.", "unavailable");
   }
-  return { kind: "diff", handle: canonical, seeded: 0, alerts: [], truncated: true };
+
+  const prefix = [];
+  let hitKnown = false;
+  for (const user of crawled.users) {
+    if (knownId(state, user.id)) {
+      hitKnown = true;
+      break;
+    }
+    prefix.push(user);
+  }
+  const delta =
+    typeof state.followingCount === "number" && typeof profile.following === "number"
+      ? profile.following - state.followingCount
+      : null;
+  const chosen = chooseAlerts(prefix, { hitKnown, delta });
+  const chosenIds = new Set(chosen.map((user) => user.id));
+  const holdQuietPrefix = chosen.length === 0 && prefix.length > 0 && prefix.length <= 2 && !(Number.isFinite(delta) && delta > 0);
+  const absorb = [];
+  let passedKnown = false;
+  for (const user of crawled.users) {
+    if (chosenIds.has(user.id)) continue;
+    if (!passedKnown && !knownId(state, user.id)) {
+      if (holdQuietPrefix) continue;
+      absorb.push(user);
+      continue;
+    }
+    passedKnown = true;
+    absorb.push(user);
+  }
+  const absorbed = rememberUsers(state, absorb);
+  let dirty = absorbed > 0;
+  if (chosen.length === 0 && typeof profile.following === "number" && state.followingCount !== profile.following) {
+    state.followingCount = profile.following;
+    dirty = true;
+  }
+
+  let backfillTruncated = false;
+  if (chosen.length === 0 && state.synced !== true && !throttled) {
+    const heldIds = new Set(holdQuietPrefix ? prefix.map((user) => user.id) : []);
+    const extra = await crawlFollowing(loadPage, { maxPages: baselinePages });
+    const extraAbsorbed = rememberUsers(
+      state,
+      extra.users.filter((user) => !chosenIds.has(user.id) && !heldIds.has(user.id)),
+    );
+    state.crawledAt = new Date().toISOString();
+    state.synced = extra.done || listCovered(state.seen.size, profile.following) || profile.following === 0;
+    if (extraAbsorbed > 0) dirty = true;
+    backfillTruncated = !state.synced;
+  }
+
+  return {
+    kind: "diff",
+    handle: canonical,
+    seeded: 0,
+    alerts: chosen.slice().reverse(),
+    truncated: (!hitKnown && (crawled.truncated || !crawled.done)) || backfillTruncated,
+    dirty,
+    announce: false,
+    absorbed,
+    nextFollowingCount: typeof profile.following === "number" ? profile.following : null,
+  };
 }
 
 export function serializeState(state) {
-  return {
+  const out = {
     version: 1,
     bootstrapped: state.bootstrapped === true,
     emptyOk: state.emptyOk === true,
+    synced: state.synced === true,
     seen: [...state.seen],
     people: Array.isArray(state.people) ? state.people : [],
   };
+  if (typeof state.followingCount === "number" && Number.isFinite(state.followingCount)) {
+    out.followingCount = state.followingCount;
+  }
+  if (typeof state.crawledAt === "string" && state.crawledAt) out.crawledAt = state.crawledAt;
+  return out;
 }
 
 export function parseState(text) {
@@ -461,13 +620,52 @@ export function parseState(text) {
       });
     }
   }
-  return { bootstrapped: json.bootstrapped, emptyOk: json.emptyOk === true, seen, people, corrupt: false };
+  const followingCount = Number.isFinite(json.followingCount) ? json.followingCount : null;
+  const crawledAt = typeof json.crawledAt === "string" ? json.crawledAt : null;
+  return {
+    bootstrapped: json.bootstrapped,
+    emptyOk: json.emptyOk === true,
+    synced: json.synced === true,
+    followingCount,
+    crawledAt,
+    seen,
+    people,
+    corrupt: false,
+  };
 }
 
 export function statePath(handle, dir = join("data", "follows")) {
   const safe = String(handle || "").toLowerCase();
   if (!/^[a-z0-9_]{1,15}$/.test(safe)) throw new Error("Username không hợp lệ");
   return join(dir, `${safe}.json`);
+}
+
+function cannotReplace(error) {
+  return error?.code === "EEXIST" || error?.code === "EPERM" || error?.code === "EBUSY";
+}
+
+/** Ghi đè file trạng thái. Windows không cho rename đè file có sẵn. */
+export async function replaceFile(file, contents, io = {}) {
+  const write = io.writeFile || writeFile;
+  const renameImpl = io.rename || rename;
+  const remove = io.rm || rm;
+  const read = io.readFile || readFile;
+  const tmp = io.tmp || `${file}.${process.pid}.tmp`;
+  await write(tmp, contents);
+  try {
+    await renameImpl(tmp, file);
+    return;
+  } catch (error) {
+    if (!cannotReplace(error)) throw error;
+  }
+  await remove(file, { force: true }).catch(() => {});
+  try {
+    await renameImpl(tmp, file);
+  } catch (error) {
+    if (!cannotReplace(error)) throw error;
+    await write(file, await read(tmp));
+    await remove(tmp, { force: true }).catch(() => {});
+  }
 }
 
 export function fileStore(file) {
@@ -482,9 +680,7 @@ export function fileStore(file) {
     },
     async save(state) {
       await mkdir(dirname(file), { recursive: true });
-      const tmp = `${file}.${process.pid}.tmp`;
-      await writeFile(tmp, `${JSON.stringify(serializeState(state))}\n`);
-      await rename(tmp, file);
+      await replaceFile(file, `${JSON.stringify(serializeState(state))}\n`);
     },
   };
 }
@@ -547,30 +743,38 @@ export async function sendTelegram({ token, chatId, text, fetchImpl = globalThis
  */
 export async function runCycle(opts) {
   const log = opts.log || (() => {});
-  const wasReady = opts.state.bootstrapped;
+  if (!opts.state.bootstrapped || (opts.state.synced !== true && typeof opts.state.followingCount !== "number")) {
+    log(`Đang nhớ hết follow hiện tại của @${opts.handle}. Chưa gửi tin cũ.`);
+  }
   const result = await pollFollows({
     client: opts.client,
     handle: opts.handle,
     state: opts.state,
     maxPages: opts.maxPages,
+    baselinePages: opts.baselinePages,
   });
-  if (!wasReady || result.kind === "baseline") {
-    await opts.store.save(opts.state);
-    log(`Đã nhớ ${result.seeded} follow gần nhất của @${result.handle}. Follow mới sẽ báo qua Telegram.`);
-  } else if (result.alerts.length === 0) {
+  if (result.dirty || result.announce) await opts.store.save(opts.state);
+  if (result.announce) {
+    log(`Đã nhớ ${result.seeded} follow hiện tại của @${result.handle}. Follow cũ không gửi lại. Follow mới sẽ báo qua Telegram.`);
+  } else if (result.absorbed > 0) {
+    log(`Đã nhớ thêm ${result.absorbed} follow cũ của @${result.handle}, không gửi lại.`);
+  }
+  if (!result.announce && result.alerts.length === 0) {
     log(`@${result.handle} chưa follow ai mới. Đang nhớ ${opts.state.seen.size} người.`);
   }
   for (const user of result.alerts) {
+    if (knownId(opts.state, user.id)) continue;
     const enriched = await enrichFollowed(opts.client, user);
     await opts.notify(formatFollowAlert(result.handle, enriched));
     opts.state.seen.add(user.id);
     opts.state.emptyOk = false;
+    if (typeof result.nextFollowingCount === "number") opts.state.followingCount = result.nextFollowingCount;
     rememberPerson(opts.state, enriched);
     await opts.store.save(opts.state);
     const contractNote = enriched.contracts.length ? ` | ${enriched.contracts.join(", ")}` : "";
     log(`@${result.handle} follow @${enriched.handle}${contractNote}`);
   }
-  if (result.truncated) {
+  if (result.truncated && result.alerts.length > 0) {
     log(`@${result.handle} follow quá nhiều người trong một lúc. Một số follow cũ hơn trong khoảng trống có thể chưa được báo.`);
   }
   return result.handle;
