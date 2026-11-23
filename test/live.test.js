@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ethers } from "ethers";
 import { pricedGas } from "../src/buy.js";
+import { encodeMint, mintReady } from "../src/mint.js";
 import { resolveChain } from "../src/chains.js";
 import { main } from "../src/index.js";
 import { marketCapUsd } from "../src/mcap.js";
 import { hasBuyLiquidity, simulateSwap, underlyingToken } from "../src/simulate.js";
 import { fetchStatuses } from "../src/twitter.js";
+import { openBlockSleeper } from "../src/wait.js";
 
 const CAKE = "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82";
 const chain = resolveChain("bsc");
@@ -141,6 +143,24 @@ DRY_RUN=true
   const text = lines.join("\n");
   assert.match(text, /DRY RUN khớp/);
   assert.match(text, /Tax buy 0\.00% sell 0\.00%/);
+});
+
+test("socket block BSC đóng sạch", { timeout: 15_000 }, async () => {
+  const sleeper = openBlockSleeper({ rpc: "", chain: resolveChain("bsc") });
+  const started = Date.now();
+  await sleeper.wait(8_000);
+  await sleeper.close();
+  assert.ok(Date.now() - started < 12_000);
+});
+
+test("hàm mint gửi lên contract không có mint thì chưa mở", { timeout: 20_000 }, async () => {
+  const ready = await mintReady(provider, {
+    to: CAKE,
+    from: "0x0000000000000000000000000000000000000001",
+    data: encodeMint("mint", 1),
+    valueWei: 0n,
+  });
+  assert.equal(ready.ok, false);
 });
 
 test("đọc timeline X", { timeout: 30_000 }, async () => {

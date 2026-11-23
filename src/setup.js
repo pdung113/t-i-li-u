@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ethers } from "ethers";
 import { resolveChain } from "./chains.js";
+import { encodeMint } from "./mint.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const setupPath = path.join(root, "setup.txt");
@@ -79,20 +80,34 @@ function normalizeMode(value) {
   const raw = String(value || "twitter").trim().toLowerCase();
   if (["twitter", "tw", "x", "tweet"].includes(raw)) return "twitter";
   if (["liquid", "liquidity", "liq", "contract", "pool"].includes(raw)) return "liquid";
-  throw new Error("MODE phải là twitter hoặc liquid");
+  if (["mint", "nft"].includes(raw)) return "mint";
+  throw new Error("MODE phải là twitter, liquid hoặc mint");
 }
 
 export function buildConfig(values, chainName) {
   const chain = resolveChain(chainName || values.CHAIN || "bsc");
   const mode = normalizeMode(values.MODE);
   let contract = (values.CONTRACT || "").trim();
-  if (mode === "liquid") {
+  if (mode === "liquid" || mode === "mint") {
     if (!/^0x[a-fA-F0-9]{40}$/.test(contract)) {
-      throw new Error("MODE=liquid cần điền CONTRACT=0x... trong setup.txt");
+      throw new Error(`MODE=${mode} cần điền CONTRACT=0x... trong setup.txt`);
     }
     contract = ethers.getAddress(contract);
   } else {
     contract = "";
+  }
+  let mintCount = 1;
+  let mintPrice = "0";
+  let mintFunction = "mint";
+  let mintValueWei = 0n;
+  let mintData = "0x";
+  if (mode === "mint") {
+    mintCount = Math.round(num(values.MINT_COUNT, 1, "MINT_COUNT"));
+    if (mintCount < 1 || mintCount > 50) throw new Error("MINT_COUNT phải từ 1 đến 50");
+    mintPrice = values.MINT_PRICE == null || String(values.MINT_PRICE).trim() === "" ? "0" : String(values.MINT_PRICE).trim();
+    mintFunction = (values.MINT_FUNCTION || "mint").trim();
+    mintData = encodeMint(mintFunction, mintCount);
+    mintValueWei = ethers.parseEther(mintPrice) * BigInt(mintCount);
   }
   const buyAmount = values.BUY_AMOUNT || "0.05";
   const probeAmount = values.PROBE_AMOUNT || "0.002";
@@ -110,6 +125,11 @@ export function buildConfig(values, chainName) {
     chain,
     mode,
     contract,
+    mintCount,
+    mintPrice,
+    mintFunction,
+    mintValueWei,
+    mintData,
     link: (values.LINK || "").trim(),
     rpc: (values.RPC_URL || "").trim() || chain.rpc,
     dryRun: flag(values.DRY_RUN, true),
@@ -122,7 +142,7 @@ export function buildConfig(values, chainName) {
     maxTaxPercent,
     slippagePercent,
     maxMcapUsd,
-    lookbackSec: Math.round(num(values.LOOKBACK_SEC, 180, "LOOKBACK_SEC")),
+    lookbackSec: Math.round(num(values.LOOKBACK_SEC, 0, "LOOKBACK_SEC")),
     waitForPairMs: Math.round(num(values.WAIT_FOR_PAIR_MS, 120_000, "WAIT_FOR_PAIR_MS")),
     retryMs: Math.round(num(values.RETRY_MS, 150, "RETRY_MS")),
     pollMs: Math.round(num(values.POLL_MS, 0, "POLL_MS")),

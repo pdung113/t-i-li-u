@@ -7,8 +7,10 @@ import { decide, formatTax, taxBps } from "../src/decide.js";
 import { parseSimulateResult } from "../src/simulate.js";
 import { main } from "../src/index.js";
 import { fdvUsd, formatUsd, mcapDecision } from "../src/mcap.js";
+import { encodeMint } from "../src/mint.js";
 import { buildConfig, parseSetup } from "../src/setup.js";
 import { extractAddresses, parseTwitterTarget } from "../src/twitter.js";
+import { createSleeper } from "../src/wait.js";
 
 test("main nhận link và từ chối link lạ", async () => {
   const previous = process.exitCode;
@@ -62,7 +64,26 @@ DRY_RUN=false
   assert.equal(buildConfig({ GAS_GWEI: "3", CHAIN: "bsc" }).gasGwei, "3");
   assert.throws(() => buildConfig({ GAS_X: "0", CHAIN: "bsc" }), /GAS_X/);
   assert.equal(buildConfig({ MODE: "tw", CHAIN: "bsc" }).mode, "twitter");
+  assert.equal(buildConfig({ CHAIN: "bsc" }).lookbackSec, 0);
   assert.throws(() => buildConfig({ MODE: "spot", CHAIN: "bsc" }), /MODE/);
+  assert.throws(() => buildConfig({ MODE: "mint", CHAIN: "eth" }), /CONTRACT/);
+  const mint = buildConfig({
+    MODE: "mint",
+    CHAIN: "eth",
+    CONTRACT: "0xED5AF388653567Af2F388E6224dC7C4b3241C544",
+    MINT_PRICE: "0.01",
+    MINT_COUNT: "2",
+    MINT_FUNCTION: "publicMint",
+  });
+  assert.equal(mint.mode, "mint");
+  assert.equal(mint.mintCount, 2);
+  assert.equal(mint.mintValueWei, ethers.parseEther("0.02"));
+  assert.equal(
+    mint.mintData,
+    new ethers.Interface(["function publicMint(uint256 quantity) payable"]).encodeFunctionData("publicMint", [2n]),
+  );
+  assert.equal(encodeMint("mint", 1).slice(0, 10), "0xa0712d68");
+  assert.throws(() => encodeMint("airdrop", 1), /MINT_FUNCTION/);
   assert.equal(mcapDecision(50000, 50000).ok, true);
   assert.equal(mcapDecision(50001, 50000).reason, "too_high");
   assert.equal(mcapDecision(null, 50000).retry, true);
@@ -74,6 +95,16 @@ DRY_RUN=false
   const price = 2_000n * 10n ** 8n;
   assert.equal(fdvUsd(supply, tokenReserve, nativeReserve, price), 2000);
   assert.equal(formatUsd(100000), "100.0k");
+});
+
+test("ngủ chờ block, có block thì thức ngay", async () => {
+  const sleeper = createSleeper();
+  const started = Date.now();
+  const pending = sleeper.wait(5_000);
+  sleeper.pulse();
+  await pending;
+  assert.ok(Date.now() - started < 1_000);
+  sleeper.close();
 });
 
 test("parse link X", () => {

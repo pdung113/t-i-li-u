@@ -3,9 +3,11 @@ import { pathToFileURL } from "node:url";
 import { buildBuyTx, describeGas, fixedGas, minOutFromReceived, pricedGas } from "./buy.js";
 import { REASON_TEXT, decide, formatTax } from "./decide.js";
 import { log } from "./log.js";
+import { buildMintTx, mintReady } from "./mint.js";
 import { formatUsd, marketCapUsd, mcapDecision, warmNativePrice } from "./mcap.js";
 import { loadConfig } from "./setup.js";
 import { SIM_EOA, buyTarget, describePool, simulateSwap, underlyingToken } from "./simulate.js";
+import { openBlockSleeper } from "./wait.js";
 import { extractAddresses, fetchStatus, fetchStatuses, parseTwitterTarget, tweetTimestamp } from "./twitter.js";
 
 const DEAD = new Set([
@@ -167,6 +169,12 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   const nowSec = () => Math.floor(Date.now() / 1000) + timeOffset;
 
   const symbol = config.chain.nativeSymbol;
+  const sleeper = openBlockSleeper(config);
+  const spendWei = config.mode === "mint" ? config.mintValueWei : config.buyWei;
+  const action =
+    config.mode === "mint"
+      ? `mint ${config.mintCount} NFT giá ${config.mintPrice} ${symbol}`
+      : `mua ${config.buyAmount} ${symbol}`;
   let gasNote = config.gasX == null ? `${config.gasGwei} gwei` : `x${config.gasX} giá hiện tại`;
   let gasCap = 0n;
   await warmPromise;
@@ -178,18 +186,25 @@ export async function main(argv = process.argv.slice(2), options = {}) {
     gasCap = (quoted.gasPrice ?? quoted.maxFeePerGas) * BigInt(config.gasLimit);
   }
   log(
-    `Chế độ ${config.mode} | chain ${config.chain.name} | mua ${config.buyAmount} ${symbol} | gas ${gasNote} | tax tối đa ${config.maxTaxPercent}% | trượt giá ${config.slippagePercent}% | mcap tối đa ${config.maxMcapUsd > 0 ? `$${formatUsd(config.maxMcapUsd)}` : "không giới hạn"} | ${config.dryRun ? "DRY RUN" : "MUA THẬT"}`,
+    `Chế độ ${config.mode} | chain ${config.chain.name} | ${action} | gas ${gasNote} | tax tối đa ${config.maxTaxPercent}% | trượt giá ${config.slippagePercent}% | mcap tối đa ${config.maxMcapUsd > 0 ? `$${formatUsd(config.maxMcapUsd)}` : "không giới hạn"} | ${config.dryRun ? "DRY RUN" : "MUA THẬT"}`,
   );
   log(`RPC ${config.rpc}`);
   if (config.mode === "twitter") {
     log(`Theo dõi @${target.handle}${target.statusId ? ` tweet ${target.statusId}` : ""}`);
+    log(
+      config.lookbackSec > 0
+        ? `Có thể mua contract đăng trong ${config.lookbackSec} giây gần đây.`
+        : "Chỉ mua contract đăng sau lúc này.",
+    );
+  } else if (config.mode === "mint") {
+    log(`Chờ mở mint của ${config.contract}, hàm ${config.mintFunction}.`);
   } else {
     log(`Chờ add liquidity hoặc mở trade của ${config.contract}`);
   }
   if (wallet) {
     const balance = await provider.getBalance(wallet.address);
     log(`Ví ${wallet.address} | số dư ${ethers.formatEther(balance)} ${symbol}`);
-    if (!config.dryRun && balance < config.buyWei + gasCap) {
+    if (!config.dryRun && balance < spendWei + gasCap) {
       log("Cảnh báo: số dư có thể không đủ cho số mua + trần gas. Dùng ví riêng, chỉ nạp số chấp nhận mất.");
     }
   } else {
@@ -282,7 +297,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
             log(`Chưa có thanh khoản ${token}. Vẫn đang chờ add liquidity...`);
             lastWaitLog = Date.now();
           }
-          await sleep(config.liquidPollMs);
+          await sleeper.wait(config.liquidPollMs);
           continue;
         }
         sawLiquidity = true;
@@ -422,15 +437,88 @@ export async function main(argv = process.argv.slice(2), options = {}) {
       return;
     }
 
-    if (!stopped) log(`Hết ${Math.round(config.waitForPairMs / 1000)}s, không mua ${token}.`);
+    if (!stopped) {
+      log(`Hết ${Math.round(config.waitForPairMs / 1000)}s, không mua ${token}.`);
+      handledTokens.delete(mark);
+      handledTokens.delete(token.toLowerCase());
+    }
   };
+
+  const finish = async () => {
+    stop();
+    await sleeper.close();
+    await provider.destroy();
+  };
+
+  const runMint = async () => {
+    const from = wallet ? wallet.address : SIM_EOA;
+    let lastLog = 0;
+    while (!stopped) {
+      const ready = await mintReady(provider, {
+        to: config.contract,
+        from,
+        data: config.mintData,
+        valueWei: config.mintValueWei,
+      });
+      if (!ready.ok) {
+        if (Date.now() - lastLog > 15_000) {
+          log(`Mint chưa mở${ready.reason ? ` (${ready.reason})` : ""}. Vẫn đang chờ...`);
+          lastLog = Date.now();
+        }
+        await sleeper.wait(config.liquidPollMs);
+        continue;
+      }
+      const detectedAt = Date.now();
+      log(`Mint đã mở. Gửi ${config.mintCount} NFT ngay.`);
+      let gasQuote;
+      try {
+        gasQuote = await quoteBuyGas(provider, config);
+      } catch (error) {
+        log(`Không đọc được giá gas: ${error.shortMessage || error.message}`);
+        await sleeper.wait(config.retryMs);
+        continue;
+      }
+      const attemptGas = describeGas(config, gasQuote);
+      const priceNote = `${ethers.formatEther(config.mintValueWei)} ${symbol}`;
+      if (config.dryRun || !wallet) {
+        log(`DRY RUN khớp. Sẽ mint ${config.mintCount} NFT, trả ${priceNote}, gas ${attemptGas}.`);
+        return;
+      }
+      const nonce = await provider.getTransactionCount(wallet.address, "pending");
+      const tx = buildMintTx({
+        chain: config.chain,
+        contract: config.contract,
+        data: config.mintData,
+        valueWei: config.mintValueWei,
+        gas: gasQuote,
+        gasLimit: config.gasLimit,
+        nonce,
+      });
+      const raw = await wallet.signTransaction(tx);
+      const outcome = await broadcastRaw(provider, raw);
+      if (!outcome.sent) {
+        log(`Gửi mint lỗi: ${outcome.error?.shortMessage || outcome.error?.message || "không rõ"}`);
+        return;
+      }
+      log(`Đã gửi mint ${outcome.sent.hash} sau ${Date.now() - detectedAt}ms, gas ${attemptGas}.`);
+      return;
+    }
+  };
+
+  if (config.mode === "mint") {
+    try {
+      await runMint();
+    } finally {
+      await finish();
+    }
+    return;
+  }
 
   if (config.mode === "liquid") {
     try {
       await snipe(config.contract, { id: "liquid" }, { waitForever: true });
     } finally {
-      stop();
-      await provider.destroy();
+      await finish();
     }
     return;
   }

@@ -1,9 +1,12 @@
 # Sửa file này bằng Notepad. Lưu (Ctrl+S). Rồi chỉ cần chạy: npm start
 # Chain: bsc | eth | base | robinhood
 #
-# Hai chế độ, dùng cái nào thì điền cái đó:
-# MODE=twitter  -> điền LINK, chờ họ đăng contract trên X rồi mua
+# Ba chế độ, dùng cái nào thì điền cái đó:
+# MODE=twitter  -> điền LINK. Chỉ mua contract đăng SAU khi tool đang chạy
 # MODE=liquid   -> điền CONTRACT đã biết, chờ add liquidity / mở trade rồi mua liền
+# MODE=mint     -> điền CONTRACT của NFT. Mở mint thì mint liền
+#
+# Muốn bắt tweet vừa đăng trước khi mở tool thì thêm dòng: LOOKBACK_SEC=60
 
 MODE=twitter
 CHAIN=bsc
@@ -28,7 +31,13 @@ SLIPPAGE_PERCENT=15
 # 100000 = 100 nghìn đô. Điền 0 nếu không giới hạn.
 MAX_MCAP_USD=100000
 
-# true = chưa gửi tiền. Muốn mua thật thì đổi thành false và điền PRIVATE_KEY.
+# Chỉ dùng khi MODE=mint. Giá mỗi NFT bằng BNB hoặc ETH. 0 = miễn phí.
+MINT_PRICE=0.01
+MINT_COUNT=1
+# Hàm: mint | publicMint | mintPublic | freeMint
+MINT_FUNCTION=mint
+
+# true = chưa gửi tiền. Muốn mua hoặc mint thật thì đổi thành false và điền PRIVATE_KEY.
 DRY_RUN=true
 PRIVATE_KEY=
 

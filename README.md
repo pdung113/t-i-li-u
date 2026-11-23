@@ -7,10 +7,11 @@ cd $HOME\t-i-li-u
 npm start
 ```
 
-Hai chế độ, sửa `MODE` trong `setup.txt`:
+Ba chế độ, sửa `MODE` trong `setup.txt`:
 
-- `MODE=twitter` và điền `LINK`: chờ tài khoản X đăng contract rồi mua.
-- `MODE=liquid` và điền `CONTRACT=0x...`: contract đã biết. Tool hỏi pool bằng lệnh nhẹ, có thanh khoản thì đo tax, vốn hóa và gas cùng lúc rồi mua ngay.
+- `MODE=twitter` và điền `LINK`: chỉ mua contract đăng sau khi tool đang chạy.
+- `MODE=liquid` và điền `CONTRACT=0x...`: contract đã biết. Có thanh khoản thì đo tax, vốn hóa và gas cùng lúc rồi mua ngay.
+- `MODE=mint` và điền `CONTRACT`, `MINT_PRICE`, `MINT_COUNT`: chờ cửa mint mở rồi mint ngay.
 
 `CHAIN` là `bsc`, `eth`, `base`, hoặc `robinhood`.
 
