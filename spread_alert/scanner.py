@@ -96,8 +96,10 @@ class Scanner:
                 item = await pending.get()
                 if item is None:
                     return
-                if not await self._kucoin_still_open(item):
+                checked = await self._kucoin_still_open(item)
+                if checked is None:
                     continue
+                item = checked
                 async with lock:
                     if item.edge_pct < self.config.spread_threshold_pct:
                         continue
@@ -286,26 +288,26 @@ class Scanner:
             opportunity.direction,
         )
 
-    async def _kucoin_still_open(self, opportunity: Opportunity) -> bool:
-        """KuCoin alerts use a fresh last trade, the price on the KuCoin page.
+    async def _kucoin_still_open(self, opportunity: Opportunity) -> Opportunity | None:
+        """Return the alert with KuCoin's fresh last trade, or None to skip it.
 
         allTickers sometimes prints a tiny ask that the page never traded.
         """
         if opportunity.exchange != "kucoin" or opportunity.direction == "cex_cex":
-            return True
+            return opportunity
         if self.session is None:
-            return False
+            return None
         symbol = opportunity.pair.replace("/", "-")
         try:
             fresh = await kucoin_level1(self.session, symbol)
         except Exception as exc:
             log.warning("KuCoin %s: không đối lại được giá, bỏ tin (%s)", opportunity.base, exc)
-            return False
+            return None
         if fresh is None:
-            return False
+            return None
         matched, divisor = symbols_match(opportunity.base, opportunity.dex_symbol)
         if not matched or divisor <= 0:
-            return False
+            return None
         last = fresh.last / divisor
         bid = fresh.bid / divisor if fresh.bid and fresh.bid > 0 else None
         ask = fresh.ask / divisor if fresh.ask and fresh.ask > 0 else None
@@ -320,9 +322,9 @@ class Scanner:
             min_notional=self.config.min_top_notional_usd,
         )
         if priced is None or priced[0] < self.config.spread_threshold_pct:
-            return False
-        opportunity.edge_pct, opportunity.cex_price = priced
-        return True
+            return None
+        edge, price = priced
+        return replace(opportunity, edge_pct=edge, cex_price=price)
 
     def _price_confirmed(self, opportunity: Opportunity) -> bool:
         """Send only after a later price refresh still shows the same spread.
