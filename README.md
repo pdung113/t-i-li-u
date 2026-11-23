@@ -147,37 +147,23 @@ Vũ trụ: 5000 hợp đồng trên 36 chain
 
 BTC, ETH, SOL lệch quanh 0% là tool đang đọc đúng giá. Coin lệch từ 5% được ghi trong cửa sổ và gửi vào Telegram.
 
-Tin đầu trên Telegram có dạng `Đã bật theo dõi` chỉ khi bạn chạy lệnh ở bước 7. Lệnh `--once` gửi từng cơ hội lệch từ 5%, không gửi tin khởi động.
+Tin đầu trên Telegram có dạng `Đã bật theo dõi` chỉ khi bạn chạy lệnh liên tục ở bước 7. Lệnh `--once` gửi từng cơ hội lệch từ 5%, không gửi tin khởi động.
 
-## 7. Chạy liên tục (lệnh dùng hằng ngày)
+## 7. Chạy liên tục (một lệnh, dùng hằng ngày)
+
+Mở PowerShell và dán đúng một dòng này. Cửa sổ tự quét hết vòng này tới vòng sau, không cần lệnh thứ hai.
 
 ```powershell
-python -m spread_alert
+cd $HOME\Desktop\t-i-li-u; .\chay.bat
 ```
 
-Đây là chế độ nhanh nhất: quét hết một vòng là bắt đầu vòng sau ngay. Một vòng toàn bộ coin thường khoảng 45 giây đến 1 phút.
+Một vòng toàn bộ coin thường khoảng 45 giây đến 1 phút.
 
 Telegram nhận tin `Đã bật theo dõi chênh lệch DEX / CEX`. Chỉ báo khi đường đi dùng được: pool DEX và sàn CEX cùng một mạng, và lệnh đó rút được hoặc nạp được trên đúng mạng đó. Hai sàn CEX cũng được so với nhau khi cùng mạng, sàn rẻ rút được và sàn đắt nạp được. Khác mạng, bị khóa, hoặc sàn không công bố trạng thái thì bỏ qua. Mua trên DEX rồi bán lên CEX chỉ được báo khi sàn đang cho nạp đúng chain của pool. Mua trên CEX rồi bán ra DEX chỉ được báo khi sàn đang cho rút đúng chain đó, và dòng `CEX cho rút cùng chain` hiện chữ xanh. Không rút hoặc không nạp được thì không báo. Mỗi coin báo khi lệch đạt 5%. Vòng sau nếu vẫn quanh mức đó thì không báo lại. Chỉ báo lại khi lệch tăng thêm 5% so với lần vừa báo: 5% rồi thì lần sau là 10%, rồi 15%. Mức đã báo được ghi vào file `.alerted-coins.txt`, nên tắt tool rồi chạy lại vẫn không báo lại đúng mức cũ. Muốn xóa bộ nhớ thì tắt tool, xóa file đó, rồi chạy lại.
 
-Muốn dừng: bấm vào cửa sổ dòng lệnh rồi nhấn `Ctrl + C`.
+Muốn dừng: bấm vào cửa sổ đang chạy rồi nhấn `Ctrl + C`.
 
-Ngày hôm sau muốn chạy lại: mở PowerShell hoặc Terminal, vào thư mục, bật `.venv`, rồi chạy lại lệnh này. Không cần `pip install` lại.
-
-**Windows**
-
-```powershell
-cd $HOME\Desktop\t-i-li-u
-.venv\Scripts\Activate.ps1
-python -m spread_alert
-```
-
-**macOS / Linux**
-
-```bash
-cd ~/Desktop/t-i-li-u
-source .venv/bin/activate
-python -m spread_alert
-```
+Ngày hôm sau cũng chỉ dán lại đúng dòng đó. Không cần bật `.venv` và không cần `pip install` lại.
 
 ## 8. Đọc một tin nhắn
 

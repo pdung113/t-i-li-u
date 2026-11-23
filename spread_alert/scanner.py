@@ -84,38 +84,65 @@ class Scanner:
             )
 
         alerts: list[Opportunity] = []
+        leaders: list[Opportunity] = []
         hidden = 0
         repeated = 0
         lock = asyncio.Lock()
         pending: asyncio.Queue[Opportunity | None] = asyncio.Queue()
 
         async def sender() -> None:
+            nonlocal hidden, repeated
             while True:
                 item = await pending.get()
                 if item is None:
                     return
-                original = item
-                found = await lookup_tax(self.session, item.chain, item.address)
-                if found is not None:
-                    item = replace(
-                        item,
-                        buy_tax=found.buy,
-                        sell_tax=found.sell,
-                        transfer_tax=found.transfer,
-                    )
-                    async with lock:
-                        for index, existing in enumerate(alerts):
-                            if existing is original:
-                                alerts[index] = item
-                                break
-                    shown = tax_line(item.buy_tax, item.sell_tax, item.transfer_tax)
-                    if shown:
-                        log.info("%s %s", item.base, shown)
+                if not await self._kucoin_still_open(item):
+                    continue
+                async with lock:
+                    if item.edge_pct < self.config.spread_threshold_pct:
+                        continue
+                    if not self._due(item):
+                        repeated += 1
+                        continue
+                    extra_room = len(alerts) < self.config.max_alerts_per_scan
+                    bigger = alerts and item.edge_pct > min(existing.edge_pct for existing in alerts)
+                    if not extra_room and (not bigger or len(alerts) >= self.config.max_alerts_per_scan + 5):
+                        hidden += 1
+                        continue
+                    self._mark(item)
+                    alerts.append(item)
+                if self.session is not None:
+                    found = await lookup_tax(self.session, item.chain, item.address)
+                    if found is not None:
+                        item = replace(
+                            item,
+                            buy_tax=found.buy,
+                            sell_tax=found.sell,
+                            transfer_tax=found.transfer,
+                        )
+                        async with lock:
+                            alerts[-1] = item
+                        shown = tax_line(item.buy_tax, item.sell_tax, item.transfer_tax)
+                        if shown:
+                            log.info("%s %s", item.base, shown)
                 if on_alert is not None:
                     await on_alert(item)
 
+        async def _consider(opportunity: Opportunity) -> None:
+            nonlocal repeated
+            leaders.append(opportunity)
+            if opportunity.edge_pct < self.config.spread_threshold_pct:
+                self.watch.pop(self._watch_key(opportunity), None)
+                return
+            async with lock:
+                if not self._due(opportunity):
+                    repeated += 1
+                    return
+                if not self._price_confirmed(opportunity):
+                    return
+            pending.put_nowait(opportunity)
+
         async def on_chunk(chunk: dict) -> None:
-            nonlocal hidden, repeated
             for (chain, address), pool in chunk.items():
                 market = self.markets.get((chain, address))
                 if market is None:
@@ -129,61 +156,19 @@ class Scanner:
                     min_top_notional=self.config.min_top_notional_usd,
                     max_spread=self.config.max_spread_pct,
                 )
-                if opportunity is None:
-                    continue
-                if opportunity.edge_pct < self.config.spread_threshold_pct:
-                    self.watch.pop(self._watch_key(opportunity), None)
-                    continue
-                if not await self._kucoin_still_open(opportunity):
-                    self.watch.pop(self._watch_key(opportunity), None)
-                    continue
-                async with lock:
-                    if not self._price_confirmed(opportunity):
-                        continue
-                    if not self._due(opportunity):
-                        repeated += 1
-                        continue
-                    extra_room = len(alerts) < self.config.max_alerts_per_scan
-                    bigger = alerts and opportunity.edge_pct > min(item.edge_pct for item in alerts)
-                    if not extra_room and (not bigger or len(alerts) >= self.config.max_alerts_per_scan + 5):
-                        hidden += 1
-                        continue
-                    self._mark(opportunity)
-                    alerts.append(opportunity)
-                pending.put_nowait(opportunity)
+                if opportunity is not None:
+                    await _consider(opportunity)
 
         async def _emit_cex() -> None:
-            nonlocal repeated
             spreads = cex_spreads(
                 self.markets,
                 min_volume=self.config.min_cex_quote_volume_usd,
                 min_top_notional=self.config.min_top_notional_usd,
                 max_spread=self.config.max_spread_pct,
             )
-            spreads.sort(key=lambda item: item.edge_pct, reverse=True)
             for opportunity in spreads:
-                if opportunity.edge_pct < self.config.spread_threshold_pct:
-                    self.watch.pop(self._watch_key(opportunity), None)
-                    continue
-                if not await self._kucoin_still_open(opportunity):
-                    self.watch.pop(self._watch_key(opportunity), None)
-                    continue
-                async with lock:
-                    if not self._price_confirmed(opportunity):
-                        continue
-                    if not self._due(opportunity):
-                        repeated += 1
-                        continue
-                    extra_room = len(alerts) < self.config.max_alerts_per_scan
-                    bigger = alerts and opportunity.edge_pct > min(item.edge_pct for item in alerts)
-                    if not extra_room and (not bigger or len(alerts) >= self.config.max_alerts_per_scan + 5):
-                        hidden_cex[0] += 1
-                        continue
-                    self._mark(opportunity)
-                    alerts.append(opportunity)
-                pending.put_nowait(opportunity)
+                await _consider(opportunity)
 
-        hidden_cex = [0]
         sender_task = asyncio.create_task(sender())
         refresh = asyncio.create_task(self._refresh_loop())
         pools: dict = {}
@@ -207,31 +192,7 @@ class Scanner:
             pending.put_nowait(None)
             await sender_task
 
-        found: list[Opportunity] = []
-        for (chain, address), market in self.markets.items():
-            pool = pools.get((chain, address))
-            if pool is None:
-                continue
-            opportunity = best_opportunity(
-                market.listings,
-                pool,
-                token_address=address,
-                chain=chain,
-                min_volume=self.config.min_cex_quote_volume_usd,
-                min_top_notional=self.config.min_top_notional_usd,
-                max_spread=self.config.max_spread_pct,
-            )
-            if opportunity is not None:
-                found.append(opportunity)
-        found.extend(
-            cex_spreads(
-                self.markets,
-                min_volume=self.config.min_cex_quote_volume_usd,
-                min_top_notional=self.config.min_top_notional_usd,
-                max_spread=self.config.max_spread_pct,
-            )
-        )
-        found.sort(key=lambda item: item.edge_pct, reverse=True)
+        leaders.sort(key=lambda item: item.edge_pct, reverse=True)
         alerts.sort(key=lambda item: item.edge_pct, reverse=True)
         if repeated:
             log.info("Bỏ %s coin đã báo ở vòng trước", repeated)
@@ -242,8 +203,8 @@ class Scanner:
             dex_requests=self.dex.requests - requests_before,
             duration_sec=time.monotonic() - started,
             alerts=alerts,
-            hidden=hidden + hidden_cex[0],
-            leaders=found[:15],
+            hidden=hidden,
+            leaders=leaders[:15],
             sanity=sanity_lines(self.markets, pools),
             chains=dict(chain_counts),
         )
@@ -281,11 +242,13 @@ class Scanner:
 
     async def _refresh_loop(self) -> None:
         while True:
+            await asyncio.sleep(self.config.price_refresh_sec)
             try:
                 await self._refresh_prices()
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 log.warning("Làm mới giá CEX lỗi: %s", exc)
-            await asyncio.sleep(self.config.price_refresh_sec)
 
     async def _refresh_prices(self) -> None:
         exchanges = sorted({exchange for exchange, _base in self.price_index})
