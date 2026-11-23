@@ -411,12 +411,17 @@ async function syncClock(provider) {
   };
 }
 
-async function waitUntil(targetMs, clock, log, label, shouldStop, refresh) {
+async function waitUntil(targetMs, clock, log, label, shouldStop, refresh, approach) {
   let lastLog = 0;
   let refreshed = false;
+  let approached = false;
   while (clock.nowMs() < targetMs) {
     if (shouldStop()) throw new Error("Dừng.");
     const remain = targetMs - clock.nowMs();
+    if (!approached && approach && remain < 12_000) {
+      approached = true;
+      await approach();
+    }
     if (!refreshed && refresh && remain < 15_000 && remain > 1_000) {
       refreshed = true;
       try {
@@ -441,7 +446,69 @@ function retryableSend(message) {
   return isNotStarted(message) || /timeout|timed out|econnreset|socket hang up|429|502|503|504|temporarily unavailable|missing response|failed to fetch|network error/i.test(String(message || ""));
 }
 
-async function spamMint({ wallet, provider, round, chain, gasGwei, gasLimit, nowMs, log, shouldStop }) {
+function splitRpc(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => /^https?:\/\//i.test(item));
+}
+
+async function primeRound(round, log) {
+  if (typeof round.prepare !== "function") return round;
+  try {
+    const next = await round.prepare();
+    log(`Đã lấy chữ ký ${round.label}. Đúng giờ sẽ gửi ngay.`);
+    return { ...next, prepare: null };
+  } catch (error) {
+    if (error?.message === "Dừng.") throw error;
+    log(`Chưa lấy được chữ ký ${round.label}: ${error.message || error}. Sẽ lấy lại đúng giờ.`);
+    return round;
+  }
+}
+
+function fanout(wallet, tx, rpcs, chain, log) {
+  if (!rpcs.length || typeof wallet.signTransaction !== "function") return;
+  wallet
+    .signTransaction(tx)
+    .then((raw) =>
+      Promise.all(
+        rpcs.map(async (url) => {
+          const provider = new ethers.JsonRpcProvider(url, chain.chainId, { staticNetwork: true });
+          try {
+            await provider.broadcastTransaction(raw);
+          } finally {
+            provider.destroy?.();
+          }
+        }),
+      ),
+    )
+    .catch((error) => log(`RPC phụ không phát được lệnh: ${error.message || error}`));
+}
+
+async function waitReceipt(sent, budgetMs, shouldStop) {
+  const started = Date.now();
+  while (Date.now() - started < budgetMs) {
+    if (shouldStop()) throw new Error("Dừng.");
+    let timer;
+    try {
+      const receipt = await Promise.race([
+        sent.wait(),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), Math.min(8_000, Math.max(1, budgetMs - (Date.now() - started))));
+        }),
+      ]);
+      if (receipt) return receipt;
+    } catch (error) {
+      if (error?.message === "Dừng." || shouldStop()) throw new Error("Dừng.");
+      await sleep(50);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return null;
+}
+
+async function spamMint({ wallet, provider, round, chain, gasGwei, gasLimit, nowMs, log, shouldStop, extraRpcs = [] }) {
   let active = round;
   if (typeof round.prepare === "function") active = await round.prepare();
   const tx = applyGas(active, chain, gasGwei, gasLimit);
@@ -461,10 +528,12 @@ async function spamMint({ wallet, provider, round, chain, gasGwei, gasLimit, now
     }
     if (state !== "ok") throw new Error(state);
     let sent;
+    let fullTx = tx;
     try {
       sent = await sendOnLane(chain.chainId, wallet.address, async () => {
         const nonce = provider.getTransactionCount ? await provider.getTransactionCount(wallet.address, "pending") : undefined;
-        return wallet.sendTransaction(nonce == null ? tx : { ...tx, nonce });
+        fullTx = nonce == null ? tx : { ...tx, nonce };
+        return wallet.sendTransaction(fullTx);
       });
     } catch (error) {
       const message = error.shortMessage || error.reason || error.message || "";
@@ -472,8 +541,12 @@ async function spamMint({ wallet, provider, round, chain, gasGwei, gasLimit, now
       continue;
     }
     log(`Đã gửi ${sent.hash} (lần ${attempt}).`);
-    const receipt = await sent.wait();
-    if (receipt?.status === 1) return { hash: sent.hash, tx, attempt };
+    fanout(wallet, fullTx, extraRpcs, chain, log);
+    const receipt = await waitReceipt(sent, Math.max(1, SPAM_WINDOW_MS - (nowMs() - openedAt)), shouldStop);
+    if (!receipt) {
+      throw new Error(`Đã gửi ${sent.hash} nhưng chưa thấy xác nhận. Không gửi thêm lệnh cùng ví để khỏi mint hai lần.`);
+    }
+    if (receipt.status === 1) return { hash: sent.hash, tx: fullTx, attempt };
     const after = await callState(provider, wallet.address, active);
     if (after !== "ok" && after !== "wait") throw new Error(after);
     log("Giao dịch revert, gửi lại.");
@@ -481,7 +554,7 @@ async function spamMint({ wallet, provider, round, chain, gasGwei, gasLimit, now
   throw new Error("Hết 120s sau giờ mở mà chưa mint được.");
 }
 
-export async function runMint(options, deps = {}) {
+async function createSession(options, deps) {
   const log = deps.log || defaultLog;
   const fetchImpl = deps.fetch || fetch;
   let stopped = false;
@@ -493,6 +566,8 @@ export async function runMint(options, deps = {}) {
     if (opts.signal) signals.push(opts.signal);
     return raceStop(() => fetchImpl(url, { ...opts, signal: AbortSignal.any(signals) }), halt);
   };
+  let extraRpcs = splitRpc(options.rpc);
+  options.rpc = extraRpcs.shift() || "";
   const providers = providerCache(deps.providerFactory || ((chain) => new ethers.JsonRpcProvider(chain.rpc, chain.chainId, { staticNetwork: true })), halt);
   if (deps.listen !== false) {
     process.once("SIGINT", () => {
@@ -502,11 +577,17 @@ export async function runMint(options, deps = {}) {
   try {
     const page = await attachCollection(await loadPage(options.url, fetchBound), options.apiKey, fetchBound, log);
     if (page.kalos) {
-      if (options.chain && options.chain.name !== "elysium") options.rpc = "";
+      if (options.chain && options.chain.name !== "elysium") {
+        options.rpc = "";
+        extraRpcs = [];
+      }
       options.chain = resolveNftChain("elysium");
     }
     if (page.schedule?.chain) {
-      if (options.chain && options.chain.name !== page.schedule.chain) options.rpc = "";
+      if (options.chain && options.chain.name !== page.schedule.chain) {
+        options.rpc = "";
+        extraRpcs = [];
+      }
       options.chain = resolveNftChain(page.schedule.chain);
     }
     if (!page.candidates.length) {
@@ -520,7 +601,16 @@ export async function runMint(options, deps = {}) {
     );
     const hits = await findHits(page, options, providers);
     if (!hits.length) throw new Error("Trang có địa chỉ nhưng không phải NFT mint (SeaDrop, thirdweb, hoặc mint public).");
-    const contextBase = {
+    return { log, page, hits, providers, halt, fetchBound, extraRpcs };
+  } catch (error) {
+    await providers.destroy();
+    throw error;
+  }
+}
+
+async function mintWallet(session, options, log) {
+  const { page, hits, halt, fetchBound, extraRpcs } = session;
+  const contextBase = {
       wallet: options.wallet,
       allowInfo: collectAllowInfo(page.html, options.wallet),
       fetch: fetchBound,
@@ -546,7 +636,7 @@ export async function runMint(options, deps = {}) {
     printRounds(chosen.rounds, symbol, log);
     for (const round of chosen.rounds) {
       if (round.eligible && round.start * 1000 > clock.nowMs()) {
-        log(`Ví đủ điều kiện ${round.label}. Đang chờ tới giờ mint ${round.label}. Mở ${new Date(round.start * 1000).toISOString()}.`);
+        log(`Ví đủ điều kiện ${round.label}. Đang chờ tới giờ mint ${round.label}. Mở ${new Date(round.start * 1000).toISOString()}. Giá gửi ${ethers.formatEther(round.value)} ${symbol}.`);
       } else if (round.eligible) {
         log(`Ví đủ điều kiện ${round.label}. Mint round này khi tới lượt.`);
       } else {
@@ -564,7 +654,7 @@ export async function runMint(options, deps = {}) {
         const preview = applyGas(round, chosen.hit.chain, options.gasGwei, options.gasLimit);
         log(`DRY RUN round ${round.label}: ${round.quantity} NFT, value ${ethers.formatEther(preview.value)} ${symbol}.`);
         if (round.start * 1000 > clock.nowMs()) {
-          log(`Đang chờ tới giờ mint ${round.label}. Mở ${new Date(round.start * 1000).toISOString()}. Tới giờ thì lệnh thật gửi liên tục đến khi mint được.`);
+          log(`Đang chờ tới giờ mint ${round.label}. Mở ${new Date(round.start * 1000).toISOString()}. Giá gửi ${ethers.formatEther(preview.value)} ${symbol}. Tới giờ thì lệnh thật gửi liên tục đến khi mint được.`);
         }
       }
       return {
@@ -593,21 +683,33 @@ export async function runMint(options, deps = {}) {
         log(`Bỏ round ${target.label}: không còn đủ điều kiện.`);
         continue;
       }
+      let armed = fresh;
       if (fresh.start * 1000 > clock.nowMs()) {
-        log(`Ví đủ điều kiện ${fresh.label}. Đang chờ tới giờ mint ${fresh.label}. Mở ${new Date(fresh.start * 1000).toISOString()}.`);
-        clock = await waitUntil(fresh.start * 1000, clock, log, fresh.label, halt, () => syncClock(chosen.hit.provider));
+        log(`Ví đủ điều kiện ${fresh.label}. Đang chờ tới giờ mint ${fresh.label}. Mở ${new Date(fresh.start * 1000).toISOString()}. Giá gửi ${ethers.formatEther(fresh.value)} ${symbol}.`);
+        clock = await waitUntil(
+          fresh.start * 1000,
+          clock,
+          log,
+          fresh.label,
+          halt,
+          () => syncClock(chosen.hit.provider),
+          async () => {
+            armed = await primeRound(armed, log);
+          },
+        );
       }
       try {
         const fired = await spamMint({
           wallet,
           provider: chosen.hit.provider,
-          round: fresh,
+          round: armed,
           chain: chosen.hit.chain,
           gasGwei: options.gasGwei,
           gasLimit: options.gasLimit,
           nowMs: clock.nowMs,
           log,
           shouldStop: halt,
+          extraRpcs,
         });
         minted.push({ ...fired, quantity: fresh.quantity, round: fresh });
         log(`Mint thành công round ${fresh.label}: ${fresh.quantity} NFT.`);
@@ -631,8 +733,14 @@ export async function runMint(options, deps = {}) {
       wallet: options.wallet,
       reason: problems.join("; "),
     };
+}
+
+export async function runMint(options, deps = {}) {
+  const session = await createSession(options, deps);
+  try {
+    return await mintWallet(session, options, session.log);
   } finally {
-    await providers.destroy();
+    await session.providers.destroy();
   }
 }
 
@@ -640,15 +748,32 @@ export async function runMintWallets(options, wallets, deps = {}) {
   const log = deps.log || defaultLog;
   const chainLabel = options.chain?.name || "tự nhận";
   log(`Bắt đầu mint | chain ${chainLabel} | ${wallets.length} ví | gas ${gasLabel(options)} | số lượng ${options.quantity}`);
+  let session;
+  try {
+    session = await createSession(options, { ...deps, listen: false });
+  } catch (error) {
+    const reason = safeReason(error.message || error);
+    log(reason);
+    const rows = wallets.map((entry) => ({
+      ok: false,
+      sent: false,
+      quantity: 0,
+      wallet: entry.address,
+      chain: options.chain?.name || "",
+      reason,
+    }));
+    const text = formatReport(rows, chainLabel);
+    log(text);
+    return { rows, text, chain: chainLabel };
+  }
+  if (wallets.length > 1) log(`Đã đọc trang một lần cho ${wallets.length} ví.`);
+  try {
   const rows = await Promise.all(
     wallets.map(async (entry) => {
       const tag = shortAddress(entry.address);
       const childLog = (message) => log(`${tag} | ${message}`);
       try {
-        const result = await runMint(
-          { ...options, wallet: entry.address, signer: entry.signer },
-          { ...deps, log: childLog, listen: false },
-        );
+        const result = await mintWallet(session, { ...options, wallet: entry.address, signer: entry.signer }, childLog);
         return {
           ok: true,
           sent: Boolean(result.sent),
@@ -675,6 +800,9 @@ export async function runMintWallets(options, wallets, deps = {}) {
   const text = formatReport(rows, chainName);
   log(text);
   return { rows, text, chain: chainName };
+  } finally {
+    await session.providers.destroy();
+  }
 }
 
 export async function runBuy(options, deps = {}) {

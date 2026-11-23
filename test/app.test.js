@@ -22,6 +22,7 @@ test("app local chạy nhiều dự án trên máy mình", async () => {
     assert.equal(home.status, 200);
     const html = await home.text();
     assert.match(html, /Mint NFT/);
+    assert.match(html, /value="10">x10/);
     assert.equal(html.includes(key), false);
     const meta = await (await fetch(`${url}/api/meta`)).json();
     assert.ok(meta.chains.includes("elysium"));

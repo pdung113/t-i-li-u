@@ -1213,3 +1213,76 @@ test("trang không ghi contract thì lấy từ API", async () => {
   assert.match(logs.join("\n"), new RegExp(ethers.getAddress(nft)));
   assert.match(logs.join("\n"), /Đang chờ tới giờ mint public/);
 });
+
+test("hai ví chỉ tải trang một lần, RPC đầu đọc chain", async () => {
+  const now = 1_700_000_000;
+  const routes = new Map();
+  const add = (to, iface, fn, values) => {
+    routes.set(`${to.toLowerCase()}:${iface.getFunction(fn).selector.toLowerCase()}`, iface.encodeFunctionResult(fn, values));
+  };
+  add(nft, nftIface, "getAllowedSeaDrop", [[sea]]);
+  add(sea, seaDropIface, "getPublicDrop", [ethers.parseEther("0.01"), now + 60, now + 3600, 1, 0, false]);
+  add(sea, seaDropIface, "getCreatorPayoutAddress", [creator]);
+  add(sea, seaDropIface, "getAllowedFeeRecipients", [[]]);
+  add(sea, seaDropIface, "getAllowListMerkleRoot", [ethers.ZeroHash]);
+  add(nft, nftIface, "getMintStats", [0, 0, 1000]);
+  add(sea, seaDropIface, "getTokenGatedAllowedTokens", [[]]);
+  const provider = {
+    async getCode() {
+      return "0x60016000";
+    },
+    async getBlock() {
+      return { timestamp: now };
+    },
+    async getBalance() {
+      return ethers.parseEther("1");
+    },
+    async call({ to, data }) {
+      const result = routes.get(`${to.toLowerCase()}:${data.slice(0, 10).toLowerCase()}`);
+      if (!result) throw new Error("missing");
+      return result;
+    },
+    async destroy() {},
+  };
+  let pages = 0;
+  const rpcs = [];
+  const logs = [];
+  const first = ethers.Wallet.createRandom();
+  const second = ethers.Wallet.createRandom();
+  const result = await runMintWallets(
+    {
+      url: `https://mint.example/base/${nft}`,
+      quantity: 1,
+      gasGwei: "3",
+      gasLimit: 300_000,
+      maxPrice: ethers.parseEther("1"),
+      chain: resolveNftChain("base"),
+      rpc: "https://rpc-a.example, https://rpc-b.example",
+      apiKey: "",
+      dryRun: true,
+      wallet: null,
+      signer: null,
+    },
+    [
+      { address: first.address, signer: null },
+      { address: second.address, signer: null },
+    ],
+    {
+      listen: false,
+      log: (message) => logs.push(message),
+      fetch: async (url) => {
+        if (String(url).startsWith("https://mint.example/")) pages += 1;
+        return { ok: true, text: async () => "<html>mint</html>", json: async () => ({}) };
+      },
+      providerFactory: (chain) => {
+        rpcs.push(chain.rpc);
+        return provider;
+      },
+    },
+  );
+  assert.equal(pages, 1);
+  assert.deepEqual([...new Set(rpcs)], ["https://rpc-a.example"]);
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.rows.every((row) => row.ok && row.quantity === 1), true);
+  assert.match(logs.join("\n"), /Đã đọc trang một lần cho 2 ví/);
+});
