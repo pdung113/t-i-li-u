@@ -50,8 +50,11 @@ export function abiFunctions(text) {
       // đoạn ABI không đọc được
     }
   }
+  let scans = 0;
   for (const match of source.matchAll(/name:"([A-Za-z0-9_]+)"/g)) {
-    if (!/mint|purchase|phase|stage|round|fee|supply/i.test(match[1])) continue;
+    if (scans >= 80) break;
+    if (!/mint|purchase|claim|phase|stage|round|fee|supply|start|price/i.test(match[1])) continue;
+    scans += 1;
     let start = source.lastIndexOf("{", match.index);
     let steps = 0;
     while (start >= 0 && steps < 12 && match.index - start < 12_000) {
@@ -93,15 +96,29 @@ function isPhaseView(fn) {
   if (fn.stateMutability !== "view" && fn.stateMutability !== "pure") return false;
   if (fn.inputs?.length) return false;
   const output = fn.outputs?.[0];
-  if (!output || !String(output.type).startsWith("tuple")) return false;
+  if (!output || !String(output.type).startsWith("tuple") || !String(output.type).includes("[")) return false;
   const names = (output.components || []).map((item) => String(item.name || "").toLowerCase());
-  return names.some((name) => /start/.test(name));
+  return names.some((name) => /start|open|begin/.test(name));
 }
 
 function isMintWrite(fn) {
   if (fn.stateMutability === "view" || fn.stateMutability === "pure") return false;
-  if (!/^(mint|publicMint|mintPublic|purchase)$/.test(fn.name)) return false;
-  return (fn.inputs || []).some((input) => String(input.type).startsWith("uint"));
+  const inputs = fn.inputs || [];
+  if (inputs.some((input) => String(input.type).includes("tuple"))) return false;
+  if (!inputs.some((input) => String(input.type).startsWith("uint"))) return false;
+  if (/^(mint|publicMint|mintPublic|mintNft|safeMint|publicSaleMint|freeMint|purchase)$/i.test(fn.name)) return true;
+  return fn.name === "claim" && inputs.length <= 3 && inputs.every((input) => /^(uint|bytes|address|bool)/.test(String(input.type)));
+}
+
+function uintView(fn) {
+  if (fn.inputs?.length || fn.outputs?.length !== 1) return false;
+  if (fn.stateMutability && fn.stateMutability !== "view" && fn.stateMutability !== "pure") return false;
+  return String(fn.outputs[0].type).startsWith("uint");
+}
+
+function viewCall(fn) {
+  const iface = new ethers.Interface([humanFn(fn)]);
+  return { iface, name: fn.name, data: iface.encodeFunctionData(fn.name) };
 }
 
 function pathOf(text, word) {
@@ -123,29 +140,47 @@ function withApiPrefix(prefix, path) {
 export function pageMintPlan(text, pageUrl = "") {
   const functions = abiFunctions(text);
   const mint = functions.find(isMintWrite);
+  if (!mint) return null;
   const phase = functions.find(isPhaseView);
-  if (!mint || !phase) return null;
-  const fee = functions.find((fn) => !fn.inputs?.length && /fee/i.test(fn.name) && fn.outputs?.length === 1 && String(fn.outputs[0].type).startsWith("uint"));
+  const fee = functions.find((fn) => uintView(fn) && /fee/i.test(fn.name));
   const mintLine = humanFn({ ...mint, stateMutability: mint.stateMutability || "payable" });
-  const phaseLine = humanFn(phase);
   const mintIface = new ethers.Interface([mintLine]);
-  const phaseIface = new ethers.Interface([phaseLine]);
-  const feeIface = fee ? new ethers.Interface([humanFn(fee)]) : null;
   const signature = `${mint.name}(${mint.inputs.map((input) => input.type).join(",")})`;
-  return {
+  const shared = {
     mintIface,
     mintName: mint.name,
     mintInputs: mint.inputs,
-    phaseIface,
-    phaseName: phase.name,
-    phaseData: phaseIface.encodeFunctionData(phase.name),
-    phaseComponents: phase.outputs[0].components || [],
-    feeIface,
-    feeName: fee?.name || "",
     selector: ethers.id(signature).slice(0, 10),
     checkPath: withApiPrefix(apiPrefix(text), pathOf(text, "checker") || pathOf(text, "check")),
     authPath: (text.match(/["'`](\/[A-Za-z0-9_./-]*mint-auth)["'`]/) || [])[1] || "",
+    passPath: withApiPrefix(apiPrefix(text), pathOf(text, "pass")),
     pageUrl: pageUrl || "https://mint.local/",
+  };
+  if (phase) {
+    const phaseIface = new ethers.Interface([humanFn(phase)]);
+    const feeIface = fee ? new ethers.Interface([humanFn(fee)]) : null;
+    return {
+      mode: "phases",
+      ...shared,
+      phaseIface,
+      phaseName: phase.name,
+      phaseData: phaseIface.encodeFunctionData(phase.name),
+      phaseComponents: phase.outputs[0].components || [],
+      feeIface,
+      feeName: fee?.name || "",
+    };
+  }
+  const views = functions.filter(uintView);
+  const start = views.find((fn) => /start|open|begin/i.test(fn.name) && !/end/i.test(fn.name));
+  const price = views.find((fn) => /price|cost/i.test(fn.name) && !/fee/i.test(fn.name));
+  const max = views.find((fn) => /maxper|perwallet|maxmint|walletlimit/i.test(fn.name));
+  return {
+    mode: "simple",
+    ...shared,
+    start: start ? viewCall(start) : null,
+    price: price ? viewCall(price) : null,
+    max: max ? viewCall(max) : null,
+    fee: fee ? viewCall(fee) : null,
   };
 }
 

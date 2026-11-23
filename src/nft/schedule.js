@@ -117,33 +117,54 @@ export function scheduleFromText(text, pageUrl = "") {
   return null;
 }
 
+const API_PATHS = ["/api/mint", "/api/drop", "/api/launch", "/api/config", "/api/collection"];
+
+function contractOf(data) {
+  if (!data || typeof data !== "object") return null;
+  const nested = data.data && typeof data.data === "object" ? data.data : null;
+  const address = asAddress(
+    data.collection || data.contract || data.nft || data.nftAddress || data.tokenAddress || data.address || nested?.collection || nested?.contract || nested?.nft || nested?.nftAddress || nested?.address,
+  );
+  if (!address) return null;
+  const chain = chainFromId(data.chainId || data.chain_id || nested?.chainId || nested?.chain_id);
+  return { address, chain: chain?.name || null };
+}
+
+async function readApi(pageUrl, path, fetchImpl) {
+  let apiUrl;
+  try {
+    apiUrl = new URL(path, pageUrl).href;
+  } catch {
+    return null;
+  }
+  try {
+    const response = await fetchImpl(apiUrl, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(4_000),
+      headers: { accept: "application/json", "user-agent": "nft-mint/1.0" },
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    if (error?.message === "Dừng.") throw error;
+    return null;
+  }
+}
+
 export async function scheduleFromPage(pageUrl, html, fetchImpl) {
   const embedded = scheduleFromText(html, pageUrl);
-  if (embedded) return embedded;
-  const paths = ["/api/mint", "/api/drop", "/api/launch"];
-  for (const path of paths) {
-    let apiUrl;
-    try {
-      apiUrl = new URL(path, pageUrl).href;
-    } catch {
-      return null;
-    }
-    try {
-      const response = await fetchImpl(apiUrl, {
-        redirect: "follow",
-        signal: AbortSignal.timeout(12_000),
-        headers: { accept: "application/json", "user-agent": "nft-mint/1.0" },
-      });
-      if (!response.ok) continue;
-      const body = await response.json();
-      const found = scheduleFromData(body, pageUrl) || scheduleFromText(JSON.stringify(body), pageUrl);
-      if (found) return found;
-    } catch (error) {
-      if (error?.message === "Dừng.") throw error;
-      // API này không có lịch mint
-    }
+  if (embedded) return { schedule: embedded, contracts: [{ address: embedded.collection, chain: embedded.chain }] };
+  const bodies = await Promise.all(API_PATHS.map((path) => readApi(pageUrl, path, fetchImpl)));
+  const contracts = [];
+  let schedule = null;
+  for (const body of bodies) {
+    if (!body) continue;
+    const found = scheduleFromData(body, pageUrl) || scheduleFromText(JSON.stringify(body), pageUrl);
+    if (found && !schedule) schedule = found;
+    const contract = contractOf(body) || (found ? { address: found.collection, chain: found.chain } : null);
+    if (contract && !contracts.some((item) => item.address.toLowerCase() === contract.address.toLowerCase())) contracts.push(contract);
   }
-  return null;
+  return { schedule, contracts };
 }
 
 export function proofUrls(schedule, wallet) {

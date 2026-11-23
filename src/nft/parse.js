@@ -24,6 +24,8 @@ const CHAIN_WORD = {
   elysium: "elysium",
   elys: "elysium",
   kinetiq: "elysium",
+  hyperevm: "hyperevm",
+  hyperliquid: "hyperevm",
 };
 
 function checksum(address) {
@@ -201,7 +203,11 @@ export function scriptChunks(text, pageUrl) {
       else if (raw.startsWith("http://") || raw.startsWith("https://")) url = new URL(raw);
       else url = new URL(raw.startsWith("/") ? raw : `/${raw}`, `${base.origin}/`);
       if (url.protocol !== "http:" && url.protocol !== "https:") return;
-      if (!url.pathname.endsWith(".js")) return;
+      const file = url.pathname.toLowerCase();
+      const interesting = /mint|drop|launch|nft|sale|claim|contract|config|collection/;
+      if (file.endsWith(".json")) {
+        if (!interesting.test(file)) return;
+      } else if (!file.endsWith(".js")) return;
       if (url.origin !== base.origin && !/mint|drop|nft|launch/i.test(url.href)) return;
       if (links.includes(url.href)) return;
       links.push(url.href);
@@ -209,7 +215,7 @@ export function scriptChunks(text, pageUrl) {
       // đường js hỏng
     }
   };
-  for (const match of String(text || "").matchAll(/["'`]([^"'`]+\.js)["'`]/g)) push(match[1]);
+  for (const match of String(text || "").matchAll(/["'`]([^"'`]+\.(?:js|json))["'`]/g)) push(match[1]);
   return links;
 }
 
@@ -334,5 +340,6 @@ export function linkedResources(html, pageUrl) {
   for (const match of String(html || "").matchAll(/<script[^>]+src=["']([^"']+)["']/gi)) push(match[1]);
   for (const match of String(html || "").matchAll(/<link[^>]+href=["']([^"']+\.js)["']/gi)) push(match[1]);
   for (const match of String(html || "").matchAll(/https?:\/\/[^"'\s>]+\.json/gi)) push(match[0]);
-  return links.slice(0, 8);
+  const rank = (href) => (/mint|drop|launch|nft|sale|claim|contract|config|collection/i.test(href) ? 2 : /\.js(?:$|\?)/i.test(href) ? 1 : 0);
+  return links.sort((a, b) => rank(b) - rank(a)).slice(0, 24);
 }

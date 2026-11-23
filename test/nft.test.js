@@ -119,6 +119,8 @@ test("đọc cờ gas và số lượng", () => {
   assert.equal(elysium.opensea, null);
   assert.equal(resolveNftChain("elys").name, "elysium");
   assert.equal(chainFromId(99901).name, "elysium");
+  assert.equal(chainFromId(999).name, "hyperevm");
+  assert.equal(resolveNftChain("hyperliquid").chainId, 999);
 });
 
 test("parse link OpenSea, chợ có contract, và trang mint", () => {
@@ -1036,4 +1038,178 @@ test("ABI lạ trong trang vẫn tự mint, không cần hàm getPhases cố đ�
   assert.equal(result.rounds[0].label, "Open");
   assert.equal(result.rounds[0].value, 2500n);
   assert.match(logs.join("\n"), /Đang chờ tới giờ mint Open/);
+});
+
+test("bytecode không chứa selector vẫn đọc phase từ ABI của trang", async () => {
+  const now = 1_700_000_000;
+  const abi = [
+    '{inputs:[{name:"stage",type:"uint256"},{name:"qty",type:"uint256"},{name:"sig",type:"bytes"}],name:"purchase",outputs:[],stateMutability:"payable",type:"function"}',
+    '{inputs:[],name:"getStages",outputs:[{name:"rows",type:"tuple[]",components:[{name:"name",type:"string"},{name:"start",type:"uint64"},{name:"end",type:"uint64"},{name:"cost",type:"uint128"},{name:"perWallet",type:"uint32"},{name:"gated",type:"bool"}]}],stateMutability:"view",type:"function"}',
+  ].join(",");
+  const html = `<script>contract:"${nft}";chainId:99901;${abi}</script>`;
+  const { pageMintPlan } = await import("../src/nft/pageAbi.js");
+  const plan = pageMintPlan(html, "https://drop.example/proxy");
+  const stages = plan.phaseIface.encodeFunctionResult("getStages", [[
+    ["Allow", now - 100, now - 10, 0, 1, true],
+    ["Open", now + 1800, 0, 0, 2, false],
+  ]]);
+  const logs = [];
+  const result = await runMint(
+    {
+      url: "https://drop.example/proxy",
+      quantity: 1,
+      gasGwei: "1",
+      gasLimit: 300_000,
+      maxPrice: ethers.parseEther("1"),
+      chain: resolveNftChain("elysium"),
+      rpc: "",
+      apiKey: "",
+      dryRun: true,
+      wallet,
+      signer: null,
+    },
+    {
+      listen: false,
+      log: (message) => logs.push(message),
+      fetch: async (url) => {
+        const href = String(url);
+        if (href.includes("/api/")) return { ok: false, status: 404, text: async () => "", json: async () => ({}) };
+        return { ok: true, text: async () => html, json: async () => ({}) };
+      },
+      providerFactory: () => ({
+        async getCode() {
+          return "0x608060405234801561001057600080fd5b50";
+        },
+        async call(tx) {
+          if (String(tx.data).toLowerCase() === plan.phaseData.toLowerCase()) return stages;
+          return "0x";
+        },
+        async getBlock() {
+          return { timestamp: now };
+        },
+        async getBalance() {
+          return ethers.parseEther("1");
+        },
+        async destroy() {},
+      }),
+    },
+  );
+  assert.equal(result.rounds[0].label, "Open");
+  assert.match(logs.join("\n"), /Đang chờ tới giờ mint Open/);
+});
+
+test("mint có chữ ký trong JS thì chờ giờ mở trên contract", async () => {
+  const now = 1_700_000_000;
+  const abi = [
+    '{inputs:[{name:"qty",type:"uint256"},{name:"sig",type:"bytes"}],name:"mint",outputs:[],stateMutability:"payable",type:"function"}',
+    '{inputs:[],name:"startTime",outputs:[{name:"",type:"uint256"}],stateMutability:"view",type:"function"}',
+    '{inputs:[],name:"price",outputs:[{name:"",type:"uint256"}],stateMutability:"view",type:"function"}',
+  ].join(",");
+  const html = `<script>contract:"${nft}";chainId:999;${abi}</script>`;
+  const { pageMintPlan } = await import("../src/nft/pageAbi.js");
+  const plan = pageMintPlan(html, "https://drop.example/signed");
+  assert.equal(plan.mode, "simple");
+  const logs = [];
+  const result = await runMint(
+    {
+      url: "https://drop.example/signed",
+      quantity: 1,
+      gasGwei: "1",
+      gasLimit: 300_000,
+      maxPrice: ethers.parseEther("1"),
+      chain: resolveNftChain("hyperevm"),
+      rpc: "",
+      apiKey: "",
+      dryRun: true,
+      wallet,
+      signer: null,
+    },
+    {
+      listen: false,
+      log: (message) => logs.push(message),
+      fetch: async (url) => {
+        const href = String(url);
+        if (href.includes("/api/")) return { ok: false, status: 404, text: async () => "", json: async () => ({}) };
+        return { ok: true, text: async () => html, json: async () => ({}) };
+      },
+      providerFactory: () => ({
+        async getCode() {
+          return `0x${plan.selector.slice(2)}6000`;
+        },
+        async call(tx) {
+          const data = String(tx.data).toLowerCase();
+          if (data === plan.start.data.toLowerCase()) return plan.start.iface.encodeFunctionResult("startTime", [now + 2400]);
+          if (data === plan.price.data.toLowerCase()) return plan.price.iface.encodeFunctionResult("price", [500n]);
+          return "0x";
+        },
+        async getBlock() {
+          return { timestamp: now };
+        },
+        async getBalance() {
+          return ethers.parseEther("1");
+        },
+        async destroy() {},
+      }),
+    },
+  );
+  assert.equal(result.chain, "hyperevm");
+  assert.equal(result.rounds[0].value, 500n);
+  assert.match(logs.join("\n"), /Đang chờ tới giờ mint public/);
+});
+
+test("trang không ghi contract thì lấy từ API", async () => {
+  const now = 1_700_000_000;
+  const html = "<html><title>mint</title></html>";
+  const logs = [];
+  const result = await runMint(
+    {
+      url: "https://drop.example/hidden",
+      quantity: 1,
+      gasGwei: "1",
+      gasLimit: 300_000,
+      maxPrice: ethers.parseEther("1"),
+      chain: resolveNftChain("elysium"),
+      rpc: "",
+      apiKey: "",
+      dryRun: true,
+      wallet,
+      signer: null,
+    },
+    {
+      listen: false,
+      log: (message) => logs.push(message),
+      fetch: async (url) => {
+        const href = String(url);
+        if (href.endsWith("/api/config")) {
+          return { ok: true, json: async () => ({ contract: nft, chainId: 99901 }), text: async () => "" };
+        }
+        if (href.includes("/api/")) return { ok: false, status: 404, text: async () => "", json: async () => ({}) };
+        return { ok: true, text: async () => html, json: async () => ({}) };
+      },
+      providerFactory: () => ({
+        async getCode() {
+          const mint = nftIface.getFunction("mint").selector.slice(2);
+          const start = nftIface.getFunction("publicSaleStart").selector.slice(2);
+          const price = nftIface.getFunction("price").selector.slice(2);
+          return `0x${mint}${start}${price}`;
+        },
+        async call(tx) {
+          const data = String(tx.data).toLowerCase();
+          if (data === nftIface.encodeFunctionData("price").toLowerCase()) return nftIface.encodeFunctionResult("price", [0n]);
+          if (data === nftIface.encodeFunctionData("publicSaleStart").toLowerCase()) return nftIface.encodeFunctionResult("publicSaleStart", [now + 900]);
+          return "0x";
+        },
+        async getBlock() {
+          return { timestamp: now };
+        },
+        async getBalance() {
+          return ethers.parseEther("1");
+        },
+        async destroy() {},
+      }),
+    },
+  );
+  assert.equal(result.chain, "elysium");
+  assert.match(logs.join("\n"), new RegExp(ethers.getAddress(nft)));
+  assert.match(logs.join("\n"), /Đang chờ tới giờ mint public/);
 });

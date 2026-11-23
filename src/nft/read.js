@@ -80,8 +80,8 @@ async function findWrite(provider, nft, code, names, from, erc721) {
   return null;
 }
 
-export async function identifyContract(provider, address) {
-  const code = await provider.getCode(address);
+export async function identifyContract(provider, address, knownCode) {
+  const code = knownCode || (await provider.getCode(address));
   if (!code || code === "0x") return null;
   const phases = plainList(await tryCall(provider, address, phaseIface, "getPhases"));
   if (phases.length && phases.some((phase) => phase && (phase.name || phase.startTime != null))) {
@@ -93,7 +93,11 @@ export async function identifyContract(provider, address) {
   if (claim && BigInt(claim[1] ?? 0) > 0n) return { type: "thirdweb", code };
   const erc1155 = await tryCall(provider, address, nftIface, "supportsInterface", [ERC1155_ID]);
   const erc721 = await tryCall(provider, address, nftIface, "supportsInterface", [ERC721_ID]);
-  if (erc1155 === true && erc721 !== true) return { type: "erc1155", code };
+  if (erc1155 === true && erc721 !== true) {
+    const simple = PUBLIC_MINT_FNS.find((name) => hasSelector(code, name));
+    if (simple) return { type: "generic", code, erc721: false };
+    return { type: "erc1155", code };
+  }
   const hasMint = PUBLIC_MINT_FNS.some((name) => exposes(code, name));
   if (erc721 === true || hasMint) return { type: "generic", code, erc721: erc721 === true };
   if (!isMinimalProxy(code)) return null;
@@ -140,6 +144,7 @@ export async function readRounds(provider, address, identity, context) {
   if (identity.type === "plan") return readPlan(provider, address, identity, context);
   if (identity.type === "phases") return readPhases(provider, address, identity, context);
   if (identity.type === "abi") return readAbi(provider, address, identity, context);
+  if (identity.type === "abi-simple") return readAbiSimple(provider, address, identity, context);
   if (identity.type === "kalos") return readKalos(provider, address, identity, context);
   if (identity.type === "timed") return readTimed(identity, context);
   if (identity.type === "seadrop") return readSeaDrop(provider, address, identity, context);
@@ -360,21 +365,98 @@ async function readAbi(provider, nft, identity, context) {
       if (error?.message === "Dừng.") throw error;
     }
   }
-  return roundsFromPhases(provider, nft, identity, context, phases, fee, (index, quantity, extras) => encodeAbiMint(plan, index, quantity, extras));
+  return roundsFromPhases(provider, nft, identity, context, phases, fee, (index, quantity, extras) => encodeAbiMint(plan, index, quantity, extras), false);
 }
 
-async function roundsFromPhases(provider, nft, identity, context, phases, fee, encode) {
+async function readView(provider, nft, view) {
+  if (!view) return null;
+  try {
+    const raw = await provider.call({ to: nft, data: view.data });
+    if (!raw || raw === "0x") return null;
+    return view.iface.decodeFunctionResult(view.name, raw)[0];
+  } catch (error) {
+    if (error?.message === "Dừng.") throw error;
+    return null;
+  }
+}
+
+async function signedMint(plan, wallet, quantity, fetchImpl) {
+  const path = plan.passPath || plan.authPath;
+  if (!path || !wallet) return { allowance: 0, signature: "0x" };
+  const pageUrl = plan.pageUrl || "https://mint.local/";
+  const url = new URL(plan.passPath ? `${plan.passPath}${wallet}` : path, pageUrl).href;
+  const response = plan.passPath
+    ? await fetchImpl(url, { headers: { accept: "application/json" } })
+    : await fetchImpl(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ wallet, quantity }),
+      });
+  if (!response.ok) throw new Error("Trang không ký cho ví này.");
+  const body = await response.json();
+  const signature = body?.signature || body?.sig || body?.pass;
+  if (!signature) throw new Error("Trang không trả chữ ký mint.");
+  return { allowance: body.allowance ?? body.allow ?? quantity, signature };
+}
+
+async function readAbiSimple(provider, nft, identity, context) {
+  const plan = identity.plan;
+  const startRaw = await readView(provider, nft, plan.start);
+  const priceRaw = await readView(provider, nft, plan.price);
+  const maxRaw = await readView(provider, nft, plan.max);
+  const feeRaw = await readView(provider, nft, plan.fee);
+  let start = startRaw == null ? 0 : Number(startRaw);
+  if (start > 1e12) start = Math.floor(start / 1000);
+  const price = (priceRaw == null ? 0n : BigInt(priceRaw)) + (feeRaw == null ? 0n : BigInt(feeRaw));
+  const cap = maxRaw == null || Number(maxRaw) <= 0 ? context.limits.quantity : Number(maxRaw);
+  const quantity = capQuantity(context.limits.quantity, cap, 0, false);
+  const needsSig = (plan.mintInputs || []).some((input) => String(input.type).startsWith("bytes"));
+  let round = {
+    id: "abi-public",
+    label: "public",
+    kind: "public",
+    standard: "abi",
+    start,
+    end: 0,
+    price,
+    quantity,
+    to: nft,
+    data: encodeAbiMint(plan, 0, quantity || 1, { allowance: 0, signature: "0x", wallet: context.wallet }),
+    value: price * BigInt(quantity || 0),
+  };
+  if (needsSig && (plan.passPath || plan.authPath) && context.wallet) {
+    const wallet = context.wallet;
+    const fetchImpl = context.fetch;
+    round.prepare = async () => {
+      const auth = await signedMint(plan, wallet, round.quantity || 1, fetchImpl);
+      const nextQuantity = round.quantity || 1;
+      return {
+        ...round,
+        data: encodeAbiMint(plan, 0, nextQuantity, { ...auth, wallet }),
+        value: price * BigInt(nextQuantity),
+      };
+    };
+  }
+  if (quantity <= 0) round = { ...round, quantity: 0, eligible: false, reason: "đã hết suất của ví" };
+  else if (price > context.limits.maxPrice) round = { ...round, quantity: 0, eligible: false, reason: "giá cao hơn trần" };
+  else if (context.balance != null && context.balance < price * BigInt(quantity) + (context.limits.gasWei ?? 0n)) {
+    round = { ...round, quantity: 0, eligible: false, reason: "ví không đủ số dư" };
+  } else round = { ...round, eligible: true, reason: context.balance == null ? "ví đủ điều kiện (chưa kiểm số dư)" : "ví đủ điều kiện" };
+  return [round];
+}
+
+async function roundsFromPhases(provider, nft, identity, context, phases, fee, encode, supplyReads = true) {
   if (!phases.length) return [emptyRound(nft, "contract không có phase mint")];
-  const mintedTotal = BigInt((await tryCall(provider, nft, phaseIface, "totalMinted")) || 0);
-  const supply = BigInt((await tryCall(provider, nft, phaseIface, "maxSupply")) || 0);
+  const mintedTotal = supplyReads ? BigInt((await tryCall(provider, nft, phaseIface, "totalMinted")) || 0) : 0n;
+  const supply = supplyReads ? BigInt((await tryCall(provider, nft, phaseIface, "maxSupply")) || 0) : 0n;
   const left = supply > 0n ? supply - mintedTotal : null;
   const allowances = identity.slug ? await phaseAllowances(identity, context.wallet, context.fetch) : null;
   const rounds = [];
   for (let index = 0; index < phases.length; index += 1) {
     const phase = phases[index];
     const price = phase.price + fee;
-    const phaseMinted = Number((await tryCall(provider, nft, phaseIface, "phaseMinted", [index])) || 0);
-    const already = context.wallet ? Number((await tryCall(provider, nft, phaseIface, "mintedInPhase", [index, context.wallet])) || 0) : 0;
+    const phaseMinted = supplyReads ? Number((await tryCall(provider, nft, phaseIface, "phaseMinted", [index])) || 0) : 0;
+    const already = supplyReads && context.wallet ? Number((await tryCall(provider, nft, phaseIface, "mintedInPhase", [index, context.wallet])) || 0) : 0;
     const listed = allowances?.has(index) || false;
     const allowance = listed ? Number(allowances.get(index) || 0) : 0;
     const walletCap = phase.gated ? (phase.cap > 0 && allowance > 0 ? Math.min(phase.cap, allowance) : allowance) : phase.cap > 0 ? phase.cap : context.limits.quantity;

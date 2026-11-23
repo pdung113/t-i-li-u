@@ -48,6 +48,13 @@ export const NFT_CHAINS = {
     rpc: "https://rpc.elysp.com",
     opensea: null,
   },
+  hyperevm: {
+    chainId: 999,
+    nativeSymbol: "HYPE",
+    eip1559: true,
+    rpc: "https://rpc.hyperliquid.xyz/evm",
+    opensea: null,
+  },
 };
 
 const CHAIN_ALIASES = {
@@ -68,6 +75,8 @@ const CHAIN_ALIASES = {
   elysium: "elysium",
   elys: "elysium",
   kinetiq: "elysium",
+  hyperevm: "hyperevm",
+  hyperliquid: "hyperevm",
 };
 
 const CHAIN_IDS = {
@@ -78,13 +87,14 @@ const CHAIN_IDS = {
   10: "optimism",
   56: "bsc",
   99901: "elysium",
+  999: "hyperevm",
 };
 
 export function resolveNftChain(name) {
   const key = CHAIN_ALIASES[String(name || "").toLowerCase()];
   const chain = key ? NFT_CHAINS[key] : null;
   if (!chain) {
-    throw new Error(`Chain không hỗ trợ: ${name}. Dùng eth, base, polygon, arbitrum, optimism, bsc, hoặc elysium.`);
+    throw new Error(`Chain không hỗ trợ: ${name}. Dùng eth, base, polygon, arbitrum, optimism, bsc, elysium, hoặc hyperevm.`);
   }
   return { name: key, ...chain };
 }

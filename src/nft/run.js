@@ -8,7 +8,7 @@ import { eligibleRounds, formatRound, selectRound } from "./rounds.js";
 import { fetchFulfillment, fetchListings, resolveCollection } from "./opensea.js";
 import { pickCheapest } from "./listings.js";
 import { loadKalosPage } from "./kalos.js";
-import { scheduleFromPage } from "./schedule.js";
+import { scheduleFromPage, scheduleFromText } from "./schedule.js";
 import { formatReport, safeReason, shortAddress } from "./notepad.js";
 
 function sleep(ms) {
@@ -72,7 +72,7 @@ async function fetchText(url, fetchImpl) {
     headers: { "user-agent": "nft-mint/1.0", accept: "text/html,application/json,text/plain" },
   });
   if (!response.ok) throw new Error(`Không tải được ${url} (${response.status}).`);
-  return (await response.text()).slice(0, 1_500_000);
+  return (await response.text()).slice(0, 2_500_000);
 }
 
 function chainNameOf(value) {
@@ -96,7 +96,13 @@ export async function loadPage(url, fetchImpl) {
   }
   const extras = html ? await readScripts(html, parsed.href, fetchImpl) : [];
   const combined = [html, ...extras].join("\n");
-  const schedule = await scheduleFromPage(parsed.href, combined, fetchImpl);
+  const preliminary = extractCandidates(combined);
+  const slugHits = addressesNearSlug(combined, collectionSlug(parsed.href));
+  const known = Boolean(parsed.contract) || preliminary.some((item) => item.score >= 90) || slugHits.length > 0;
+  const facts = known
+    ? { schedule: scheduleFromText(combined, parsed.href), contracts: [] }
+    : await scheduleFromPage(parsed.href, combined, fetchImpl);
+  const schedule = facts?.schedule || null;
   const candidates = [];
   const push = (address, score, chain = null) => {
     const key = keepAddress(address);
@@ -111,6 +117,7 @@ export async function loadPage(url, fetchImpl) {
   };
   if (parsed.contract) push(parsed.contract, 200, parsed.chain);
   if (schedule) push(schedule.collection, 400, schedule.chain);
+  for (const item of facts?.contracts || []) push(item.address, 450, item.chain);
   for (const item of extractCandidates(combined)) push(item.address, item.score, null);
   for (const address of addressesNearSlug(combined, collectionSlug(parsed.href))) push(address, 500, null);
   const ranked = candidates.filter((item) => item.score >= 80);
@@ -122,7 +129,7 @@ export async function loadPage(url, fetchImpl) {
     parsed,
     html: combined,
     candidates,
-    hints: [parsed.chain, schedule?.chain, ...chainHintsFromText(combined)].filter(Boolean),
+    hints: [parsed.chain, schedule?.chain, ...(facts?.contracts || []).map((item) => item.chain), ...chainHintsFromText(combined)].filter(Boolean),
     schedule,
     plan: mintPlanFromText(combined, parsed.href),
     abiPlan: pageMintPlan(combined, parsed.href),
@@ -136,13 +143,13 @@ async function readScripts(html, pageUrl, fetchImpl) {
   const seen = new Set();
   const vendor = /\/(?:web3|motion|wagmi|viem|react-dom|vendor|polyfill|walletconnect)[-.]/i;
   const push = (link, first = false) => {
-    if (!link || seen.has(link) || seen.size >= 16 || vendor.test(link)) return;
+    if (!link || seen.has(link) || seen.size >= 24 || vendor.test(link)) return;
     seen.add(link);
     if (first) queue.unshift(link);
     else queue.push(link);
   };
   for (const link of linkedResources(html, pageUrl)) push(link);
-  while (queue.length && extras.length < 10) {
+  while (queue.length && extras.length < 12) {
     const link = queue.shift();
     let body = "";
     try {
@@ -245,14 +252,19 @@ async function findHits(page, options, providers) {
           ? options.rpc
           : chain.rpc;
       const provider = providers.get(chain, rpc);
-      const identity = kalosHit
-        ? { type: "kalos", seaDrops: [page.kalos.seaDrop], slug: page.kalos.slug, code: await provider.getCode(cand.address) }
-        : timedHit
-          ? { type: "timed", schedule: page.schedule, code: await provider.getCode(cand.address) }
-          : (await planIdentity(provider, cand.address, page.plan)) ||
-            (await abiIdentity(provider, cand.address, page.abiPlan)) ||
-            (await identifyContract(provider, cand.address));
-      if (identity?.type === "phases" || identity?.type === "abi") {
+      const code = (await provider.getCode(cand.address)) || "0x";
+      let identity = null;
+      if (kalosHit) identity = { type: "kalos", seaDrops: [page.kalos.seaDrop], slug: page.kalos.slug, code };
+      else if (timedHit) identity = { type: "timed", schedule: page.schedule, code };
+      else {
+        identity = await planIdentity(provider, cand.address, page.plan, code);
+        if (!identity && page.abiPlan?.phaseData) identity = await abiIdentity(provider, cand.address, page.abiPlan, code);
+        const customSig = page.abiPlan?.mode === "simple" && (page.abiPlan.mintInputs || []).length > 1 && code.toLowerCase().includes(page.abiPlan.selector.slice(2).toLowerCase());
+        if (!identity && customSig) identity = await simpleIdentity(provider, cand.address, page.abiPlan, code);
+        if (!identity) identity = await identifyContract(provider, cand.address, code);
+        if (!identity) identity = await simpleIdentity(provider, cand.address, page.abiPlan, code);
+      }
+      if (identity?.type === "phases" || identity?.type === "abi" || identity?.type === "abi-simple") {
         identity.slug = collectionSlug(page.parsed?.href);
         identity.pageUrl = page.parsed?.href || "";
       }
@@ -290,12 +302,10 @@ function chainChoices(options, cand, page) {
   return list.slice(0, 3);
 }
 
-async function abiIdentity(provider, address, plan) {
-  if (!plan) return null;
-  const code = await provider.getCode(address);
+async function abiIdentity(provider, address, plan, knownCode) {
+  if (!plan?.phaseData) return null;
+  const code = knownCode || (await provider.getCode(address));
   if (!code || code === "0x") return null;
-  const proxy = code.toLowerCase().includes("363d3d373d3d3d363d73");
-  if (!proxy && !code.toLowerCase().includes(plan.selector.slice(2).toLowerCase())) return null;
   try {
     const raw = await provider.call({ to: address, data: plan.phaseData });
     if (!raw || raw === "0x") return null;
@@ -306,9 +316,28 @@ async function abiIdentity(provider, address, plan) {
   }
 }
 
-async function planIdentity(provider, address, plan) {
+async function simpleIdentity(provider, address, plan, knownCode) {
+  if (!plan || plan.mode !== "simple") return null;
+  const code = knownCode || (await provider.getCode(address));
+  if (!code || code === "0x") return null;
+  const hasSelector = code.toLowerCase().includes(plan.selector.slice(2).toLowerCase());
+  if (!hasSelector) {
+    const probe = plan.price?.data || plan.start?.data || plan.fee?.data;
+    if (!probe) return null;
+    try {
+      const raw = await provider.call({ to: address, data: probe });
+      if (!raw || raw === "0x") return null;
+    } catch (error) {
+      if (error?.message === "Dừng.") throw error;
+      return null;
+    }
+  }
+  return { type: "abi-simple", plan, code };
+}
+
+async function planIdentity(provider, address, plan, knownCode) {
   if (!plan) return null;
-  const code = await provider.getCode(address);
+  const code = knownCode || (await provider.getCode(address));
   if (!code || code === "0x") return null;
   const proxy = code.toLowerCase().includes("363d3d373d3d3d363d73");
   if (!proxy && !code.toLowerCase().includes(plan.selector.slice(2).toLowerCase())) return null;
