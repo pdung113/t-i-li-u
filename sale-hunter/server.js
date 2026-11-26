@@ -117,7 +117,7 @@ async function poll() {
           console.log(`TikTok: lượt này nhận 0, giữ ${kept.scanned} món vừa đọc`);
         } else if (next.region !== tiktok.region || (next.scanned || 0) !== (tiktok.scanned || 0) || (next.received || 0) !== (tiktok.received || 0)) {
           const shown = (next.deals || []).length + (next.shelf || []).length;
-          console.log(`TikTok: gian hàng ${next.shop || "chưa rõ"} · cụm ${next.region || "chưa rõ"} · trang ${next.pageStatus || 0} · dữ liệu ${next.apiStatus || 0} · nhận ${next.received || 0} · đọc ${next.scanned || 0} · hiện ${shown}`);
+          console.log(`TikTok: Việt Nam · trang ${next.pageStatus || 0} · dữ liệu ${next.apiStatus || 0} · nhận ${next.received || 0} · đọc ${next.scanned || 0} · hiện ${shown}`);
         }
         tiktok = next;
       }
