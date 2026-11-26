@@ -47,6 +47,7 @@ test("1đ và link mua luôn có shopid itemid", () => {
   assert.equal(deal.oneDong, true);
   assert.equal(deal.deep, true);
   assert.equal(deal.priceText, "1đ");
+  assert.equal(new URL(deal.url).hostname, "shopee.vn");
   assert.match(deal.url, /^https:\/\/shopee\.vn\/ca-phe-cold-brew-i\.1628729099\.42222131630$/);
   assert.equal(deal.image, "https://down-vn.img.susercontent.com/file/vn-11134207-7ra0g-m914g3h3tkef1d");
   assert.equal(isOneDong(1), true);

@@ -97,7 +97,7 @@ function pill(text) {
 function renderStatus() {
   els.status.replaceChildren();
   if (!snapshot?.ready) {
-    els.status.append(pill(snapshot?.error || "Đang đọc flash sale Shopee…"));
+    els.status.append(pill(snapshot?.error || "Đang đọc flash sale Shopee Việt Nam…"));
     return;
   }
   const deals = snapshot.deals || [];
@@ -186,7 +186,7 @@ function renderGrid() {
   const deep = (snapshot?.deals || []).filter((deal) => deal.discount >= 90 && !deal.soldOut).length;
   els.hunt.className = "hunt" + (one || deep ? " hit" : "");
   if (!snapshot?.ready) {
-    els.hunt.textContent = "Đang lấy giá thật từ Shopee.";
+    els.hunt.textContent = "Đang lấy giá đồng trên Shopee Việt Nam.";
   } else if (one || deep) {
     els.hunt.textContent = "Có mốc săn. Món 1đ và từ 90% đang nằm trên cùng — bấm Mua ngay.";
   } else {
@@ -198,7 +198,7 @@ function renderGrid() {
     : "";
   for (const deal of deals) els.grid.append(card(deal));
   const hits = one + deep;
-  document.title = hits ? `(${hits}) Săn sale` : "Săn sale";
+  document.title = hits ? `(${hits}) Săn sale · Shopee VN` : "Săn sale · Shopee Việt Nam";
 }
 
 function card(deal) {
@@ -240,7 +240,7 @@ function card(deal) {
   const meta = document.createElement("div");
   meta.className = "meta";
   const bits = [];
-  if (deal.platform === "shopee") bits.push("Shopee");
+  if (deal.platform === "shopee") bits.push("Shopee VN");
   if (deal.official) bits.push("Mall");
   if (deal.rating) bits.push(`★ ${deal.rating}`);
   if (deal.soldCount) bits.push(`đã bán ${compact(deal.soldCount)}`);

@@ -7,6 +7,7 @@ const HEADERS = {
   Referer: `${ORIGIN}/flash_sale`,
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Accept-Language": "vi-VN,vi;q=0.9",
   "X-API-SOURCE": "pc",
   "X-Shopee-Language": "vi",
 };
@@ -43,13 +44,13 @@ export async function loadShopee(nowSec = Math.floor(Date.now() / 1000)) {
   for (const raw of itemsBody?.data?.items || []) {
     if (!raw?.itemid || seen.has(raw.itemid)) continue;
     const deal = normalizeShopeeItem(raw, ongoing);
-    if (!deal) continue;
+    if (!deal || !deal.url.startsWith("https://shopee.vn/")) continue;
     seen.add(raw.itemid);
     deals.push(deal);
   }
   return {
     sessions,
     deals,
-    watched: `Flash sale Shopee ${ongoing.label}`,
+    watched: `Shopee Việt Nam · ${ongoing.label}`,
   };
 }
