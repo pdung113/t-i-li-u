@@ -3,7 +3,7 @@ import test from "node:test";
 import { cheapDeals, halfOffDeals, huntTier, isDeepSale, isHuntDeal, isLowStock, lowStockDeals, matchFilter, normalizeShopeeItem, shelfDeals, sortDeals } from "../src/deals.js";
 import { discountPercent, formatVnd, isOneDong, shopeeUrl, vndFromMicro } from "../src/money.js";
 import { createRadar } from "../src/radar.js";
-import { acceptPhoneDeals, catalogMessage, collectProducts, keepTikTokCatalog, parseTikTokPayload, preferPhoneCatalog, regionFromRouter, shopFromRouter } from "../src/tiktok.js";
+import { acceptPhoneDeals, catalogMessage, collectProducts, keepTikTokCatalog, loadTikTok, parseTikTokPayload, preferPhoneCatalog, regionFromRouter, shopFromRouter } from "../src/tiktok.js";
 import { dealsFromCardTexts, dealsFromRouter, hunterReturnUrl, tierOfPrice } from "../src/page-deals.js";
 
 const session = { id: 1, label: "09:00–12:00", end: 1_700_000_000, ongoing: true };
@@ -398,6 +398,150 @@ test("deal -70% trên trang hàng 1 đ vào cột Từ 70%", () => {
   );
   assert.equal(accepted.deals.filter((deal) => deal.discount >= 70).length, 2);
 });
+
+test("TikTok đọc giá sale khi real_price là object", () => {
+  const parsed = parseTikTokPayload({
+    data: {
+      products: [{
+        packed_product: {
+          product_id: "1729000099",
+          product_base: {
+            title: "Khăn giấy",
+            price: {
+              currency: "VND",
+              real_price: { price_str: "17.999", price_val: "17999" },
+              original_price: { price_str: "69.000", price_val: "69000" },
+            },
+          },
+        },
+      }],
+    },
+  });
+  assert.equal(parsed.deals[0].priceVnd, 17999);
+  assert.equal(parsed.deals[0].priceText, "17.999đ");
+  assert.equal(parsed.deals[0].discount, 74);
+  assert.equal(huntTier(parsed.deals[0]), "70");
+  assert.equal(parsed.deals[0].url, "https://shop.tiktok.com/vn/pdp/1729000099");
+});
+
+test("TikTok edge US-TTP vẫn hiện đủ món và giữ sau lượt rỗng", async () => {
+  const products = [
+    packed("1729000011", "Túi 626", { price_str: "626", price_val: "626" }, { price_str: "28.000" }),
+    packed("1729000012", "Khăn 74", { price_val: "17999" }, "69.000"),
+    {
+      product_id: "1729000013",
+      title: "Áo 70",
+      product_base: { title: "Áo 70", price: { currency: "VND", original_price: "39.999" } },
+      promotion_info: { product_price: { min_price: "11.999" } },
+    },
+    {
+      product_id: "1729000014",
+      title: "Giày 75",
+      skus: [{ price: { real_price: { price_str: "8.999" }, original_price: "35.999", currency: "VND" } }],
+    },
+    {
+      product_id: "1729000015",
+      title: "Balo 55",
+      product_price_info: { currency_name: "VND", sale_price_value: 18000, original_price_value: 40000 },
+    },
+    {
+      product_id: "1729000016",
+      title: "Khăn 1k",
+      product_price_info: { currency_name: "VND", sale_price_decimal: "1000", raw_origin_price_decimal: "10000" },
+    },
+    packed("1729000017", "Ly 45", "22.000", "40.000"),
+    packed("1729000018", "Kẹp 50", "20.000", "40.000"),
+    {
+      product_id: "1729000019",
+      title: "Món chưa có giá",
+      product_price_info: { currency_name: "VND" },
+    },
+  ];
+  const words = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.includes("product_list")) {
+      const body = JSON.parse(options.body);
+      const params = JSON.parse(body.load_more_params);
+      words.push(params.search_word);
+      const list = params.search_word === "1.000đ" ? products : [];
+      return Response.json({ code: 0, message: "success", data: { products: list, has_more: false } });
+    }
+    const page = {
+      loaderData: {
+        "(region)/(route_page_name)/page": {
+          region_info: { current_v_region: "US-TTP", real_region: "VN", path_region: "VN" },
+        },
+      },
+    };
+    const html = `<script id="__MODERN_ROUTER_DATA__" type="application/json">${JSON.stringify(page)}</script>`;
+    return new Response(html, { status: 200 });
+  };
+  try {
+    const live = await loadTikTok();
+    assert.equal(live.region, "US-TTP");
+    assert.equal(live.shop, "VN");
+    assert.deepEqual(words, ["hàng 1 đ", "1.000đ", "1k", "giảm 70%", "flash sale"]);
+    assert.equal(live.scanned, 9);
+    const shown = [...live.deals, ...live.shelf];
+    assert.equal(shown.length, 9);
+    assert.match(live.message, /9 deal/);
+    assert.doesNotMatch(live.message, /npm run sale/);
+    const byName = new Map(shown.map((deal) => [deal.name, deal]));
+    assert.equal(byName.get("Túi 626").priceVnd, 626);
+    assert.equal(byName.get("Túi 626").oneDong, true);
+    assert.equal(byName.get("Khăn 74").priceVnd, 17999);
+    assert.equal(byName.get("Khăn 74").discount, 74);
+    assert.equal(byName.get("Áo 70").priceVnd, 11999);
+    assert.equal(byName.get("Áo 70").discount, 70);
+    assert.equal(byName.get("Giày 75").priceVnd, 8999);
+    assert.equal(byName.get("Giày 75").discount, 75);
+    assert.equal(byName.get("Balo 55").priceVnd, 18000);
+    assert.equal(byName.get("Balo 55").discount, 55);
+    assert.equal(byName.get("Khăn 1k").priceVnd, 1000);
+    assert.equal(byName.get("Khăn 1k").oneDong, true);
+    assert.equal(byName.get("Ly 45").priceVnd, 22000);
+    assert.equal(byName.get("Ly 45").discount, 45);
+    assert.equal(byName.get("Kẹp 50").priceVnd, 20000);
+    assert.equal(byName.get("Kẹp 50").discount, 50);
+    assert.equal(byName.get("Món chưa có giá").priceVnd, 0);
+    assert.equal(byName.get("Món chưa có giá").priceText, "Chưa hiện giá");
+    for (const deal of shown) assert.match(deal.url, /^https:\/\/shop\.tiktok\.com\/vn\//);
+    const columns = { "1d": 0, "90": 0, "70": 0, "50": 0, near: 0 };
+    for (const deal of shown) columns[boardColumn(deal)] += 1;
+    assert.deepEqual(columns, { "1d": 2, "90": 0, "70": 3, "50": 2, near: 2 });
+    const kept = keepTikTokCatalog(
+      { ...live, checkedAt: 5_000 },
+      { ok: true, deals: [], shelf: [], scanned: 0, received: 0, region: "US-TTP", shop: "VN", checkedAt: 20_000 },
+      20_000,
+    );
+    assert.equal(kept.deals.length + kept.shelf.length, 9);
+    assert.equal(kept.deals.find((deal) => deal.name === "Khăn 74").priceVnd, 17999);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+function packed(id, title, sale, origin) {
+  return {
+    packed_product: {
+      product_id: id,
+      product_base: {
+        title,
+        price: { currency: "VND", currency_symbol: "₫", real_price: sale, original_price: origin },
+      },
+    },
+  };
+}
+
+function boardColumn(deal) {
+  if (deal.oneDong) return "1d";
+  if (deal.discount >= 90) return "90";
+  if (deal.discount >= 70) return "70";
+  if (deal.discount >= 50) return "50";
+  return "near";
+}
 
 test("slug giữ link sạch", () => {
   assert.equal(

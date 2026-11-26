@@ -130,7 +130,9 @@ function visibleLow(deals) {
 function visibleShelf(deals) {
   const q = els.q.value.trim().toLowerCase();
   const list = (deals || []).filter((deal) => {
-    if (!allowed(deal) || tierOf(deal) || stockLow(deal) || !(deal.priceVnd > 0) || deal.soldOut) return false;
+    if (!allowed(deal) || tierOf(deal) || stockLow(deal) || deal.soldOut) return false;
+    if (deal.platform !== "tiktok" && !(deal.priceVnd > 0)) return false;
+    if (deal.platform === "tiktok" && !(deal.priceVnd > 0) && !deal.name) return false;
     if (deal.platform !== "tiktok" && (deal.discount >= 50 || deal.priceVnd <= 50_000)) return false;
     return !q || deal.name.toLowerCase().includes(q);
   });
@@ -155,19 +157,18 @@ function renderStatus() {
     els.shopeeMeta.textContent = bits.join(" · ");
   }
   const tiktok = snapshot?.tiktok;
+  const tiktokShelf = visibleShelf(tiktok?.shelf);
+  const tiktokShown = tiktokDeals.filter((deal) => !deal.soldOut).length + tiktokShelf.length;
   els.tiktokMeta.replaceChildren();
   if (!tiktok) {
     els.tiktokMeta.textContent = "Đang quét TikTok Shop Việt Nam…";
-  } else if (!tiktok.ok) {
+  } else if (!tiktok.ok && !tiktokShown) {
     els.tiktokMeta.append(document.createTextNode(`${tiktok.message || "TikTok Shop Việt Nam chưa đọc được deal."} `));
     els.tiktokMeta.append(shopLink(tiktok.openUrl, "Mở TikTok"));
-  } else if (tiktokDeals.length) {
-    els.tiktokMeta.textContent = `${tiktok.message} · quét mỗi ${every}s`;
-  } else if (!(tiktok.scanned > 0)) {
-    els.tiktokMeta.textContent = tiktok.message || "TikTok chỉ gửi giá cho máy đang ở Việt Nam. Chạy npm run sale trên máy đó.";
+  } else if (tiktokShown) {
+    els.tiktokMeta.textContent = `${tiktok.message || "TikTok Shop Việt Nam"} · quét mỗi ${every}s`;
   } else {
-    els.tiktokMeta.append(document.createTextNode(`${tiktok.message || `Đã xem ${tiktok.scanned || 0} món, chưa có món từ 1.200đ trở xuống, -90% hay -70%.`} `));
-    els.tiktokMeta.append(shopLink(tiktok.openUrl, "Mở TikTok"));
+    els.tiktokMeta.textContent = tiktok.message || "TikTok lượt này trả 0 món. Bảng vẫn quét mỗi 15 giây.";
   }
 }
 

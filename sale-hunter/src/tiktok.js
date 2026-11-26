@@ -42,16 +42,25 @@ export function asTikTokProduct(raw) {
   const base = source.product_base || source.productBase || {};
   const price = base.price && typeof base.price === "object" ? base.price : {};
   const promo = source.promotion_info?.product_price?.min_price || source.promotionInfo?.productPrice?.minPrice;
+  const sku = Array.isArray(source.skus) ? source.skus.find((row) => row && (row.price || row.sku_price)) : null;
+  const skuPrice = sku?.price || sku?.sku_price || {};
   const info = { ...(source.product_price_info || {}) };
   if (promo && typeof promo === "object") Object.assign(info, promo);
-  const sale = price.real_price_decimal ?? price.realPriceDecimal ?? price.real_price ?? price.realPrice;
-  const origin = price.original_price_decimal ?? price.originalPriceDecimal ?? price.original_price ?? price.originalPrice;
-  if ((info.sale_price_decimal == null || info.sale_price_decimal === "") && sale != null && sale !== "") {
-    info.sale_price_decimal = String(sale);
-    info.currency_name = info.currency_name || price.currency || price.currency_name;
-    info.currency_symbol = info.currency_symbol || price.currency_symbol || price.currencySymbol;
-    if (origin != null && origin !== "") info.raw_origin_price_decimal = String(origin);
+  const saleText = moneyText(
+    price.real_price_decimal ?? price.realPriceDecimal ?? price.real_price ?? price.realPrice
+      ?? skuPrice.real_price_decimal ?? skuPrice.real_price ?? skuPrice.sale_price ?? promo,
+  );
+  const originText = moneyText(
+    price.original_price_decimal ?? price.originalPriceDecimal ?? price.original_price ?? price.originalPrice
+      ?? skuPrice.original_price_decimal ?? skuPrice.original_price ?? skuPrice.origin_price,
+  );
+  if ((info.sale_price_decimal == null || info.sale_price_decimal === "") && saleText) {
+    info.sale_price_decimal = saleText;
+    info.currency_name = info.currency_name || price.currency || price.currency_name || skuPrice.currency || skuPrice.currency_name;
+    info.currency_symbol = info.currency_symbol || price.currency_symbol || price.currencySymbol || skuPrice.currency_symbol;
+    if (originText) info.raw_origin_price_decimal = originText;
   }
+  if (!info.discount_format && (price.discount || price.discount_format)) info.discount_format = price.discount || price.discount_format;
   const itemId = source.product_id || source.productId || source.id;
   return {
     ...source,
@@ -81,9 +90,33 @@ export function parseTikTokPayload(body) {
     const info = raw.product_price_info || {};
     const currency = currencyCode(info, raw);
     if (!itemId || !name || currency !== "VND") continue;
-    const priceVnd = vndAmount(info.sale_price_decimal ?? info.sale_price_format ?? info.sale_price ?? raw.price ?? raw.priceVnd ?? raw.sale_price, currency);
-    const wasVnd = vndAmount(
-      info.raw_origin_price_decimal ?? info.raw_origin_price_format ?? info.origin_price_decimal ?? info.original_price ?? raw.originalPrice ?? raw.original_price ?? raw.wasVnd,
+    const priceVnd = firstAmount(
+      [
+        info.sale_price_decimal,
+        info.sale_price_format,
+        info.sale_price,
+        info.sale_price_value,
+        info.min_price,
+        raw.price,
+        raw.priceVnd,
+        raw.sale_price,
+        digSale(raw),
+      ],
+      currency,
+    );
+    const wasVnd = firstAmount(
+      [
+        info.raw_origin_price_decimal,
+        info.raw_origin_price_format,
+        info.origin_price_decimal,
+        info.origin_price_format,
+        info.original_price,
+        info.original_price_value,
+        raw.originalPrice,
+        raw.original_price,
+        raw.wasVnd,
+        digMarked(raw, /origin|original|was/i),
+      ],
       currency,
     );
     const labeled = Number(String(info.discount_format || raw.discount || "").replace(/[^\d.]/g, ""));
@@ -162,11 +195,67 @@ function currencyCode(info, raw) {
   return rawCode;
 }
 
+function moneyText(value, depth = 0) {
+  if (value == null || value === "") return "";
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text && text !== "[object Object]" ? text : "";
+  }
+  if (typeof value !== "object" || depth > 3) return "";
+  const keys = [
+    "price_str",
+    "price_val",
+    "sale_price_decimal",
+    "sale_price_format",
+    "sale_price",
+    "sale_price_value",
+    "real_price_decimal",
+    "real_price",
+    "min_price",
+    "price",
+  ];
+  for (const key of keys) {
+    if (value[key] == null || value[key] === "") continue;
+    const found = moneyText(value[key], depth + 1);
+    if (found) return found;
+  }
+  return "";
+}
+
+function digMarked(node, pattern, depth = 0, skip = null) {
+  if (!node || typeof node !== "object" || depth > 5) return "";
+  const entries = Object.entries(node);
+  for (const [key, nested] of entries) {
+    if (skip?.test(key) || !pattern.test(key) || /id|sold|stock|score|count|offset|token/i.test(key)) continue;
+    const text = moneyText(nested);
+    if (text) return text;
+  }
+  for (const [key, value] of entries) {
+    if (skip?.test(key) || !value || typeof value !== "object") continue;
+    const found = digMarked(value, pattern, depth + 1, skip);
+    if (found) return found;
+  }
+  return "";
+}
+
+function digSale(node) {
+  return digMarked(node, /sale|real_price|min_price|price_str|price_val/i, 0, /origin|original|was/i);
+}
+
+function firstAmount(values, currency) {
+  for (const value of values) {
+    const amount = vndAmount(moneyText(value), currency);
+    if (amount > 0) return amount;
+  }
+  return 0;
+}
+
 function vndAmount(value, currency = "VND") {
   if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
   if (typeof value !== "string") return 0;
   const text = value.trim();
-  if (!text) return 0;
+  if (!text || text === "[object Object]") return 0;
   if (currency === "VND" || currency === "₫") {
     if (/^\d{1,3}(\.\d{3})+$/.test(text)) return Number(text.replace(/\./g, ""));
     if (/^\d+([.,]\d{1,2})?$/.test(text)) return Math.round(Number(text.replace(",", ".")));
@@ -245,10 +334,14 @@ export async function loadTikTok() {
     return { ...blocked("Không kết nối được TikTok Shop Việt Nam lúc này."), scanned, deepest, region, shop, received, pageStatus, apiStatus, shelf: [] };
   }
   const deals = found.filter((deal) => isHuntDeal(deal) || isDeepSale(deal));
+  const pricedShelf = shelfDeals(found);
+  const placed = new Set([...deals, ...pricedShelf].map((deal) => deal.id));
+  const rest = found.filter((deal) => !deal.soldOut && deal.name && !placed.has(deal.id));
+  const shelf = [...pricedShelf, ...rest].slice(0, 16);
   return {
     ok: true,
     deals,
-    shelf: shelfDeals(found),
+    shelf,
     scanned,
     deepest,
     region,
@@ -256,7 +349,7 @@ export async function loadTikTok() {
     received,
     pageStatus,
     apiStatus,
-    message: catalogMessage({ region, shop, scanned, deals: deals.length, deepest }),
+    message: catalogMessage({ region, shop, scanned, deals: deals.length + shelf.length, deepest }),
     openUrl: SEARCH_URL,
   };
 }
