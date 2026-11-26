@@ -1,8 +1,8 @@
-import { isHuntDeal, shelfDeals } from "./deals.js";
+import { isDeepSale, isHuntDeal, shelfDeals } from "./deals.js";
 import { formatVnd, isOneDong } from "./money.js";
 
 const SEARCH_URL = "https://shop.tiktok.com/vn/s?q=h%C3%A0ng%201%20%C4%91";
-const WORDS = ["hàng 1 đ", "1.000đ", "sale"];
+const WORDS = ["hàng 1 đ", "1.000đ", "1.200đ", "giảm sâu", "flash sale", "sale"];
 
 function blocked(message) {
   return {
@@ -16,7 +16,7 @@ function blocked(message) {
 export function parseTikTokPayload(body) {
   if (!body || typeof body !== "object") return blocked("TikTok không trả danh sách sản phẩm.");
   if (body.code === 10000 || body.error === 10000) {
-    return blocked("TikTok Shop đang chặn máy chủ bằng captcha, chưa đọc được deal 1.000đ.");
+    return blocked("TikTok Shop đang chặn máy chủ bằng captcha, chưa đọc được deal từ 1.200đ trở xuống.");
   }
   const list = body.products || body.data?.products || body.data?.product_list || [];
   if (!Array.isArray(list)) return blocked("TikTok Shop chưa trả deal nào cho máy chủ này.");
@@ -148,7 +148,7 @@ export async function loadTikTok() {
   } catch {
     return { ...blocked("Không kết nối được TikTok Shop Việt Nam lúc này."), scanned, deepest, shelf: [] };
   }
-  const deals = found.filter(isHuntDeal);
+  const deals = found.filter((deal) => isHuntDeal(deal) || isDeepSale(deal));
   const depth = deepest ? ` Sâu nhất đã thấy -${deepest}%.` : "";
   return {
     ok: true,
@@ -159,8 +159,8 @@ export async function loadTikTok() {
     message: deals.length
       ? `TikTok Shop Việt Nam · ${deals.length} deal`
       : scanned
-        ? `TikTok Shop Việt Nam · đã xem ${scanned} món, chưa có 1.000đ, -90% hay -70%.${depth}`
-        : "TikTok Shop web trả lời thành công nhưng danh sách sản phẩm rỗng. App điện thoại thấy deal 1.000đ, web từ máy này không gửi sản phẩm về.",
+        ? `TikTok Shop Việt Nam · đã xem ${scanned} món, chưa có món từ 1.200đ trở xuống, -90%, -70% hay giảm sâu từ 50%.${depth}`
+        : "TikTok Shop web trả lời thành công nhưng danh sách sản phẩm rỗng. App điện thoại thấy deal giá thấp, web từ máy này không gửi sản phẩm về.",
     openUrl: SEARCH_URL,
   };
 }

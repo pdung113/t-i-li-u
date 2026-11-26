@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { huntTier, isHuntDeal, matchFilter, normalizeShopeeItem, shelfDeals, sortDeals } from "../src/deals.js";
+import { huntTier, isDeepSale, isHuntDeal, matchFilter, normalizeShopeeItem, shelfDeals, sortDeals } from "../src/deals.js";
 import { discountPercent, formatVnd, isOneDong, shopeeUrl, vndFromMicro } from "../src/money.js";
 import { createRadar } from "../src/radar.js";
 import { parseTikTokPayload } from "../src/tiktok.js";
@@ -33,6 +33,7 @@ test("giá Shopee đổi từ micro sang đồng", () => {
 test("định dạng tiền có dấu chấm", () => {
   assert.equal(formatVnd(1), "1đ");
   assert.equal(formatVnd(1000), "1.000đ");
+  assert.equal(formatVnd(1200), "1.200đ");
   assert.equal(formatVnd(312816), "312.816đ");
   assert.equal(formatVnd(3329000), "3.329.000đ");
 });
@@ -53,11 +54,19 @@ test("1đ và link mua luôn có shopid itemid", () => {
   assert.equal(deal.image, "https://down-vn.img.susercontent.com/file/vn-11134207-7ra0g-m914g3h3tkef1d");
   assert.equal(isOneDong(1), true);
   assert.equal(isOneDong(1000), true);
-  assert.equal(isOneDong(1001), false);
+  assert.equal(isOneDong(1200), true);
+  assert.equal(isOneDong(1201), false);
   const thousand = normalizeShopeeItem(item({ price: 100_000_000, price_before_discount: 1_000_000_000, raw_discount: 90 }), session);
   assert.equal(thousand.priceVnd, 1000);
   assert.equal(thousand.oneDong, true);
   assert.equal(huntTier(thousand), "1d");
+  const cap = normalizeShopeeItem(item({ itemid: 12, price: 120_000_000, price_before_discount: 1_200_000_000, raw_discount: 90 }), session);
+  assert.equal(cap.priceVnd, 1200);
+  assert.equal(huntTier(cap), "1d");
+  const over = normalizeShopeeItem(item({ itemid: 13, price: 120_100_000, price_before_discount: 240_200_000, raw_discount: 50 }), session);
+  assert.equal(over.priceVnd, 1201);
+  assert.equal(over.oneDong, false);
+  assert.equal(huntTier(over), "");
 });
 
 test("hết suất và còn ít suất", () => {
@@ -184,6 +193,31 @@ test("TikTok đọc giá 1.000đ trên trang tìm hàng 1 đ", () => {
   assert.equal(huntTier(deal), "1d");
   assert.equal(deal.soldCount, 81);
   assert.equal(deal.url, "https://shop.tiktok.com/vn/pdp/set-khan-lau-bep/1729605786167118290");
+});
+
+test("TikTok giảm sâu từ 50% không kéo deal Shopee 63% sang cột đó", () => {
+  const shopee = normalizeShopeeItem(item(), session);
+  const deep = { id: "tiktok:60", platform: "tiktok", discount: 60, oneDong: false, priceVnd: 20_000, soldOut: false };
+  const mild = { id: "tiktok:48", platform: "tiktok", discount: 48, oneDong: false, priceVnd: 13_500, soldOut: false };
+  const seventy = { id: "tiktok:75", platform: "tiktok", discount: 75, oneDong: false, priceVnd: 20_000, soldOut: false };
+  assert.equal(isDeepSale(deep), true);
+  assert.equal(isHuntDeal(deep), false);
+  assert.equal(isDeepSale(mild), false);
+  assert.equal(isDeepSale(seventy), false);
+  assert.equal(huntTier(seventy), "70");
+  assert.equal(isDeepSale(shopee), false);
+  assert.deepEqual(shelfDeals([shopee, deep, mild]).map((deal) => deal.id), [shopee.id, mild.id]);
+});
+
+test("TikTok giảm sâu 60% kêu một lần", () => {
+  const radar = createRadar();
+  const quiet = { id: "tiktok:1", platform: "tiktok", discount: 40, oneDong: false, soldOut: false };
+  assert.deepEqual(radar.take([quiet], 1_000), []);
+  const hit = { ...quiet, discount: 60 };
+  const alerts = radar.take([hit], 2_000);
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].id, "tiktok:1");
+  assert.deepEqual(radar.take([hit], 3_000), []);
 });
 
 test("slug giữ link sạch", () => {

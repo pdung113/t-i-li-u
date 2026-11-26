@@ -1,4 +1,4 @@
-import { isHuntDeal } from "./deals.js";
+import { isDeepSale, isHuntDeal } from "./deals.js";
 
 export function createRadar() {
   const seen = new Map();
@@ -17,8 +17,8 @@ export function createRadar() {
       }
       for (const deal of deals) {
         const prev = seen.get(deal.id);
-        const hunt = isHuntDeal(deal);
-        const wasHunt = prev ? prev.oneDong || prev.discount >= 70 : false;
+        const hunt = isHuntDeal(deal) || isDeepSale(deal);
+        const wasHunt = prev ? prev.oneDong || prev.discount >= 70 || (deal.platform === "tiktok" && prev.discount >= 50) : false;
         deal.isNew = !prev;
         deal.firstSeenAt = prev?.seenAt || now;
         if (hunt && !wasHunt && !deal.soldOut) alerts.push(deal);
