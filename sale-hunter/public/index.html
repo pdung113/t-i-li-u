@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Săn sale</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <p class="mark">Canh deal</p>
+      <h1>Săn sale</h1>
+    </div>
+    <div class="live" id="live">
+      <span class="dot"></span>
+      <span id="live-text">Đang nối</span>
+    </div>
+    <time id="clock"></time>
+  </header>
+
+  <section class="status" id="status"></section>
+  <section class="sessions" id="sessions"></section>
+
+  <section class="toolbar">
+    <div class="filters" id="filters"></div>
+    <label class="search">
+      <span>Tìm trong khung</span>
+      <input id="q" type="search" placeholder="sữa, ốp, cà phê…" autocomplete="off">
+    </label>
+    <label class="floor">
+      <span>Kêu từ</span>
+      <input id="floor" type="number" min="50" max="99" value="90">
+      <span>%</span>
+    </label>
+    <button type="button" id="sound" class="toggle">Bật tiếng</button>
+    <button type="button" id="notify" class="toggle">Báo trình duyệt</button>
+  </section>
+
+  <p class="sorts" id="sorts"></p>
+  <p class="hunt" id="hunt"></p>
+  <main id="grid" class="grid"></main>
+  <p class="empty" id="empty" hidden></p>
+
+  <div class="toast" id="toast" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
