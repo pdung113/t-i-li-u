@@ -485,7 +485,7 @@ test("TikTok edge US-TTP vẫn hiện đủ món và giữ sau lượt rỗng", 
     const live = await loadTikTok();
     assert.equal(live.region, "US-TTP");
     assert.equal(live.shop, "VN");
-    assert.deepEqual([...new Set(words)], ["hàng 1 đ", "1.000đ", "1k", "giảm 70%", "flash sale"]);
+    assert.deepEqual([...new Set(words)], ["hàng 1 đ", "1 đồng", "1.000đ", "1k", "giảm 90%", "giảm 70%", "giảm 50%", "deal sốc", "flash sale"]);
     assert.equal(live.scanned, 9);
     const shown = [...live.deals, ...live.shelf];
     assert.equal(shown.length, 9);

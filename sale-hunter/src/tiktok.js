@@ -2,7 +2,7 @@ import { isDeepSale, isHuntDeal, shelfDeals } from "./deals.js";
 import { formatVnd, isOneDong } from "./money.js";
 
 const SEARCH_URL = "https://shop.tiktok.com/vn/s?q=h%C3%A0ng%201%20%C4%91";
-const WORDS = ["hàng 1 đ", "1.000đ", "1k", "giảm 70%", "flash sale"];
+const WORDS = ["hàng 1 đ", "1 đồng", "1.000đ", "1k", "giảm 90%", "giảm 70%", "giảm 50%", "deal sốc", "flash sale"];
 const CLUSTERS = ["sg1", "my", "alisg"];
 let cluster = CLUSTERS[0];
 
@@ -331,10 +331,10 @@ export async function loadTikTok() {
     return { ...blocked("Không kết nối được TikTok Shop Việt Nam lúc này."), scanned, deepest, region, shop, received, pageStatus, apiStatus, shelf: [] };
   }
   const deals = found.filter((deal) => isHuntDeal(deal) || isDeepSale(deal));
-  const pricedShelf = shelfDeals(found);
+  const pricedShelf = shelfDeals(found, 60);
   const placed = new Set([...deals, ...pricedShelf].map((deal) => deal.id));
   const rest = found.filter((deal) => !deal.soldOut && deal.name && !placed.has(deal.id));
-  const shelf = [...pricedShelf, ...rest].slice(0, 16);
+  const shelf = [...pricedShelf, ...rest].slice(0, 60);
   return {
     ok: true,
     deals,
@@ -457,7 +457,7 @@ async function postProductListOn(word, idc) {
   let offset = 0;
   let pageToken = "";
   let status = 0;
-  for (let page = 0; page < 3; page += 1) {
+  for (let page = 0; page < 4; page += 1) {
     const response = await fetch("https://shop.tiktok.com/api/shop/brandy_desktop/s/product_list?region=VN&locale=vi-VN", {
       method: "POST",
       headers: { ...shopHeaders(word, idc), Accept: "application/json", "Content-Type": "application/json" },
@@ -467,7 +467,7 @@ async function postProductListOn(word, idc) {
           component_name: "feed_list_search_word",
           fe_config: {
             is_main_feed: true,
-            data_source: { type: "search_word", params: { count: 30, clamp: true } },
+            data_source: { type: "search_word", params: { count: 60, clamp: true } },
           },
         }),
         load_more_params: JSON.stringify({
