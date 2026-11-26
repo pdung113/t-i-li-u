@@ -21,7 +21,7 @@ const els = {
 };
 
 const ui = {
-  sort: "discount",
+  sort: "",
   sound: localStorage.getItem("sale-sound") === "1",
 };
 if (ui.sound) els.sound.classList.add("on");
@@ -102,36 +102,53 @@ function visibleDeals(deals) {
   return sortDeals((deals || []).filter((deal) => isHunt(deal) && (!q || deal.name.toLowerCase().includes(q))));
 }
 
-function visibleLow(deals) {
+function matchesQuery(deal) {
   const q = els.q.value.trim().toLowerCase();
-  const list = (deals || []).filter((deal) => allowed(deal) && stockLow(deal) && !deal.oneDong && deal.discount < 90 && (!q || deal.name.toLowerCase().includes(q)));
+  return !q || deal.name.toLowerCase().includes(q);
+}
+
+function visibleCheap(deals) {
+  const list = (deals || [])
+    .filter((deal) => allowed(deal) && !deal.soldOut && deal.priceVnd > 0 && deal.priceVnd <= 50_000 && deal.discount < 50 && matchesQuery(deal))
+    .sort((a, b) => a.priceVnd - b.priceVnd || b.discount - a.discount);
+  return ui.sort ? sortDeals(list) : list;
+}
+
+function visibleHalf(deals) {
+  const list = (deals || [])
+    .filter((deal) => allowed(deal) && !deal.soldOut && deal.discount >= 50 && matchesQuery(deal))
+    .sort((a, b) => b.discount - a.discount || a.priceVnd - b.priceVnd);
+  return ui.sort ? sortDeals(list) : list;
+}
+
+function visibleLow(deals) {
+  const list = (deals || []).filter((deal) => allowed(deal) && stockLow(deal) && deal.priceVnd > 50_000 && deal.discount < 50 && matchesQuery(deal));
   list.sort((a, b) => a.stock / a.stockTotal - b.stock / b.stockTotal || a.stock - b.stock);
-  return list;
+  return ui.sort ? sortDeals(list) : list;
 }
 
 function visibleShelf(deals) {
   const q = els.q.value.trim().toLowerCase();
-  const list = (deals || []).filter((deal) => allowed(deal) && !tierOf(deal) && !stockLow(deal) && deal.priceVnd > 0 && !deal.soldOut && (!q || deal.name.toLowerCase().includes(q)));
+  const list = (deals || []).filter((deal) => allowed(deal) && !tierOf(deal) && !stockLow(deal) && deal.discount < 50 && !(deal.priceVnd > 0 && deal.priceVnd <= 50_000) && deal.priceVnd > 0 && !deal.soldOut && (!q || deal.name.toLowerCase().includes(q)));
   list.sort((a, b) => (b.saveVnd || 0) - (a.saveVnd || 0) || b.discount - a.discount);
-  return list;
+  return ui.sort ? sortDeals(list) : list;
 }
 
 function renderStatus() {
-  const shopeeDeals = visibleDeals(snapshot?.shopee?.deals);
+  const cheap = visibleCheap(snapshot?.shopee?.cheap);
+  const half = visibleHalf(snapshot?.shopee?.half);
   const shopeeLow = visibleLow(snapshot?.shopee?.low);
   const tiktokDeals = visibleDeals(snapshot?.tiktok?.deals);
   const every = pollSeconds();
   if (!snapshot?.ready) {
     els.shopeeMeta.textContent = snapshot?.error || "Đang đọc flash sale Shopee Việt Nam…";
-  } else if (shopeeDeals.length || shopeeLow.length) {
+  } else {
     const bits = [snapshot.shopee?.watched || "Shopee Việt Nam"];
-    if (shopeeDeals.length) bits.push(`${shopeeDeals.length} mốc`);
+    if (cheap.length) bits.push(`${cheap.length} món dưới 50k`);
+    if (half.length) bits.push(`${half.length} món từ 50%`);
     if (shopeeLow.length) bits.push(`${shopeeLow.length} sắp hết`);
     bits.push(`quét mỗi ${every}s`);
     els.shopeeMeta.textContent = bits.join(" · ");
-  } else {
-    const deep = snapshot.shopee?.deepest ? ` Sâu nhất đã thấy -${snapshot.shopee.deepest}%.` : "";
-    els.shopeeMeta.textContent = `${snapshot.shopee?.watched || "Shopee Việt Nam"} · đã xem ${snapshot.shopee?.scanned || 0} món, chưa có món từ 1.200đ trở xuống, -90% hay sắp hết suất.${deep} Quét mỗi ${every}s`;
   }
   const tiktok = snapshot?.tiktok;
   els.tiktokMeta.replaceChildren();
@@ -143,7 +160,7 @@ function renderStatus() {
   } else if (tiktokDeals.length) {
     els.tiktokMeta.textContent = `${tiktok.message} · quét mỗi ${every}s`;
   } else if (!(tiktok.scanned > 0)) {
-    els.tiktokMeta.textContent = "Trang hàng 1 đ có deal -70%. Máy chủ nhận danh sách rỗng. Bấm Săn sale trên trang đó để đổ vào cột Từ 70%.";
+    els.tiktokMeta.textContent = "TikTok không gửi danh sách về máy chủ. Mở Hàng 1 đ hoặc Giảm 70%, rồi bấm Săn sale để đổ deal -70% vào cột.";
   } else {
     els.tiktokMeta.append(document.createTextNode(`${tiktok.message || `Đã xem ${tiktok.scanned || 0} món, chưa có món từ 1.200đ trở xuống, -90% hay -70%.`} `));
     els.tiktokMeta.append(shopLink(tiktok.openUrl, "Mở TikTok"));
@@ -195,38 +212,32 @@ function renderControls() {
 }
 
 function renderGrid() {
-  const shopee = visibleDeals(snapshot?.shopee?.deals);
+  const cheap = visibleCheap(snapshot?.shopee?.cheap);
+  const half = visibleHalf(snapshot?.shopee?.half);
   const shopeeLow = visibleLow(snapshot?.shopee?.low);
   const tiktok = visibleDeals(snapshot?.tiktok?.deals);
   const shopeeShelf = visibleShelf(snapshot?.shopee?.shelf);
   const tiktokShelf = visibleShelf(snapshot?.tiktok?.shelf);
-  renderColumns("shopee", shopee, shopeeShelf);
+  renderColumns("shopee", [], shopeeShelf);
   renderColumns("tiktok", tiktok, tiktokShelf);
   const tiktokLive = (snapshot?.tiktok?.scanned || 0) > 0 || tiktok.length > 0 || tiktokShelf.length > 0;
   document.querySelector("#tiktok-board")?.classList.toggle("has-deals", tiktokLive);
-  const hits = [...shopee, ...tiktok].filter((deal) => !deal.soldOut);
-  const lowCount = shopeeLow.filter((deal) => !deal.soldOut).length;
-  const shown = hits.length + lowCount + shopeeShelf.filter((deal) => !deal.soldOut).length + tiktokShelf.filter((deal) => !deal.soldOut).length;
+  const shown = cheap.length + half.length + shopeeLow.length + shopeeShelf.length + tiktok.filter((deal) => !deal.soldOut).length + tiktokShelf.length;
   els.hunt.className = "hunt" + (shown ? " hit" : "");
   if (!snapshot?.ready) {
-    els.hunt.textContent = "Đang quét Shopee và TikTok. Cột ≤1.200đ nhận giá từ 1đ đến 1.200đ. Shopee có cột Sắp hết suất. TikTok có cột Giảm sâu từ 50%.";
-  } else if (hits.length || lowCount) {
-    const parts = [];
-    if (hits.length) parts.push(`${hits.length} deal đúng mốc`);
-    if (lowCount) parts.push(`${lowCount} món sắp hết suất`);
-    els.hunt.textContent = `${parts.join(", ")}. Cột Sâu nhất kéo dọc theo tiền hời. Bấm Mua ngay.`;
+    els.hunt.textContent = "Đang quét flash sale Shopee. Cột trống sẽ ẩn. TikTok chỉ hiện khi có deal đọc từ trang shop.";
   } else if (shown) {
-    els.hunt.textContent = "Chưa có deal từ 1.200đ trở xuống, -90% hay sắp hết suất. Cột Sâu nhất kéo dọc theo tiền hời, bấm Mua ngay.";
+    els.hunt.textContent = `${cheap.length} món dưới 50.000đ, ${half.length} món giảm từ 50%. Cột trống đã ẩn. Bấm Mua ngay.`;
   } else {
     els.hunt.textContent = "Chưa đọc được deal nào. Vẫn quét liên tục.";
   }
-  document.title = shown ? `(${shown}) Săn sale` : "Săn ≤1.200đ, -90% và sắp hết suất";
+  document.title = shown ? `(${shown}) Săn sale` : "Săn sale Shopee và TikTok";
 }
 
 function renderColumns(prefix, deals, shelf) {
   if (prefix === "shopee") {
-    paintColumn(prefix, "1d", deals.filter((deal) => tierOf(deal) === "1d"));
-    paintColumn(prefix, "90", deals.filter((deal) => tierOf(deal) === "90"));
+    paintColumn(prefix, "cheap", visibleCheap(snapshot?.shopee?.cheap));
+    paintColumn(prefix, "half", visibleHalf(snapshot?.shopee?.half));
     paintColumn(prefix, "low", visibleLow(snapshot?.shopee?.low));
     paintColumn(prefix, "near", shelf || []);
     return;
@@ -242,6 +253,8 @@ function paintColumn(prefix, id, list) {
   const count = document.querySelector(`#${prefix}-${id}-count`);
   const empty = document.querySelector(`#${prefix}-${id}-empty`);
   const grid = document.querySelector(`#${prefix}-${id}`);
+  const column = grid?.closest(".col");
+  if (column && prefix === "shopee") column.hidden = Boolean(snapshot?.ready) && list.length === 0;
   if (count) count.textContent = String(list.length);
   if (empty) empty.textContent = emptyLabel(prefix, list);
   if (grid) fillGrid(grid, list);
@@ -369,7 +382,7 @@ function apply(data) {
 
 function notice(deals) {
   const hits = [];
-  const pool = [...(deals || []), ...(snapshot?.shopee?.low || [])];
+  const pool = [...(deals || []), ...(snapshot?.shopee?.low || []), ...(snapshot?.shopee?.half || []).filter((deal) => deal.oneDong || deal.discount >= 70)];
   const seenIds = new Set();
   for (const deal of pool) {
     if (!deal?.id || seenIds.has(deal.id)) continue;
@@ -377,8 +390,8 @@ function notice(deals) {
     const prev = known.get(deal.id);
     const deepSale = deal.platform === "tiktok" && deal.discount >= 50 && deal.discount < 70;
     const low = stockLow(deal);
-    const hot = !deal.soldOut && (deal.oneDong || deal.discount >= 90 || (deal.platform !== "shopee" && deal.discount >= 70) || deepSale || low);
-    const wasHot = prev ? prev.oneDong || prev.discount >= 90 || (deal.platform !== "shopee" && prev.discount >= 70) || (deal.platform === "tiktok" && prev.discount >= 50) || prev.low : false;
+    const hot = !deal.soldOut && (deal.oneDong || deal.discount >= 70 || deepSale || low);
+    const wasHot = prev ? prev.oneDong || prev.discount >= 70 || (deal.platform === "tiktok" && prev.discount >= 50) || prev.low : false;
     if (primed && hot && !wasHot) hits.push(deal);
     known.set(deal.id, { oneDong: deal.oneDong, discount: deal.discount, low });
   }

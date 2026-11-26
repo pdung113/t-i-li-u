@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { huntTier, isDeepSale, isHuntDeal, isLowStock, lowStockDeals, matchFilter, normalizeShopeeItem, shelfDeals, sortDeals } from "../src/deals.js";
+import { cheapDeals, halfOffDeals, huntTier, isDeepSale, isHuntDeal, isLowStock, lowStockDeals, matchFilter, normalizeShopeeItem, shelfDeals, sortDeals } from "../src/deals.js";
 import { discountPercent, formatVnd, isOneDong, shopeeUrl, vndFromMicro } from "../src/money.js";
 import { createRadar } from "../src/radar.js";
 import { acceptPhoneDeals, collectProducts, parseTikTokPayload, preferPhoneCatalog } from "../src/tiktok.js";
@@ -83,40 +83,29 @@ test("hết suất và còn ít suất", () => {
   assert.equal(isLowStock(plenty), false);
 });
 
-test("cột Shopee tách 1đ, 90% và sắp hết suất", () => {
-  const mild = normalizeShopeeItem(item({ stock: 30, flash_sale_stock: 40 }), session);
-  const scarce = normalizeShopeeItem(item({ itemid: 6, stock: 3, flash_sale_stock: 50, raw_discount: 36 }), session);
+test("cột Shopee hiện món dưới 50k và từ 50%", () => {
+  const cheap = normalizeShopeeItem(item({ itemid: 5, price: 1_500_000_000, raw_discount: 30, price_before_discount: 2_200_000_000, stock: 40, flash_sale_stock: 40 }), session);
+  const scarce = normalizeShopeeItem(item({ itemid: 6, stock: 3, flash_sale_stock: 50, raw_discount: 36, price: 20_000_000_000, price_before_discount: 32_000_000_000 }), session);
   const mid = normalizeShopeeItem(
-    item({ itemid: 7, raw_discount: 75, price: 250_000_000_000, price_before_discount: 1_000_000_000_000, stock: 30, flash_sale_stock: 40 }),
+    item({ itemid: 7, raw_discount: 75, price: 2_376_000_000, price_before_discount: 9_900_000_000, stock: 30, flash_sale_stock: 40 }),
     session,
   );
-  const deep = normalizeShopeeItem(
-    item({ itemid: 8, raw_discount: 91, price: 200_000_000_000, price_before_discount: 2_200_000_000_000, stock: 2, flash_sale_stock: 20 }),
-    session,
-  );
-  const one = normalizeShopeeItem(
-    item({ itemid: 9, price: 100_000, raw_discount: 99, price_before_discount: 5_000_000, stock: 1, flash_sale_stock: 10 }),
-    session,
-  );
-  assert.equal(huntTier(mild), "");
-  assert.equal(huntTier(mid), "");
-  assert.equal(huntTier(deep), "90");
-  assert.equal(huntTier(one), "1d");
-  assert.equal(isHuntDeal(mid), false);
-  const low = lowStockDeals([mild, scarce, mid, deep, one]);
-  assert.deepEqual(low.map((deal) => deal.itemId), [scarce.itemId]);
-  const shelf = shelfDeals([mild, scarce, mid, deep, one]);
-  assert.deepEqual(shelf.map((deal) => deal.itemId), [mid.itemId, mild.itemId]);
+  const plain = normalizeShopeeItem(item({ itemid: 11, raw_discount: 20, price: 80_000_000_000, price_before_discount: 100_000_000_000, stock: 30, flash_sale_stock: 40 }), session);
+  assert.equal(cheap.priceVnd, 15_000);
+  assert.deepEqual(cheapDeals([cheap, scarce, mid, plain]).map((deal) => deal.itemId), [cheap.itemId]);
+  assert.equal(halfOffDeals([cheap, scarce, mid, plain])[0].itemId, mid.itemId);
+  assert.deepEqual(lowStockDeals([cheap, scarce, mid, plain]).map((deal) => deal.itemId), [scarce.itemId]);
+  assert.deepEqual(shelfDeals([cheap, scarce, mid, plain]).map((deal) => deal.itemId), [plain.itemId]);
 });
 
 test("cột sâu nhất xếp món hời nhiều tiền lên trước", () => {
-  const coffee = normalizeShopeeItem(item({ stock: 30, flash_sale_stock: 40 }), session);
+  const coffee = normalizeShopeeItem(item({ stock: 30, flash_sale_stock: 40, raw_discount: 30, price: 80_000_000_000, price_before_discount: 120_000_000_000 }), session);
   const machine = normalizeShopeeItem(item({
     itemid: 2,
     name: "Máy",
     price: 332_900_000_000,
-    price_before_discount: 700_000_000_000,
-    raw_discount: 52,
+    price_before_discount: 500_000_000_000,
+    raw_discount: 33,
     stock: 30,
     flash_sale_stock: 40,
   }), session);
@@ -245,7 +234,7 @@ test("TikTok vẫn nhận giá 1.000đ khi mã tiền là VNĐ và sản phẩm 
 });
 
 test("TikTok giảm sâu từ 50% không kéo deal Shopee 63% sang cột đó", () => {
-  const shopee = normalizeShopeeItem(item({ stock: 30, flash_sale_stock: 40 }), session);
+  const shopee = normalizeShopeeItem(item({ stock: 30, flash_sale_stock: 40, raw_discount: 30, price: 80_000_000_000, price_before_discount: 120_000_000_000 }), session);
   const deep = { id: "tiktok:60", platform: "tiktok", discount: 60, oneDong: false, priceVnd: 20_000, soldOut: false };
   const mild = { id: "tiktok:48", platform: "tiktok", discount: 48, oneDong: false, priceVnd: 13_500, soldOut: false };
   const seventy = { id: "tiktok:75", platform: "tiktok", discount: 75, oneDong: false, priceVnd: 20_000, soldOut: false };

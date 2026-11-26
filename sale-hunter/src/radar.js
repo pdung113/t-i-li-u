@@ -20,9 +20,11 @@ export function createRadar() {
         const hunt = isHuntDeal(deal) || isDeepSale(deal);
         const low = isLowStock(deal);
         const wasHunt = prev ? prev.oneDong || prev.discount >= 90 || (deal.platform !== "shopee" && prev.discount >= 70) || (deal.platform === "tiktok" && prev.discount >= 50) : false;
+        const shopeeDeep = deal.platform === "shopee" && deal.discount >= 70;
+        const wasShopeeDeep = Boolean(prev && deal.platform === "shopee" && prev.discount >= 70);
         deal.isNew = !prev;
         deal.firstSeenAt = prev?.seenAt || now;
-        if (((hunt && !wasHunt) || (low && !prev?.low)) && !deal.soldOut) alerts.push(deal);
+        if (((hunt && !wasHunt) || (low && !prev?.low) || (shopeeDeep && !wasShopeeDeep)) && !deal.soldOut) alerts.push(deal);
         seen.set(deal.id, { discount: deal.discount, oneDong: deal.oneDong, low, seenAt: deal.firstSeenAt });
       }
       if (seen.size > 4000) {

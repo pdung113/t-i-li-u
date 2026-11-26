@@ -1,4 +1,4 @@
-import { isHuntDeal, lowStockDeals, normalizeSession, normalizeShopeeItem, shelfDeals } from "./deals.js";
+import { cheapDeals, halfOffDeals, isHuntDeal, lowStockDeals, normalizeSession, normalizeShopeeItem, shelfDeals } from "./deals.js";
 
 const ORIGIN = "https://shopee.vn";
 
@@ -53,6 +53,8 @@ export async function loadShopee(nowSec = Math.floor(Date.now() / 1000)) {
   return {
     sessions,
     deals: hunts,
+    cheap: cheapDeals(deals),
+    half: halfOffDeals(deals),
     low: lowStockDeals(deals),
     shelf: shelfDeals(deals),
     scanned: deals.length,

@@ -35,6 +35,8 @@ let state = {
   scanned: 0,
   deepest: 0,
   shopeeDeals: [],
+  shopeeCheap: [],
+  shopeeHalf: [],
   shopeeLow: [],
   shopeeShelf: [],
   deals: [],
@@ -57,6 +59,8 @@ function snapshot() {
       scanned: state.scanned,
       deepest: state.deepest,
       deals: state.shopeeDeals,
+      cheap: state.shopeeCheap || [],
+      half: state.shopeeHalf || [],
       low: state.shopeeLow || [],
       shelf: state.shopeeShelf,
     },
@@ -110,9 +114,12 @@ async function poll() {
       if (shopeeResult.status === "fulfilled") {
         const shopee = shopeeResult.value;
         const shopeeDeals = sortDeals(shopee.deals || [], "discount");
+        const shopeeCheap = shopee.cheap || [];
+        const shopeeHalf = shopee.half || [];
         const shopeeLow = shopee.low || [];
         const tiktokDeals = sortDeals(tiktok.deals || [], "discount");
-        const deals = [...shopeeDeals, ...shopeeLow, ...tiktokDeals];
+        const shopeeHot = shopeeHalf.filter((deal) => deal.oneDong || deal.discount >= 70);
+        const deals = [...shopeeDeals, ...shopeeLow, ...shopeeHot, ...tiktokDeals];
         const alerts = radar.take(deals);
         state = {
           ...state,
@@ -124,6 +131,8 @@ async function poll() {
           scanned: shopee.scanned || 0,
           deepest: shopee.deepest || 0,
           shopeeDeals,
+          shopeeCheap,
+          shopeeHalf,
           shopeeLow,
           shopeeShelf: shopee.shelf || [],
           deals,
@@ -164,7 +173,8 @@ function applyPhoneDeals(raw) {
   phoneCatalog = { ...accepted, checkedAt: Date.now() };
   tiktok = phoneCatalog;
   const tiktokDeals = sortDeals(tiktok.deals || [], "discount");
-  const deals = [...state.shopeeDeals, ...(state.shopeeLow || []), ...tiktokDeals];
+  const shopeeHot = (state.shopeeHalf || []).filter((deal) => deal.oneDong || deal.discount >= 70);
+  const deals = [...state.shopeeDeals, ...(state.shopeeLow || []), ...shopeeHot, ...tiktokDeals];
   const alerts = radar.take(deals);
   state = { ...state, ready: true, updatedAt: Date.now(), deals, alerts };
   publish(alerts);

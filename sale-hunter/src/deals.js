@@ -91,9 +91,31 @@ export function isLowStock(deal) {
   return total > 0 && left > 0 && left / total <= 0.3;
 }
 
+export function isCheapDeal(deal) {
+  return Boolean(deal) && !deal.soldOut && deal.priceVnd > 0 && deal.priceVnd <= 50_000 && deal.discount < 50;
+}
+
+export function isHalfOff(deal) {
+  return Boolean(deal) && !deal.soldOut && deal.discount >= 50;
+}
+
+export function cheapDeals(deals, limit = 16) {
+  return [...(deals || [])]
+    .filter(isCheapDeal)
+    .sort((a, b) => a.priceVnd - b.priceVnd || b.discount - a.discount || String(a.itemId).localeCompare(String(b.itemId)))
+    .slice(0, limit);
+}
+
+export function halfOffDeals(deals, limit = 16) {
+  return [...(deals || [])]
+    .filter(isHalfOff)
+    .sort((a, b) => b.discount - a.discount || a.priceVnd - b.priceVnd || String(a.itemId).localeCompare(String(b.itemId)))
+    .slice(0, limit);
+}
+
 export function lowStockDeals(deals) {
   return [...(deals || [])]
-    .filter((deal) => isLowStock(deal) && !deal.oneDong && deal.discount < 90)
+    .filter((deal) => isLowStock(deal) && !isCheapDeal(deal) && !isHalfOff(deal))
     .sort((a, b) => a.stock / a.stockTotal - b.stock / b.stockTotal || a.stock - b.stock || String(a.itemId).localeCompare(String(b.itemId)));
 }
 
@@ -115,7 +137,7 @@ export function isDeepSale(deal) {
 
 export function shelfDeals(deals, limit = 16) {
   return [...(deals || [])]
-    .filter((deal) => deal && !isHuntDeal(deal) && !isDeepSale(deal) && !isLowStock(deal) && deal.priceVnd > 0 && !deal.soldOut)
+    .filter((deal) => deal && !isHuntDeal(deal) && !isDeepSale(deal) && !isLowStock(deal) && !(deal.platform !== "tiktok" && (isCheapDeal(deal) || isHalfOff(deal))) && deal.priceVnd > 0 && !deal.soldOut)
     .sort((a, b) => (b.saveVnd || 0) - (a.saveVnd || 0) || b.discount - a.discount)
     .slice(0, limit);
 }
