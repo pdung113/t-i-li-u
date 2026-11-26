@@ -2,6 +2,7 @@ import { isDeepSale, isHuntDeal } from "./deals.js";
 import { formatVnd, isOneDong } from "./money.js";
 
 const SEARCH_URL = "https://shop.tiktok.com/vn/s?q=h%C3%A0ng%201%20%C4%91";
+export const TIKTOK_CATALOG_MS = 6 * 60 * 60 * 1000;
 const WORDS = ["hàng 1 đ", "1 đồng", "1.000đ", "1k", "giảm 90%", "giảm 70%", "flash sale"];
 
 function blocked(message) {
@@ -529,7 +530,7 @@ export function boardTikTok(found) {
 
 export function keepTikTokCatalog(previous, next, now = Date.now()) {
   const has = (value) => (value?.scanned || 0) > 0 || (value?.deals || []).length > 0 || (value?.shelf || []).length > 0;
-  const fresh = previous && now - (previous.checkedAt || 0) < 10 * 60 * 1000;
+  const fresh = previous && now - (previous.checkedAt || 0) < TIKTOK_CATALOG_MS;
   if (!has(next)) {
     if (has(previous) && fresh) return previous;
     return next;

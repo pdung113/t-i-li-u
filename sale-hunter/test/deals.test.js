@@ -154,7 +154,8 @@ test("lượt TikTok rỗng không xóa món vừa đọc", () => {
   const empty = { scanned: 0, deals: [], shelf: [], checkedAt: 2_000, region: "" };
   assert.equal(keepTikTokCatalog(previous, empty, 2_000).scanned, 8);
   assert.equal(keepTikTokCatalog(empty, previous, 2_000).scanned, 8);
-  assert.equal(keepTikTokCatalog(previous, empty, 1_000 + 11 * 60 * 1000).scanned, 0);
+  assert.equal(keepTikTokCatalog(previous, empty, 1_000 + 11 * 60 * 1000).scanned, 8);
+  assert.equal(keepTikTokCatalog(previous, empty, 1_000 + 6 * 60 * 60 * 1000 + 1).scanned, 0);
 });
 
 test("TikTok ngoài Việt Nam không bịa giá sale", () => {

@@ -6,21 +6,59 @@ import { fileURLToPath } from "node:url";
 import { sortDeals } from "./src/deals.js";
 import { createRadar } from "./src/radar.js";
 import { loadShopee } from "./src/shopee.js";
-import { TIKTOK_SEARCH_URL, acceptPhoneDeals, keepTikTokCatalog, loadTikTok, preferPhoneCatalog } from "./src/tiktok.js";
+import { TIKTOK_CATALOG_MS, TIKTOK_SEARCH_URL, acceptPhoneDeals, keepTikTokCatalog, loadTikTok, preferPhoneCatalog } from "./src/tiktok.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
+const catalogPath = path.join(root, "data", "tiktok-catalog.json");
 const port = Number(process.env.PORT) || 8787;
+
+function readTikTokCatalog() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
+    const count = (saved.deals || []).length + (saved.shelf || []).length;
+    if (count > 0 && Date.now() - (saved.checkedAt || 0) < TIKTOK_CATALOG_MS) return { ...saved, ok: true };
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function writeTikTokCatalog(catalog) {
+  const deals = catalog?.deals || [];
+  const shelf = catalog?.shelf || [];
+  if (deals.length + shelf.length === 0) return;
+  fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+  fs.writeFileSync(
+    catalogPath,
+    JSON.stringify({
+      ok: true,
+      deals,
+      shelf,
+      scanned: catalog.scanned || deals.length + shelf.length,
+      deepest: catalog.deepest || 0,
+      region: catalog.region || "",
+      shop: catalog.shop || "",
+      received: catalog.received || 0,
+      pageStatus: catalog.pageStatus || 0,
+      apiStatus: catalog.apiStatus || 0,
+      message: catalog.message || `TikTok Shop Việt Nam · ${deals.length + shelf.length} món`,
+      openUrl: catalog.openUrl || TIKTOK_SEARCH_URL,
+      checkedAt: catalog.checkedAt || Date.now(),
+    }),
+  );
+}
+
 const pollMs = Number(process.env.POLL_MS) || 15_000;
 
 const radar = createRadar();
 const clients = new Set();
 const phoneKey = crypto.randomBytes(16).toString("hex");
 let phoneCatalog = null;
-let tiktok = {
+let tiktok = readTikTokCatalog() || {
   ok: false,
   deals: [],
-  message: "Đang thử TikTok Shop…",
+  message: "Đang quét TikTok Shop Việt Nam…",
   openUrl: TIKTOK_SEARCH_URL,
   checkedAt: 0,
 };
@@ -120,6 +158,7 @@ async function poll() {
           console.log(`TikTok: Việt Nam · trang ${next.pageStatus || 0} · dữ liệu ${next.apiStatus || 0} · nhận ${next.received || 0} · đọc ${next.scanned || 0} · hiện ${shown}`);
         }
         tiktok = next;
+        writeTikTokCatalog(tiktok);
       }
       if (shopeeResult.status === "fulfilled") {
         const shopee = shopeeResult.value;

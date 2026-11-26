@@ -300,7 +300,6 @@ h1 { margin: 0; font-size: 40px; line-height: 0.95; font-weight: 800; }
   background: rgba(255, 183, 3, 0.08);
 }
 .tiktok-gap p { margin: 0; color: var(--muted); }
-.board.tiktok:not(.has-deals) .cols { display: none; }
 .board.tiktok.has-deals .tiktok-gap { display: none; }
 .phone h2 { margin: 0 0 6px; font-size: 20px; }
 .phone p { margin: 0; color: var(--muted); }

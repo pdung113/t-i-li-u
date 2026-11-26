@@ -232,7 +232,7 @@ function renderGrid() {
   const shown = cheap.length + half.length + shopeeLow.length + shopeeShelf.length + tiktok.filter((deal) => !deal.soldOut).length + tiktokShelf.length;
   els.hunt.className = "hunt" + (shown ? " hit" : "");
   if (!snapshot?.ready) {
-    els.hunt.textContent = "Đang quét giờ vàng Shopee. Cột trống sẽ ẩn. TikTok chỉ hiện khi có món đọc từ trang shop.";
+    els.hunt.textContent = "Đang quét giờ vàng Shopee và TikTok Shop Việt Nam.";
   } else if (shown) {
     const tiktokShown = tiktok.filter((deal) => !deal.soldOut).length + tiktokShelf.length;
     els.hunt.textContent = `TikTok ${tiktokShown} món. Shopee ${cheap.length} dưới 50.000đ, ${half.length} từ 50%. Bấm Mua ngay.`;
@@ -262,7 +262,7 @@ function paintColumn(prefix, id, list) {
   const empty = document.querySelector(`#${prefix}-${id}-empty`);
   const grid = document.querySelector(`#${prefix}-${id}`);
   const column = grid?.closest(".col");
-  if (column && prefix === "shopee") column.hidden = Boolean(snapshot?.ready) && list.length === 0;
+  if (column) column.hidden = false;
   if (count) count.textContent = String(list.length);
   if (empty) empty.textContent = emptyLabel(prefix, list);
   if (grid) fillGrid(grid, list);
@@ -270,7 +270,7 @@ function paintColumn(prefix, id, list) {
 
 function emptyLabel(prefix, list) {
   if (!snapshot?.ready || list.length > 0) return "";
-  if (prefix === "tiktok" && !(snapshot.tiktok?.scanned > 0)) return "Trang gửi 0 món";
+  if (prefix === "tiktok" && !(snapshot.tiktok?.scanned > 0)) return "Đang quét…";
   return "Chưa có";
 }
 
