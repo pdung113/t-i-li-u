@@ -160,7 +160,7 @@ function renderStatus() {
   } else if (tiktokDeals.length) {
     els.tiktokMeta.textContent = `${tiktok.message} · quét mỗi ${every}s`;
   } else if (!(tiktok.scanned > 0)) {
-    els.tiktokMeta.textContent = "TikTok không gửi danh sách về máy chủ. Mở Hàng 1 đ hoặc Giảm 70%, rồi bấm Săn sale để đổ deal -70% vào cột.";
+    els.tiktokMeta.textContent = tiktok.message || "TikTok chỉ gửi giá cho máy đang ở Việt Nam. Chạy npm run sale trên máy đó.";
   } else {
     els.tiktokMeta.append(document.createTextNode(`${tiktok.message || `Đã xem ${tiktok.scanned || 0} món, chưa có món từ 1.200đ trở xuống, -90% hay -70%.`} `));
     els.tiktokMeta.append(shopLink(tiktok.openUrl, "Mở TikTok"));
@@ -222,6 +222,8 @@ function renderGrid() {
   renderColumns("tiktok", tiktok, tiktokShelf);
   const tiktokLive = (snapshot?.tiktok?.scanned || 0) > 0 || tiktok.length > 0 || tiktokShelf.length > 0;
   document.querySelector("#tiktok-board")?.classList.toggle("has-deals", tiktokLive);
+  const gapText = document.querySelector("#tiktok-gap-text");
+  if (gapText && snapshot?.tiktok?.message && !tiktokLive) gapText.textContent = snapshot.tiktok.message;
   const shown = cheap.length + half.length + shopeeLow.length + shopeeShelf.length + tiktok.filter((deal) => !deal.soldOut).length + tiktokShelf.length;
   els.hunt.className = "hunt" + (shown ? " hit" : "");
   if (!snapshot?.ready) {

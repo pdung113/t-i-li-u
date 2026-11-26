@@ -71,6 +71,7 @@ function snapshot() {
       checkedAt: tiktok.checkedAt,
       scanned: tiktok.scanned || 0,
       deepest: tiktok.deepest || 0,
+      region: tiktok.region || "",
       source: tiktok.source || "",
       count: tiktok.deals?.length || 0,
       deals: tiktok.deals || [],
