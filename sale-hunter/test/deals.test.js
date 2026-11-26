@@ -460,6 +460,9 @@ test("TikTok edge US-TTP vẫn hiện đủ món và giữ sau lượt rỗng", 
   const words = [];
   const original = globalThis.fetch;
   globalThis.fetch = async (url, options = {}) => {
+    assert.match(options.headers.Cookie, /store-country-code=vn/);
+    assert.match(options.headers.Cookie, /tt-target-idc=sg1/);
+    assert.equal(options.headers["x-tt-store-region"], "vn");
     const target = String(url);
     if (target.includes("product_list")) {
       const body = JSON.parse(options.body);

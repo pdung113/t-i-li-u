@@ -432,7 +432,8 @@ function shopHeaders(word) {
   return {
     Accept: "text/html,application/json",
     "Accept-Language": "vi-VN,vi;q=0.9",
-    Cookie: "store-country-code=vn",
+    Cookie: "store-country-code=vn; store-country-src=uid; tt-target-idc=sg1",
+    "x-tt-store-region": "vn",
     Origin: "https://shop.tiktok.com",
     Referer: `https://shop.tiktok.com/vn/s?q=${encodeURIComponent(word)}`,
     "User-Agent":
@@ -446,7 +447,7 @@ async function postProductList(word) {
   let pageToken = "";
   let status = 0;
   for (let page = 0; page < 3; page += 1) {
-    const response = await fetch("https://shop.tiktok.com/api/shop/brandy_desktop/s/product_list?region=VN", {
+    const response = await fetch("https://shop.tiktok.com/api/shop/brandy_desktop/s/product_list?region=VN&locale=vi-VN", {
       method: "POST",
       headers: { ...shopHeaders(word), Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({
