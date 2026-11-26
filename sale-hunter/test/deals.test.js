@@ -3,7 +3,7 @@ import test from "node:test";
 import { huntTier, isDeepSale, isHuntDeal, matchFilter, normalizeShopeeItem, shelfDeals, sortDeals } from "../src/deals.js";
 import { discountPercent, formatVnd, isOneDong, shopeeUrl, vndFromMicro } from "../src/money.js";
 import { createRadar } from "../src/radar.js";
-import { parseTikTokPayload } from "../src/tiktok.js";
+import { collectProducts, parseTikTokPayload } from "../src/tiktok.js";
 
 const session = { id: 1, label: "09:00–12:00", end: 1_700_000_000, ongoing: true };
 
@@ -193,6 +193,32 @@ test("TikTok đọc giá 1.000đ trên trang tìm hàng 1 đ", () => {
   assert.equal(huntTier(deal), "1d");
   assert.equal(deal.soldCount, 81);
   assert.equal(deal.url, "https://shop.tiktok.com/vn/pdp/set-khan-lau-bep/1729605786167118290");
+});
+
+test("TikTok vẫn nhận giá 1.000đ khi mã tiền là VNĐ và sản phẩm nằm sâu trong trang", () => {
+  const nested = {
+    loaderData: {
+      page: {
+        page_config: {
+          components_map: [{
+            component_data: {
+              products: [{
+                id: "99",
+                title: "Khăn 1.000đ",
+                product_price_info: { currency_name: "VNĐ", sale_price_decimal: "1000", raw_origin_price_decimal: "10000" },
+              }],
+            },
+          }],
+        },
+      },
+    },
+  };
+  const products = collectProducts(nested);
+  assert.equal(products.length, 1);
+  const parsed = parseTikTokPayload({ products });
+  assert.equal(parsed.deals[0].priceVnd, 1000);
+  assert.equal(parsed.deals[0].oneDong, true);
+  assert.equal(huntTier(parsed.deals[0]), "1d");
 });
 
 test("TikTok giảm sâu từ 50% không kéo deal Shopee 63% sang cột đó", () => {

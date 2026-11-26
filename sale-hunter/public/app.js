@@ -188,7 +188,7 @@ function renderGrid() {
   } else if (shown) {
     const tiktokEmpty = snapshot?.tiktok?.ok && !(snapshot.tiktok.scanned > 0);
     els.hunt.textContent = tiktokEmpty
-      ? "Shopee chưa có món từ 1.200đ trở xuống hay giảm từ 70%. TikTok web trả danh sách rỗng, nên deal giá thấp trên app chưa hiện ở đây."
+      ? "Mốc ≤1.200đ không xóa deal TikTok. Web TikTok gửi 0 sản phẩm, nên cột đó không có món để hiện."
       : "Chưa có deal từ 1.200đ trở xuống, -90% hay -70%. Cột Sâu nhất đang có deal để mua, bấm Mua ngay.";
   } else {
     els.hunt.textContent = "Chưa đọc được deal nào. Vẫn quét liên tục.";
@@ -209,8 +209,14 @@ function paintColumn(prefix, id, list) {
   const empty = document.querySelector(`#${prefix}-${id}-empty`);
   const grid = document.querySelector(`#${prefix}-${id}`);
   if (count) count.textContent = String(list.length);
-  if (empty) empty.textContent = snapshot?.ready && list.length === 0 ? "Chưa có" : "";
+  if (empty) empty.textContent = emptyLabel(prefix, list);
   if (grid) fillGrid(grid, list);
+}
+
+function emptyLabel(prefix, list) {
+  if (!snapshot?.ready || list.length > 0) return "";
+  if (prefix === "tiktok" && !(snapshot.tiktok?.scanned > 0)) return "Web gửi 0 món";
+  return "Chưa có";
 }
 
 function fillGrid(grid, deals) {

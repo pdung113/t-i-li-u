@@ -25,8 +25,8 @@ export function parseTikTokPayload(body) {
     const itemId = raw.id || raw.product_id || raw.productId;
     const name = String(raw.title || raw.name || "").trim();
     const info = raw.product_price_info || {};
-    const currency = String(info.currency_name || info.currency || raw.currency || "VND").toUpperCase();
-    if (!itemId || !name || (currency !== "VND" && currency !== "₫")) continue;
+    const currency = currencyCode(info, raw);
+    if (!itemId || !name || currency !== "VND") continue;
     const priceVnd = vndAmount(info.sale_price_decimal ?? info.sale_price_format ?? info.sale_price ?? raw.price ?? raw.priceVnd ?? raw.sale_price, currency);
     const wasVnd = vndAmount(
       info.raw_origin_price_decimal ?? info.raw_origin_price_format ?? info.origin_price_decimal ?? info.original_price ?? raw.originalPrice ?? raw.original_price ?? raw.wasVnd,
@@ -102,6 +102,12 @@ function imageUrl(raw) {
   return "";
 }
 
+function currencyCode(info, raw) {
+  const rawCode = String(info.currency_name || info.currency || raw.currency || info.currency_symbol || "VND").trim().toUpperCase();
+  if (rawCode === "VND" || rawCode === "VNĐ" || rawCode === "₫" || rawCode === "Đ") return "VND";
+  return rawCode;
+}
+
 function vndAmount(value, currency = "VND") {
   if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
   if (typeof value !== "string") return 0;
@@ -160,7 +166,7 @@ export async function loadTikTok() {
       ? `TikTok Shop Việt Nam · ${deals.length} deal`
       : scanned
         ? `TikTok Shop Việt Nam · đã xem ${scanned} món, chưa có món từ 1.200đ trở xuống, -90%, -70% hay giảm sâu từ 50%.${depth}`
-        : "TikTok Shop web trả lời thành công nhưng danh sách sản phẩm rỗng. App điện thoại thấy deal giá thấp, web từ máy này không gửi sản phẩm về.",
+        : "Mốc ≤1.200đ chưa lọc được món nào: TikTok web gửi 0 sản phẩm. Deal 1.000đ trên app không có trong danh sách này.",
     openUrl: SEARCH_URL,
   };
 }
@@ -189,20 +195,23 @@ async function readSearchPage(word) {
   return collectProducts(JSON.parse(match[1]));
 }
 
-function collectProducts(node, found = [], depth = 0) {
-  if (!node || depth > 8) return found;
+export function collectProducts(node, found = [], depth = 0) {
+  if (!node || depth > 12) return found;
   if (Array.isArray(node)) {
-    if (node.some((item) => item && typeof item === "object" && (item.product_id || item.productId))) {
-      found.push(...node);
-    } else {
-      for (const item of node) collectProducts(item, found, depth + 1);
-    }
+    if (node.some(isProductRecord)) found.push(...node.filter(isProductRecord));
+    else for (const item of node) collectProducts(item, found, depth + 1);
     return found;
   }
   if (typeof node === "object") {
     for (const value of Object.values(node)) collectProducts(value, found, depth + 1);
   }
   return found;
+}
+
+function isProductRecord(item) {
+  if (!item || typeof item !== "object") return false;
+  const id = item.product_id || item.productId || item.id;
+  return Boolean(id && (item.title || item.name || item.product_price_info));
 }
 
 function shopHeaders(word) {
