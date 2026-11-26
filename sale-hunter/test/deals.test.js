@@ -4,7 +4,7 @@ import { huntTier, isDeepSale, isHuntDeal, isLowStock, lowStockDeals, matchFilte
 import { discountPercent, formatVnd, isOneDong, shopeeUrl, vndFromMicro } from "../src/money.js";
 import { createRadar } from "../src/radar.js";
 import { acceptPhoneDeals, collectProducts, parseTikTokPayload, preferPhoneCatalog } from "../src/tiktok.js";
-import { dealsFromRouter, hunterReturnUrl, tierOfPrice } from "../src/page-deals.js";
+import { dealsFromCardTexts, dealsFromRouter, hunterReturnUrl, tierOfPrice } from "../src/page-deals.js";
 
 const session = { id: 1, label: "09:00–12:00", end: 1_700_000_000, ongoing: true };
 
@@ -333,6 +333,42 @@ test("nút điện thoại đọc deal 1.000đ trong trang TikTok", () => {
   assert.equal(deals[0].priceVnd, 1000);
   assert.equal(tierOfPrice(deals[0]), "≤1.200đ");
   assert.equal(deals[0].url, "https://shop.tiktok.com/vn/pdp/khan/42");
+});
+
+test("deal -70% trên trang hàng 1 đ vào cột Từ 70%", () => {
+  const cards = [
+    {
+      text: "Túi rác có dây rút dày, cảm giác mát lạnh\n626đ",
+      url: "https://shop.tiktok.com/vn/pdp/tui-rac/1729000001",
+    },
+    {
+      text: "[DEAL SỐC 18K] LỐC 10 GÓI Khăn Giấy\n-74%\n17.999đ\n69.999đ",
+      url: "https://shop.tiktok.com/vn/pdp/khan-giay/1729000002",
+    },
+    {
+      text: "Cường lực iphone 14 ProMax\n-70%\n11.999đ",
+      url: "https://shop.tiktok.com/vn/pdp/cuong-luc/1729000003",
+    },
+    {
+      text: "Đế lót nồi gỗ\n-70%\n8.999đ",
+      url: "https://shop.tiktok.com/us/pdp/de-lot/1729000004",
+    },
+  ];
+  const found = dealsFromCardTexts(cards);
+  assert.equal(found.length, 3);
+  assert.equal(found[0].priceVnd, 626);
+  assert.equal(tierOfPrice(found[0]), "≤1.200đ");
+  assert.equal(found[1].priceVnd, 17999);
+  assert.equal(found[1].discount, 74);
+  assert.equal(tierOfPrice(found[1]), "Từ 70%");
+  assert.equal(tierOfPrice(found[2]), "Từ 70%");
+  const token = new URL(hunterReturnUrl("http://127.0.0.1:8787", found)).hash.slice("#tiktok=".length);
+  const accepted = acceptPhoneDeals(token);
+  assert.deepEqual(
+    accepted.deals.map((deal) => deal.priceVnd).sort((a, b) => a - b),
+    [626, 11999, 17999],
+  );
+  assert.equal(accepted.deals.filter((deal) => deal.discount >= 70).length, 2);
 });
 
 test("slug giữ link sạch", () => {

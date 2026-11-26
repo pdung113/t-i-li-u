@@ -32,6 +32,45 @@ export function tierOfPrice(deal) {
   return "Sâu nhất";
 }
 
+export function dealFromCardText(text, url) {
+  const raw = String(text || "");
+  const discountMatch = raw.match(/-(\d{1,2})\s*%/);
+  const priceMatch = raw.match(/(\d{1,3}(?:\.\d{3})+|\d+)\s*đ/i);
+  if (!priceMatch) return null;
+  const priceVnd = vndAmount(priceMatch[1], "VND");
+  if (priceVnd <= 0) return null;
+  const discount = discountMatch ? Math.min(99, Number(discountMatch[1])) : 0;
+  const wasVnd = discount > 0 && discount < 100 ? Math.round(priceVnd / (1 - discount / 100)) : 0;
+  const name = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 8 && !/^\d|^-\d|đ$|free shipping|đã bán|xem thêm/i.test(line));
+  if (!name) return null;
+  const itemId = String(url || "").match(/(\d+)(?!.*\d)/)?.[1] || "";
+  const href = vietnamUrl(url, itemId);
+  if (!href) return null;
+  return {
+    name: name.slice(0, 180),
+    priceVnd,
+    wasVnd: wasVnd > priceVnd ? wasVnd : 0,
+    discount,
+    url: href,
+    saveVnd: wasVnd > priceVnd ? wasVnd - priceVnd : 0,
+  };
+}
+
+export function dealsFromCardTexts(cards) {
+  const deals = [];
+  const seen = new Set();
+  for (const card of cards || []) {
+    const deal = dealFromCardText(card?.text, card?.url);
+    if (!deal || seen.has(deal.url)) continue;
+    seen.add(deal.url);
+    deals.push(deal);
+  }
+  return deals;
+}
+
 function collect(node, found, depth) {
   if (!node || depth > 12) return;
   if (Array.isArray(node)) {
@@ -107,11 +146,20 @@ export function startPhoneScan(origin) {
       deals = [];
     }
   }
+  if (onVietnamShop && !deals.length) {
+    deals = dealsFromCardTexts(readVisibleCards(document));
+  }
   if (onVietnamShop && deals.length && origin) {
     location.assign(hunterReturnUrl(origin, deals));
     return;
   }
   renderPanel(onVietnamShop, deals);
+}
+
+function readVisibleCards(doc) {
+  return [...doc.querySelectorAll('a[href*="/vn/"]')]
+    .map((anchor) => ({ text: anchor.innerText || "", url: anchor.href }))
+    .filter((card) => /đ/i.test(card.text) && /\/vn\/(pdp|view)/.test(card.url));
 }
 
 function renderPanel(onVietnamShop, deals) {

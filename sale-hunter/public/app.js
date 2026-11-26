@@ -143,7 +143,7 @@ function renderStatus() {
   } else if (tiktokDeals.length) {
     els.tiktokMeta.textContent = `${tiktok.message} · quét mỗi ${every}s`;
   } else if (!(tiktok.scanned > 0)) {
-    els.tiktokMeta.textContent = "Máy chủ không nhận được danh sách TikTok. Dùng nút Săn sale trên điện thoại để đổ deal về đây.";
+    els.tiktokMeta.textContent = "Trang hàng 1 đ có deal -70%. Máy chủ nhận danh sách rỗng. Bấm Săn sale trên trang đó để đổ vào cột Từ 70%.";
   } else {
     els.tiktokMeta.append(document.createTextNode(`${tiktok.message || `Đã xem ${tiktok.scanned || 0} món, chưa có món từ 1.200đ trở xuống, -90% hay -70%.`} `));
     els.tiktokMeta.append(shopLink(tiktok.openUrl, "Mở TikTok"));
