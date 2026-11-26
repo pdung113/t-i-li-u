@@ -96,6 +96,13 @@ export function isHuntDeal(deal) {
   return Boolean(huntTier(deal));
 }
 
+export function shelfDeals(deals, limit = 8) {
+  return [...(deals || [])]
+    .filter((deal) => deal && !isHuntDeal(deal) && deal.priceVnd > 0)
+    .sort((a, b) => Number(a.soldOut) - Number(b.soldOut) || b.discount - a.discount || b.saveVnd - a.saveVnd)
+    .slice(0, limit);
+}
+
 export function matchFilter(deal, filter) {
   switch (filter) {
     case "1d":

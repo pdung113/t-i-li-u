@@ -1,4 +1,4 @@
-import { isHuntDeal, normalizeSession, normalizeShopeeItem } from "./deals.js";
+import { isHuntDeal, normalizeSession, normalizeShopeeItem, shelfDeals } from "./deals.js";
 
 const ORIGIN = "https://shopee.vn";
 
@@ -53,6 +53,7 @@ export async function loadShopee(nowSec = Math.floor(Date.now() / 1000)) {
   return {
     sessions,
     deals: hunts,
+    shelf: shelfDeals(deals),
     scanned: deals.length,
     deepest,
     watched: `Shopee Việt Nam · ${ongoing.label}`,

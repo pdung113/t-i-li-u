@@ -1,4 +1,4 @@
-import { isHuntDeal } from "./deals.js";
+import { isHuntDeal, shelfDeals } from "./deals.js";
 import { formatVnd } from "./money.js";
 
 const SEARCH_URL = "https://shop.tiktok.com/vn/s?q=1%C4%91";
@@ -112,30 +112,31 @@ function numberPrice(value) {
 
 export async function loadTikTok() {
   const seen = new Set();
-  const deals = [];
+  const found = [];
   let scanned = 0;
   let deepest = 0;
   try {
     for (const word of WORDS) {
       const body = await searchVietnam(word);
       const parsed = parseTikTokPayload(body);
-      if (!parsed.ok && body?.code === 10000) return { ...parsed, scanned, deepest };
+      if (!parsed.ok && body?.code === 10000) return { ...parsed, scanned, deepest, shelf: [] };
       for (const deal of parsed.deals) {
+        if (seen.has(deal.id) || !deal.url.startsWith("https://shop.tiktok.com/vn/")) continue;
+        seen.add(deal.id);
         scanned += 1;
         deepest = Math.max(deepest, deal.discount || 0);
-        if (seen.has(deal.id) || !isHuntDeal(deal)) continue;
-        if (!deal.url.startsWith("https://shop.tiktok.com/vn/")) continue;
-        seen.add(deal.id);
-        deals.push(deal);
+        found.push(deal);
       }
     }
   } catch {
-    return { ...blocked("Không kết nối được TikTok Shop Việt Nam lúc này."), scanned, deepest };
+    return { ...blocked("Không kết nối được TikTok Shop Việt Nam lúc này."), scanned, deepest, shelf: [] };
   }
+  const deals = found.filter(isHuntDeal);
   const depth = deepest ? ` Sâu nhất đã thấy -${deepest}%.` : "";
   return {
     ok: true,
     deals,
+    shelf: shelfDeals(found),
     scanned,
     deepest,
     message: deals.length

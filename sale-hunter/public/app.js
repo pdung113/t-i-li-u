@@ -46,8 +46,8 @@ function tierOf(deal) {
   return "";
 }
 
-function isHunt(deal) {
-  if (!deal || !tierOf(deal) || !deal.url) return false;
+function allowed(deal) {
+  if (!deal?.url) return false;
   try {
     const parsed = new URL(deal.url);
     if (parsed.protocol !== "https:") return false;
@@ -57,6 +57,10 @@ function isHunt(deal) {
     return false;
   }
   return false;
+}
+
+function isHunt(deal) {
+  return Boolean(deal) && Boolean(tierOf(deal)) && allowed(deal);
 }
 
 function rank(deal) {
@@ -88,6 +92,11 @@ function sortDeals(list) {
 function visibleDeals(deals) {
   const q = els.q.value.trim().toLowerCase();
   return sortDeals((deals || []).filter((deal) => isHunt(deal) && (!q || deal.name.toLowerCase().includes(q))));
+}
+
+function visibleShelf(deals) {
+  const q = els.q.value.trim().toLowerCase();
+  return sortDeals((deals || []).filter((deal) => allowed(deal) && !tierOf(deal) && deal.priceVnd > 0 && (!q || deal.name.toLowerCase().includes(q))));
 }
 
 function renderStatus() {
@@ -164,30 +173,39 @@ function renderControls() {
 function renderGrid() {
   const shopee = visibleDeals(snapshot?.shopee?.deals);
   const tiktok = visibleDeals(snapshot?.tiktok?.deals);
-  renderColumns("shopee", shopee);
-  renderColumns("tiktok", tiktok);
+  const shopeeShelf = visibleShelf(snapshot?.shopee?.shelf);
+  const tiktokShelf = visibleShelf(snapshot?.tiktok?.shelf);
+  renderColumns("shopee", shopee, shopeeShelf);
+  renderColumns("tiktok", tiktok, tiktokShelf);
   const hits = [...shopee, ...tiktok].filter((deal) => !deal.soldOut);
-  els.hunt.className = "hunt" + (hits.length ? " hit" : "");
+  const shown = hits.length + shopeeShelf.filter((deal) => !deal.soldOut).length + tiktokShelf.filter((deal) => !deal.soldOut).length;
+  els.hunt.className = "hunt" + (shown ? " hit" : "");
   if (!snapshot?.ready) {
-    els.hunt.textContent = "Đang quét Shopee và TikTok. Mỗi sàn có ba cột: 1đ, từ 90%, từ 70%.";
+    els.hunt.textContent = "Đang quét Shopee và TikTok. Cột 1đ, từ 90% và từ 70% chỉ nhận đúng mốc. Cột Sâu nhất giữ deal đang bán.";
   } else if (hits.length) {
-    els.hunt.textContent = `${hits.length} deal đang nằm đúng cột. Bấm Mua ngay.`;
+    els.hunt.textContent = `${hits.length} deal đúng mốc. Cột Sâu nhất là deal chưa tới 70%. Bấm Mua ngay.`;
+  } else if (shown) {
+    els.hunt.textContent = "Chưa có 1đ, -90% hay -70%. Cột Sâu nhất đang có deal để mua, bấm Mua ngay.";
   } else {
-    els.hunt.textContent = "Chưa có deal 1đ, -90% hay -70% trên cả hai sàn. Vẫn quét liên tục, có là vào đúng cột và kêu.";
+    els.hunt.textContent = "Chưa đọc được deal nào. Vẫn quét liên tục.";
   }
-  document.title = hits.length ? `(${hits.length}) Săn 1đ · -90% · -70%` : "Săn 1đ, -90% và -70%";
+  document.title = shown ? `(${shown}) Săn sale` : "Săn 1đ, -90% và -70%";
 }
 
-function renderColumns(prefix, deals) {
+function renderColumns(prefix, deals, shelf) {
   for (const [id] of TIERS) {
-    const list = deals.filter((deal) => tierOf(deal) === id);
-    const count = document.querySelector(`#${prefix}-${id}-count`);
-    const empty = document.querySelector(`#${prefix}-${id}-empty`);
-    const grid = document.querySelector(`#${prefix}-${id}`);
-    if (count) count.textContent = String(list.length);
-    if (empty) empty.textContent = snapshot?.ready && list.length === 0 ? "Chưa có" : "";
-    if (grid) fillGrid(grid, list);
+    paintColumn(prefix, id, deals.filter((deal) => tierOf(deal) === id));
   }
+  paintColumn(prefix, "near", shelf || []);
+}
+
+function paintColumn(prefix, id, list) {
+  const count = document.querySelector(`#${prefix}-${id}-count`);
+  const empty = document.querySelector(`#${prefix}-${id}-empty`);
+  const grid = document.querySelector(`#${prefix}-${id}`);
+  if (count) count.textContent = String(list.length);
+  if (empty) empty.textContent = snapshot?.ready && list.length === 0 ? "Chưa có" : "";
+  if (grid) fillGrid(grid, list);
 }
 
 function fillGrid(grid, deals) {

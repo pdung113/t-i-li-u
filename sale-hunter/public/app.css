@@ -68,7 +68,7 @@ h1 { margin: 0; font-size: 40px; line-height: 0.95; font-weight: 800; }
 }
 .cols {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 .col {
@@ -244,7 +244,10 @@ h1 { margin: 0; font-size: 40px; line-height: 0.95; font-weight: 800; }
   box-shadow: 0 12px 40px rgba(0,0,0,.35);
 }
 .toast a { font-weight: 800; }
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
+  .cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
   .cols { grid-template-columns: 1fr; }
 }
 @media (max-width: 720px) {

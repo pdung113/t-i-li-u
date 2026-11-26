@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { huntTier, isHuntDeal, matchFilter, normalizeShopeeItem, sortDeals } from "../src/deals.js";
+import { huntTier, isHuntDeal, matchFilter, normalizeShopeeItem, shelfDeals, sortDeals } from "../src/deals.js";
 import { discountPercent, formatVnd, isOneDong, shopeeUrl, vndFromMicro } from "../src/money.js";
 import { createRadar } from "../src/radar.js";
 import { parseTikTokPayload } from "../src/tiktok.js";
@@ -83,6 +83,8 @@ test("cột tách 1đ, từ 90% và từ 70%", () => {
   assert.equal(huntTier(one), "1d");
   assert.equal(isHuntDeal(mild), false);
   assert.equal(isHuntDeal(mid), true);
+  const shelf = shelfDeals([mild, mid, deep, one]);
+  assert.deepEqual(shelf.map((deal) => deal.itemId), [mild.itemId]);
 });
 
 test("lọc 90% không nhận deal 63%", () => {
