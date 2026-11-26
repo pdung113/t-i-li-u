@@ -1,0 +1,11 @@
+{
+  "name": "sale-hunter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Canh flash sale Shopee và TikTok Shop: 1đ, giảm từ 90%, link mua, cập nhật liên tục.",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/deals.test.js"
+  }
+}

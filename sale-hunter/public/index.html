@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Săn sale Shopee và TikTok</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <p class="mark">Việt Nam · dưới 50k · từ 50% · sâu nhất</p>
+      <h1>Săn sale</h1>
+    </div>
+    <div class="live" id="live">
+      <span class="dot"></span>
+      <span id="live-text">Đang nối</span>
+    </div>
+    <time id="clock"></time>
+  </header>
+
+  <p class="hunt" id="hunt"></p>
+
+  <section class="toolbar">
+    <label class="search">
+      <span>Tìm deal</span>
+      <input id="q" type="search" placeholder="sữa, ốp, cà phê…" autocomplete="off">
+    </label>
+    <p class="sorts" id="sorts"></p>
+    <button type="button" id="sound" class="toggle">Bật tiếng</button>
+    <button type="button" id="notify" class="toggle">Báo trình duyệt</button>
+  </section>
+
+  <div class="boards">
+    <section class="board tiktok" id="tiktok-board">
+      <h2>TikTok Shop</h2>
+      <p class="meta-line" id="tiktok-meta">Đang quét TikTok Shop Việt Nam…</p>
+      <div class="tiktok-gap" id="tiktok-gap">
+        <p id="tiktok-gap-text"></p>
+        <p class="phone-actions">
+          <a id="phone-scan" href="#">Săn sale</a>
+          <button type="button" id="phone-copy">Chép nút</button>
+          <a href="https://shop.tiktok.com/vn/s?q=h%C3%A0ng%201%20%C4%91" target="_blank" rel="noopener noreferrer">Hàng 1 đ</a>
+          <a href="https://shop.tiktok.com/vn/s?q=gi%E1%BA%A3m%2070%25" target="_blank" rel="noopener noreferrer">Giảm 70%</a>
+        </p>
+      </div>
+      <div class="cols">
+        <div class="col scroll"><h3>≤1.200đ <span id="tiktok-1d-count">0</span></h3><div id="tiktok-1d" class="grid"></div><p class="empty" id="tiktok-1d-empty"></p></div>
+        <div class="col scroll"><h3>Từ 90% <span id="tiktok-90-count">0</span></h3><div id="tiktok-90" class="grid"></div><p class="empty" id="tiktok-90-empty"></p></div>
+        <div class="col scroll"><h3>Từ 70% <span id="tiktok-70-count">0</span></h3><div id="tiktok-70" class="grid"></div><p class="empty" id="tiktok-70-empty"></p></div>
+        <div class="col scroll"><h3>Giảm sâu <span id="tiktok-50-count">0</span></h3><div id="tiktok-50" class="grid"></div><p class="empty" id="tiktok-50-empty"></p></div>
+        <div class="col scroll"><h3>Sâu nhất <span id="tiktok-near-count">0</span></h3><div id="tiktok-near" class="grid"></div><p class="empty" id="tiktok-near-empty"></p></div>
+      </div>
+    </section>
+    <section class="board">
+      <h2>Shopee</h2>
+      <p class="meta-line" id="shopee-meta">Đang quét flash sale Việt Nam…</p>
+      <div class="sessions" id="sessions"></div>
+      <div class="cols">
+        <div class="col scroll"><h3>Dưới 50.000đ <span id="shopee-cheap-count">0</span></h3><div id="shopee-cheap" class="grid"></div><p class="empty" id="shopee-cheap-empty"></p></div>
+        <div class="col scroll"><h3>Từ 50% <span id="shopee-half-count">0</span></h3><div id="shopee-half" class="grid"></div><p class="empty" id="shopee-half-empty"></p></div>
+        <div class="col scroll"><h3>Sắp hết suất <span id="shopee-low-count">0</span></h3><div id="shopee-low" class="grid"></div><p class="empty" id="shopee-low-empty"></p></div>
+        <div class="col scroll"><h3>Sâu nhất <span id="shopee-near-count">0</span></h3><div id="shopee-near" class="grid"></div><p class="empty" id="shopee-near-empty"></p></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
