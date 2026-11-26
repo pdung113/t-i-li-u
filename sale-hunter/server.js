@@ -111,8 +111,8 @@ async function poll() {
       const [shopeeResult, tiktokResult] = await Promise.allSettled([loadShopee(), loadTikTok()]);
       if (tiktokResult.status === "fulfilled") {
         const next = preferPhoneCatalog({ ...tiktokResult.value, checkedAt: Date.now() }, phoneCatalog);
-        if (next.region !== tiktok.region || (next.scanned || 0) !== (tiktok.scanned || 0)) {
-          console.log(`TikTok: vùng ${next.region || "không rõ"} · ${next.scanned || 0} món`);
+        if (next.region !== tiktok.region || (next.scanned || 0) !== (tiktok.scanned || 0) || (next.received || 0) !== (tiktok.received || 0)) {
+          console.log(`TikTok: vùng ${next.region || "không rõ"} · trang ${next.pageStatus || 0} · API ${next.apiStatus || 0} · nhận ${next.received || 0} · đọc ${next.scanned || 0}`);
         }
         tiktok = next;
       }

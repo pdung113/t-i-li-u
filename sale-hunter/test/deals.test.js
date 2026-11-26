@@ -190,6 +190,27 @@ test("TikTok có giá 1đ thì ra link mua", () => {
   assert.equal(parsed.deals[0].url, "https://shop.tiktok.com/vn/pdp/1729605786167118289");
 });
 
+test("TikTok đọc giá sale trong packed_product", () => {
+  const parsed = parseTikTokPayload({
+    data: {
+      products: [{
+        packed_product: {
+          product_id: "1729000002",
+          product_base: {
+            title: "Khăn giấy",
+            price: { currency: "VND", currency_symbol: "₫", real_price: "17.999", original_price: "69.000" },
+          },
+        },
+      }],
+    },
+  });
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.deals[0].priceVnd, 17999);
+  assert.equal(parsed.deals[0].discount, 74);
+  assert.equal(huntTier(parsed.deals[0]), "70");
+  assert.equal(parsed.deals[0].url, "https://shop.tiktok.com/vn/pdp/1729000002");
+});
+
 test("TikTok đọc giá 1.000đ trên trang tìm hàng 1 đ", () => {
   const parsed = parseTikTokPayload({
     products: [{
