@@ -159,71 +159,85 @@ h1 { margin: 0; font-size: 40px; line-height: 0.95; font-weight: 800; }
 .grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 12px;
+  gap: 8px;
 }
 .card {
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 18px;
+  border-radius: 12px;
   overflow: hidden;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
   min-width: 0;
 }
 .card.one { border-color: #a7842d; }
 .card.deep { border-color: #7ea332; }
 .card.sold { opacity: 0.62; }
 .photo {
-  aspect-ratio: 1;
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  margin: 8px 0 8px 8px;
+  border-radius: 8px;
   background: #120e0c center/cover no-repeat;
   position: relative;
 }
 .badges {
   position: absolute;
-  left: 8px;
-  top: 8px;
+  left: 2px;
+  top: 2px;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 2px;
 }
 .badge {
   background: #111;
   color: white;
   border-radius: 999px;
-  padding: 3px 7px;
-  font-size: 11px;
+  padding: 1px 4px;
+  font-size: 9px;
   font-weight: 800;
 }
 .badge.gold { background: var(--gold); color: #2a1d05; }
 .badge.mint { background: var(--mint); color: #1b2408; }
 .badge.red { background: var(--price); }
-.body { padding: 12px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+.body {
+  padding: 6px 8px 6px 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 8px;
+  row-gap: 1px;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
 .name {
   margin: 0;
-  font-size: 15px;
-  line-height: 1.35;
-  min-height: 2.7em;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  grid-column: 1;
+  font-size: 13px;
+  line-height: 1.25;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
-.price-row { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
-.price { font-size: 26px; line-height: 1.1; font-weight: 800; color: var(--price); letter-spacing: -0.03em; }
-.was { color: var(--muted); text-decoration: line-through; font-size: 13px; font-weight: 500; max-width: 100%; }
-.save { color: var(--mint); font-size: 13px; font-weight: 700; }
-.meta { color: var(--muted); font-size: 12px; }
-.bar { height: 6px; background: #3a312a; border-radius: 99px; overflow: hidden; }
-.bar span { display: block; height: 100%; background: var(--price); }
+.price-row { grid-column: 1; display: flex; flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 6px; min-width: 0; }
+.price { font-size: 16px; line-height: 1.1; font-weight: 800; color: var(--price); letter-spacing: -0.03em; }
+.was { color: var(--muted); text-decoration: line-through; font-size: 12px; font-weight: 500; max-width: 100%; }
+.save { grid-column: 1; color: var(--mint); font-size: 12px; font-weight: 700; }
+.meta { display: none; }
+.actions { grid-column: 2; grid-row: 1 / span 3; display: flex; flex-direction: column; gap: 4px; align-self: center; }
 .buy, .copy {
   display: block;
   text-align: center;
   text-decoration: none;
-  border-radius: 12px;
-  padding: 10px 12px;
+  border-radius: 8px;
+  padding: 4px 8px;
   font-weight: 800;
+  font-size: 12px;
+  white-space: nowrap;
 }
-.buy { background: var(--price); color: white; margin-top: auto; }
+.buy { background: var(--price); color: white; }
 .buy:hover { filter: brightness(1.08); }
 .copy {
   background: transparent;
@@ -231,7 +245,7 @@ h1 { margin: 0; font-size: 40px; line-height: 0.95; font-weight: 800; }
   color: var(--muted);
   cursor: pointer;
 }
-.empty { color: var(--muted); padding-bottom: 40px; }
+.empty { color: var(--muted); margin: 0; font-size: 13px; }
 .toast {
   position: fixed;
   right: 16px;

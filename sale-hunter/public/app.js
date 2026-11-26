@@ -270,6 +270,8 @@ function card(deal) {
     left.textContent = deal.soldOut ? "Hết suất flash sale" : `Còn ${deal.stock}/${deal.stockTotal} suất`;
     body.append(bar, left);
   }
+  const actions = document.createElement("div");
+  actions.className = "actions";
   const buy = document.createElement("a");
   buy.className = "buy";
   buy.href = deal.url;
@@ -279,16 +281,17 @@ function card(deal) {
   const copy = document.createElement("button");
   copy.type = "button";
   copy.className = "copy";
-  copy.textContent = "Chép link mua";
+  copy.textContent = "Chép link";
   copy.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(deal.url);
       copy.textContent = "Đã chép";
     } catch {
-      copy.textContent = deal.url;
+      copy.textContent = "Mở link";
     }
   });
-  body.append(buy, copy);
+  actions.append(buy, copy);
+  body.append(actions);
   el.append(photo, body);
   return el;
 }
