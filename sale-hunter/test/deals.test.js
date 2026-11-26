@@ -4,6 +4,7 @@ import { huntTier, isDeepSale, isHuntDeal, matchFilter, normalizeShopeeItem, she
 import { discountPercent, formatVnd, isOneDong, shopeeUrl, vndFromMicro } from "../src/money.js";
 import { createRadar } from "../src/radar.js";
 import { collectProducts, parseTikTokPayload } from "../src/tiktok.js";
+import { dealsFromRouter, tierOfPrice } from "../src/page-deals.js";
 
 const session = { id: 1, label: "09:00–12:00", end: 1_700_000_000, ongoing: true };
 
@@ -258,6 +259,36 @@ test("TikTok giảm sâu 60% kêu một lần", () => {
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0].id, "tiktok:1");
   assert.deepEqual(radar.take([hit], 3_000), []);
+});
+
+test("nút điện thoại đọc deal 1.000đ trong trang TikTok", () => {
+  const deals = dealsFromRouter({
+    loaderData: {
+      page: {
+        page_config: {
+          components_map: [{
+            component_data: {
+              products: [{
+                product_id: "42",
+                title: "Khăn lau bếp",
+                product_price_info: { currency_name: "VNĐ", sale_price_decimal: "1000", raw_origin_price_decimal: "10000" },
+                seo_url: { canonical_url: "https://shop.tiktok.com/vn/pdp/khan/42" },
+              }, {
+                product_id: "43",
+                title: "Giá Mỹ",
+                product_price_info: { currency_name: "USD", sale_price_decimal: "1" },
+                seo_url: { canonical_url: "https://shop.tiktok.com/us/pdp/us/43" },
+              }],
+            },
+          }],
+        },
+      },
+    },
+  });
+  assert.equal(deals.length, 1);
+  assert.equal(deals[0].priceVnd, 1000);
+  assert.equal(tierOfPrice(deals[0]), "≤1.200đ");
+  assert.equal(deals[0].url, "https://shop.tiktok.com/vn/pdp/khan/42");
 });
 
 test("slug giữ link sạch", () => {

@@ -166,7 +166,7 @@ export async function loadTikTok() {
       ? `TikTok Shop Việt Nam · ${deals.length} deal`
       : scanned
         ? `TikTok Shop Việt Nam · đã xem ${scanned} món, chưa có món từ 1.200đ trở xuống, -90%, -70% hay giảm sâu từ 50%.${depth}`
-        : "Mốc ≤1.200đ chưa lọc được món nào: TikTok web gửi 0 sản phẩm. Deal 1.000đ trên app không có trong danh sách này.",
+        : "Cùng link hàng 1 đ trên điện thoại có deal. Máy chủ này nhận 0 sản phẩm từ TikTok.",
     openUrl: SEARCH_URL,
   };
 }

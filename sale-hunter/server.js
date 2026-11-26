@@ -171,13 +171,25 @@ const server = http.createServer((req, res) => {
     req.on("close", () => clients.delete(res));
     return;
   }
+  if (url.pathname === "/phone-scan.js") {
+    const source = fs.readFileSync(path.join(root, "src/page-deals.js"), "utf8").replace(/^export /gm, "");
+    res.writeHead(200, {
+      "Content-Type": "text/javascript; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+    res.end(`${source}\nstartPhoneScan();\n`);
+    return;
+  }
   const file = readPublic(url.pathname);
   if (!file) {
     res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     res.end("Không thấy trang");
     return;
   }
-  res.writeHead(200, { "Content-Type": TYPES[path.extname(file)] || "application/octet-stream" });
+  res.writeHead(200, {
+    "Content-Type": TYPES[path.extname(file)] || "application/octet-stream",
+    "Cache-Control": "no-store",
+  });
   fs.createReadStream(file).pipe(res);
 });
 

@@ -261,6 +261,27 @@ h1 { margin: 0; font-size: 40px; line-height: 0.95; font-weight: 800; }
   box-shadow: 0 12px 40px rgba(0,0,0,.35);
 }
 .toast a { font-weight: 800; }
+.phone {
+  margin: 0 22px 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 183, 3, 0.08);
+}
+.phone h2 { margin: 0 0 6px; font-size: 20px; }
+.phone p { margin: 0; color: var(--muted); }
+.phone-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.phone-actions a, .phone-actions button {
+  background: var(--price);
+  color: white;
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 14px;
+  font: inherit;
+  font-weight: 800;
+  text-decoration: none;
+}
+.phone-actions button { background: var(--gold); color: #2a1d05; }
 @media (max-width: 1100px) {
   .cols, .board.tiktok .cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -269,6 +290,9 @@ h1 { margin: 0; font-size: 40px; line-height: 0.95; font-weight: 800; }
 }
 @media (max-width: 720px) {
   h1 { font-size: 32px; }
+  .top, .phone { margin-left: 12px; margin-right: 12px; }
+  .boards { padding-left: 12px; padding-right: 12px; }
   .top { align-items: flex-start; flex-wrap: wrap; }
   .live { margin-left: 0; }
+  .buy { min-height: 36px; }
 }

@@ -190,7 +190,7 @@ function renderGrid() {
   } else if (shown) {
     const tiktokEmpty = snapshot?.tiktok?.ok && !(snapshot.tiktok.scanned > 0);
     els.hunt.textContent = tiktokEmpty
-      ? "Cột Sâu nhất xếp theo tiền hời. TikTok vẫn 0 món vì máy chủ gọi web không ở mạng Việt Nam."
+      ? "Cột Sâu nhất xếp theo tiền hời. Link TikTok trên điện thoại có deal; máy chủ nhận 0 món. Dùng nút Săn sale trên trang đó."
       : "Chưa có deal từ 1.200đ trở xuống, -90% hay -70%. Cột Sâu nhất xếp theo tiền hời, bấm Mua ngay.";
   } else {
     els.hunt.textContent = "Chưa đọc được deal nào. Vẫn quét liên tục.";
@@ -464,3 +464,16 @@ source.onerror = () => {
   els.live.classList.remove("on");
   els.liveText.textContent = "Mất kết nối, đang nối lại";
 };
+
+const phoneScan = document.querySelector("#phone-scan");
+const phoneCopy = document.querySelector("#phone-copy");
+const phoneBookmark = `javascript:(function(){var s=document.createElement('script');s.src='${location.origin}/phone-scan.js';document.documentElement.appendChild(s);})();`;
+if (phoneScan) phoneScan.href = phoneBookmark;
+phoneCopy?.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(phoneBookmark);
+    phoneCopy.textContent = "Đã chép";
+  } catch {
+    phoneCopy.textContent = "Giữ nút Săn sale để lưu";
+  }
+});
