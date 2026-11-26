@@ -33,7 +33,7 @@ const known = new Map();
 let audioCtx = null;
 
 const TIERS = [
-  ["1d", "1đ"],
+  ["1d", "1.000đ"],
   ["90", "Từ 90%"],
   ["70", "Từ 70%"],
 ];
@@ -109,7 +109,7 @@ function renderStatus() {
     els.shopeeMeta.textContent = `${snapshot.shopee?.watched || "Shopee Việt Nam"} · ${shopeeDeals.length} deal · quét mỗi ${every}s`;
   } else {
     const deep = snapshot.shopee?.deepest ? ` Sâu nhất đã thấy -${snapshot.shopee.deepest}%.` : "";
-    els.shopeeMeta.textContent = `${snapshot.shopee?.watched || "Shopee Việt Nam"} · đã xem ${snapshot.shopee?.scanned || 0} món, chưa có 1đ, -90% hay -70%.${deep} Quét mỗi ${every}s`;
+    els.shopeeMeta.textContent = `${snapshot.shopee?.watched || "Shopee Việt Nam"} · đã xem ${snapshot.shopee?.scanned || 0} món, chưa có 1.000đ, -90% hay -70%.${deep} Quét mỗi ${every}s`;
   }
   const tiktok = snapshot?.tiktok;
   els.tiktokMeta.replaceChildren();
@@ -121,7 +121,7 @@ function renderStatus() {
   } else if (tiktokDeals.length) {
     els.tiktokMeta.textContent = `${tiktok.message} · quét mỗi ${every}s`;
   } else {
-    els.tiktokMeta.append(document.createTextNode(`${tiktok.message || `Đã xem ${tiktok.scanned || 0} món, chưa có 1đ, -90% hay -70%.`} `));
+    els.tiktokMeta.append(document.createTextNode(`${tiktok.message || `Đã xem ${tiktok.scanned || 0} món, chưa có 1.000đ, -90% hay -70%.`} `));
     els.tiktokMeta.append(shopLink(tiktok.openUrl, "Mở TikTok"));
   }
 }
@@ -181,15 +181,15 @@ function renderGrid() {
   const shown = hits.length + shopeeShelf.filter((deal) => !deal.soldOut).length + tiktokShelf.filter((deal) => !deal.soldOut).length;
   els.hunt.className = "hunt" + (shown ? " hit" : "");
   if (!snapshot?.ready) {
-    els.hunt.textContent = "Đang quét Shopee và TikTok. Cột 1đ, từ 90% và từ 70% chỉ nhận đúng mốc. Cột Sâu nhất giữ deal đang bán.";
+    els.hunt.textContent = "Đang quét Shopee và TikTok. Cột 1.000đ nhận giá từ 1đ đến 1.000đ. Cột 90% và 70% nhận mức giảm. Cột Sâu nhất giữ deal còn lại.";
   } else if (hits.length) {
     els.hunt.textContent = `${hits.length} deal đúng mốc. Cột Sâu nhất là deal chưa tới 70%. Bấm Mua ngay.`;
   } else if (shown) {
-    els.hunt.textContent = "Chưa có 1đ, -90% hay -70%. Cột Sâu nhất đang có deal để mua, bấm Mua ngay.";
+    els.hunt.textContent = "Chưa có deal từ 1.000đ trở xuống, -90% hay -70%. Cột Sâu nhất đang có deal để mua, bấm Mua ngay.";
   } else {
     els.hunt.textContent = "Chưa đọc được deal nào. Vẫn quét liên tục.";
   }
-  document.title = shown ? `(${shown}) Săn sale` : "Săn 1đ, -90% và -70%";
+  document.title = shown ? `(${shown}) Săn sale` : "Săn 1.000đ, -90% và -70%";
 }
 
 function renderColumns(prefix, deals, shelf) {
@@ -221,7 +221,7 @@ function card(deal) {
   if (deal.image) photo.style.backgroundImage = `url("${cssUrl(deal.image)}")`;
   const badges = document.createElement("div");
   badges.className = "badges";
-  if (deal.oneDong) badges.append(badge("1Đ", "gold"));
+  if (deal.oneDong) badges.append(badge("1.000Đ", "gold"));
   if (deal.discount >= 90) badges.append(badge(`-${deal.discount}%`, "mint"));
   else if (deal.discount > 0) badges.append(badge(`-${deal.discount}%`, "red"));
   if (deal.isNew) badges.append(badge("MỚI", ""));

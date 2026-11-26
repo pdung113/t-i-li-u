@@ -63,7 +63,7 @@ export function imageUrl(image) {
 }
 
 export function isOneDong(priceVnd) {
-  return priceVnd > 0 && priceVnd <= 1;
+  return priceVnd > 0 && priceVnd <= 1_000;
 }
 
 export function isDeepDiscount(discount) {

@@ -32,6 +32,7 @@ test("giá Shopee đổi từ micro sang đồng", () => {
 
 test("định dạng tiền có dấu chấm", () => {
   assert.equal(formatVnd(1), "1đ");
+  assert.equal(formatVnd(1000), "1.000đ");
   assert.equal(formatVnd(312816), "312.816đ");
   assert.equal(formatVnd(3329000), "3.329.000đ");
 });
@@ -51,7 +52,12 @@ test("1đ và link mua luôn có shopid itemid", () => {
   assert.match(deal.url, /^https:\/\/shopee\.vn\/ca-phe-cold-brew-i\.1628729099\.42222131630$/);
   assert.equal(deal.image, "https://down-vn.img.susercontent.com/file/vn-11134207-7ra0g-m914g3h3tkef1d");
   assert.equal(isOneDong(1), true);
-  assert.equal(isOneDong(1000), false);
+  assert.equal(isOneDong(1000), true);
+  assert.equal(isOneDong(1001), false);
+  const thousand = normalizeShopeeItem(item({ price: 100_000_000, price_before_discount: 1_000_000_000, raw_discount: 90 }), session);
+  assert.equal(thousand.priceVnd, 1000);
+  assert.equal(thousand.oneDong, true);
+  assert.equal(huntTier(thousand), "1d");
 });
 
 test("hết suất và còn ít suất", () => {
@@ -150,6 +156,34 @@ test("TikTok có giá 1đ thì ra link mua", () => {
   assert.equal(parsed.deals[0].oneDong, true);
   assert.equal(parsed.deals[0].deep, true);
   assert.equal(parsed.deals[0].url, "https://shop.tiktok.com/vn/pdp/1729605786167118289");
+});
+
+test("TikTok đọc giá 1.000đ trên trang tìm hàng 1 đ", () => {
+  const parsed = parseTikTokPayload({
+    products: [{
+      product_id: "1729605786167118290",
+      title: "Set khăn lau bếp",
+      product_price_info: {
+        currency_name: "VND",
+        sale_price_decimal: "1000",
+        sale_price_format: "1.000",
+        raw_origin_price_decimal: "10000",
+        raw_origin_price_format: "10.000",
+        decimal_point_symbol: ".",
+      },
+      seo_url: { canonical_url: "https://shop.tiktok.com/vn/pdp/set-khan-lau-bep/1729605786167118290" },
+      sold_info: { sold_count: 81 },
+      rate_info: { score: 4.3 },
+    }],
+  });
+  const deal = parsed.deals[0];
+  assert.equal(deal.priceVnd, 1000);
+  assert.equal(deal.priceText, "1.000đ");
+  assert.equal(deal.discount, 90);
+  assert.equal(deal.oneDong, true);
+  assert.equal(huntTier(deal), "1d");
+  assert.equal(deal.soldCount, 81);
+  assert.equal(deal.url, "https://shop.tiktok.com/vn/pdp/set-khan-lau-bep/1729605786167118290");
 });
 
 test("slug giữ link sạch", () => {
