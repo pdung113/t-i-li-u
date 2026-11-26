@@ -384,7 +384,11 @@ function apply(data) {
   els.liveText.textContent = data?.ready
     ? `Mới cập nhật ${when.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
     : "Đang quét";
-  notice(data?.deals || []);
+  try {
+    notice(data?.deals || []);
+  } catch {
+    /* báo trình duyệt lỗi không được chặn bảng */
+  }
   render();
 }
 
@@ -550,14 +554,32 @@ async function takePhoneHash() {
   });
 }
 
+async function pullState() {
+  try {
+    const response = await fetch("/api/state", { cache: "no-store" });
+    if (!response.ok) return;
+    apply(await response.json());
+  } catch {
+    els.live.classList.remove("on");
+    els.liveText.textContent = "Mất kết nối, đang nối lại";
+  }
+}
+
 function connectStream() {
+  pullState();
+  setInterval(pullState, 5000);
   const source = new EventSource("/api/stream");
   source.addEventListener("snapshot", (event) => {
-    apply(JSON.parse(event.data));
+    try {
+      apply(JSON.parse(event.data));
+    } catch {
+      pullState();
+    }
   });
   source.onerror = () => {
     els.live.classList.remove("on");
     els.liveText.textContent = "Mất kết nối, đang nối lại";
+    pullState();
   };
 }
 

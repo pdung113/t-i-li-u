@@ -128,9 +128,18 @@ function publish(alerts = []) {
     oneDong: deal.oneDong,
     url: deal.url,
   }));
-  const payload = `event: snapshot\ndata: ${JSON.stringify(snapshot())}\n\n`;
+  let payload = "";
+  try {
+    payload = `event: snapshot\ndata: ${JSON.stringify(snapshot())}\n\n`;
+  } catch {
+    return;
+  }
   for (const client of clients) {
-    client.write(payload);
+    try {
+      client.write(payload);
+    } catch {
+      clients.delete(client);
+    }
   }
 }
 
@@ -158,7 +167,11 @@ async function poll() {
           console.log(`TikTok: Việt Nam · trang ${next.pageStatus || 0} · dữ liệu ${next.apiStatus || 0} · nhận ${next.received || 0} · đọc ${next.scanned || 0} · hiện ${shown}`);
         }
         tiktok = next;
-        writeTikTokCatalog(tiktok);
+        try {
+          writeTikTokCatalog(tiktok);
+        } catch {
+          /* lỗi ghi file không được chặn bảng */
+        }
       }
       if (shopeeResult.status === "fulfilled") {
         const shopee = shopeeResult.value;
