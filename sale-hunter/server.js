@@ -6,59 +6,21 @@ import { fileURLToPath } from "node:url";
 import { sortDeals } from "./src/deals.js";
 import { createRadar } from "./src/radar.js";
 import { loadShopee } from "./src/shopee.js";
-import { TIKTOK_CATALOG_MS, TIKTOK_SEARCH_URL, acceptPhoneDeals, keepTikTokCatalog, loadTikTok, preferPhoneCatalog } from "./src/tiktok.js";
+import { TIKTOK_SEARCH_URL, acceptPhoneDeals, keepTikTokCatalog, loadTikTok, preferPhoneCatalog } from "./src/tiktok.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
-const catalogPath = path.join(root, "data", "tiktok-catalog.json");
 const port = Number(process.env.PORT) || 8787;
-
-function readTikTokCatalog() {
-  try {
-    const saved = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
-    const count = (saved.deals || []).length + (saved.shelf || []).length;
-    if (count > 0 && Date.now() - (saved.checkedAt || 0) < TIKTOK_CATALOG_MS) return { ...saved, ok: true };
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function writeTikTokCatalog(catalog) {
-  const deals = catalog?.deals || [];
-  const shelf = catalog?.shelf || [];
-  if (deals.length + shelf.length === 0) return;
-  fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
-  fs.writeFileSync(
-    catalogPath,
-    JSON.stringify({
-      ok: true,
-      deals,
-      shelf,
-      scanned: catalog.scanned || deals.length + shelf.length,
-      deepest: catalog.deepest || 0,
-      region: catalog.region || "",
-      shop: catalog.shop || "",
-      received: catalog.received || 0,
-      pageStatus: catalog.pageStatus || 0,
-      apiStatus: catalog.apiStatus || 0,
-      message: catalog.message || `TikTok Shop Việt Nam · ${deals.length + shelf.length} món`,
-      openUrl: catalog.openUrl || TIKTOK_SEARCH_URL,
-      checkedAt: catalog.checkedAt || Date.now(),
-    }),
-  );
-}
-
 const pollMs = Number(process.env.POLL_MS) || 15_000;
 
 const radar = createRadar();
 const clients = new Set();
 const phoneKey = crypto.randomBytes(16).toString("hex");
 let phoneCatalog = null;
-let tiktok = readTikTokCatalog() || {
+let tiktok = {
   ok: false,
   deals: [],
-  message: "Đang quét TikTok Shop Việt Nam…",
+  message: "Đang thử TikTok Shop…",
   openUrl: TIKTOK_SEARCH_URL,
   checkedAt: 0,
 };
@@ -128,18 +90,9 @@ function publish(alerts = []) {
     oneDong: deal.oneDong,
     url: deal.url,
   }));
-  let payload = "";
-  try {
-    payload = `event: snapshot\ndata: ${JSON.stringify(snapshot())}\n\n`;
-  } catch {
-    return;
-  }
+  const payload = `event: snapshot\ndata: ${JSON.stringify(snapshot())}\n\n`;
   for (const client of clients) {
-    try {
-      client.write(payload);
-    } catch {
-      clients.delete(client);
-    }
+    client.write(payload);
   }
 }
 
@@ -164,14 +117,9 @@ async function poll() {
           console.log(`TikTok: lượt này nhận 0, giữ ${kept.scanned} món vừa đọc`);
         } else if (next.region !== tiktok.region || (next.scanned || 0) !== (tiktok.scanned || 0) || (next.received || 0) !== (tiktok.received || 0)) {
           const shown = (next.deals || []).length + (next.shelf || []).length;
-          console.log(`TikTok: Việt Nam · trang ${next.pageStatus || 0} · dữ liệu ${next.apiStatus || 0} · nhận ${next.received || 0} · đọc ${next.scanned || 0} · hiện ${shown}`);
+          console.log(`TikTok: shop ${next.shop || "?"} · edge ${next.region || "?"} · trang ${next.pageStatus || 0} · API ${next.apiStatus || 0} · nhận ${next.received || 0} · đọc ${next.scanned || 0} · hiện ${shown}`);
         }
         tiktok = next;
-        try {
-          writeTikTokCatalog(tiktok);
-        } catch {
-          /* lỗi ghi file không được chặn bảng */
-        }
       }
       if (shopeeResult.status === "fulfilled") {
         const shopee = shopeeResult.value;
@@ -332,6 +280,6 @@ export function start() {
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   start().then(() => {
-    console.log(`Săn giảm giá đang chạy: http://127.0.0.1:${port}`);
+    console.log(`Săn sale: http://127.0.0.1:${port}`);
   });
 }

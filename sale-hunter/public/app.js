@@ -147,13 +147,13 @@ function renderStatus() {
   const tiktokDeals = visibleDeals(snapshot?.tiktok?.deals);
   const every = pollSeconds();
   if (!snapshot?.ready) {
-    els.shopeeMeta.textContent = snapshot?.error || "Đang đọc giờ vàng Shopee Việt Nam…";
+    els.shopeeMeta.textContent = snapshot?.error || "Đang đọc flash sale Shopee Việt Nam…";
   } else {
     const bits = [snapshot.shopee?.watched || "Shopee Việt Nam"];
-    if (cheap.length) bits.push(`${cheap.length} món dưới 50.000đ`);
+    if (cheap.length) bits.push(`${cheap.length} món dưới 50k`);
     if (half.length) bits.push(`${half.length} món từ 50%`);
     if (shopeeLow.length) bits.push(`${shopeeLow.length} sắp hết`);
-    bits.push(`quét mỗi ${every} giây`);
+    bits.push(`quét mỗi ${every}s`);
     els.shopeeMeta.textContent = bits.join(" · ");
   }
   const tiktok = snapshot?.tiktok;
@@ -163,10 +163,10 @@ function renderStatus() {
   if (!tiktok) {
     els.tiktokMeta.textContent = "Đang quét TikTok Shop Việt Nam…";
   } else if (!tiktok.ok && !tiktokShown) {
-    els.tiktokMeta.append(document.createTextNode(`${tiktok.message || "TikTok Shop Việt Nam chưa đọc được món."} `));
-    els.tiktokMeta.append(shopLink(tiktok.openUrl, "Mở TikTok Shop"));
+    els.tiktokMeta.append(document.createTextNode(`${tiktok.message || "TikTok Shop Việt Nam chưa đọc được deal."} `));
+    els.tiktokMeta.append(shopLink(tiktok.openUrl, "Mở TikTok"));
   } else if (tiktokShown) {
-    els.tiktokMeta.textContent = `${tiktok.message || "TikTok Shop Việt Nam"} · quét mỗi ${every} giây`;
+    els.tiktokMeta.textContent = `${tiktok.message || "TikTok Shop Việt Nam"} · quét mỗi ${every}s`;
   } else {
     els.tiktokMeta.textContent = tiktok.message || "TikTok lượt này trả 0 món. Bảng vẫn quét mỗi 15 giây.";
   }
@@ -232,14 +232,14 @@ function renderGrid() {
   const shown = cheap.length + half.length + shopeeLow.length + shopeeShelf.length + tiktok.filter((deal) => !deal.soldOut).length + tiktokShelf.length;
   els.hunt.className = "hunt" + (shown ? " hit" : "");
   if (!snapshot?.ready) {
-    els.hunt.textContent = "Đang quét giờ vàng Shopee và TikTok Shop Việt Nam.";
+    els.hunt.textContent = "Đang quét flash sale Shopee. Cột trống sẽ ẩn. TikTok chỉ hiện khi có deal đọc từ trang shop.";
   } else if (shown) {
     const tiktokShown = tiktok.filter((deal) => !deal.soldOut).length + tiktokShelf.length;
     els.hunt.textContent = `TikTok ${tiktokShown} món. Shopee ${cheap.length} dưới 50.000đ, ${half.length} từ 50%. Bấm Mua ngay.`;
   } else {
-    els.hunt.textContent = "Chưa đọc được món nào. Vẫn quét liên tục.";
+    els.hunt.textContent = "Chưa đọc được deal nào. Vẫn quét liên tục.";
   }
-  document.title = shown ? `(${shown}) Săn giảm giá` : "Săn giảm giá Shopee và TikTok";
+  document.title = shown ? `(${shown}) Săn sale` : "Săn sale Shopee và TikTok";
 }
 
 function renderColumns(prefix, deals, shelf) {
@@ -262,7 +262,7 @@ function paintColumn(prefix, id, list) {
   const empty = document.querySelector(`#${prefix}-${id}-empty`);
   const grid = document.querySelector(`#${prefix}-${id}`);
   const column = grid?.closest(".col");
-  if (column) column.hidden = false;
+  if (column && prefix === "shopee") column.hidden = Boolean(snapshot?.ready) && list.length === 0;
   if (count) count.textContent = String(list.length);
   if (empty) empty.textContent = emptyLabel(prefix, list);
   if (grid) fillGrid(grid, list);
@@ -270,7 +270,7 @@ function paintColumn(prefix, id, list) {
 
 function emptyLabel(prefix, list) {
   if (!snapshot?.ready || list.length > 0) return "";
-  if (prefix === "tiktok" && !(snapshot.tiktok?.scanned > 0)) return "Đang quét…";
+  if (prefix === "tiktok" && !(snapshot.tiktok?.scanned > 0)) return "Web gửi 0 món";
   return "Chưa có";
 }
 
@@ -287,7 +287,7 @@ function card(deal) {
   if (deal.image) photo.style.backgroundImage = `url("${cssUrl(deal.image)}")`;
   const badges = document.createElement("div");
   badges.className = "badges";
-  if (deal.oneDong) badges.append(badge("≤1.200đ", "gold"));
+  if (deal.oneDong) badges.append(badge("≤1.2k", "gold"));
   if (deal.discount >= 90) badges.append(badge(`-${deal.discount}%`, "mint"));
   else if (deal.discount > 0) badges.append(badge(`-${deal.discount}%`, "red"));
   if (deal.isNew) badges.append(badge("MỚI", ""));
@@ -319,7 +319,7 @@ function card(deal) {
   meta.className = "meta";
   const bits = [];
   if (deal.platform === "shopee") bits.push("Shopee VN");
-  if (deal.official) bits.push("chính hãng");
+  if (deal.official) bits.push("Mall");
   if (deal.rating) bits.push(`★ ${deal.rating}`);
   if (deal.soldCount) bits.push(`đã bán ${compact(deal.soldCount)}`);
   if (deal.sessionLabel) bits.push(deal.sessionLabel);
@@ -333,7 +333,7 @@ function card(deal) {
     bar.append(span);
     const left = document.createElement("div");
     left.className = "left";
-    left.textContent = deal.soldOut ? "Hết suất giờ vàng" : `Còn ${deal.stock}/${deal.stockTotal} suất`;
+    left.textContent = deal.soldOut ? "Hết suất flash sale" : `Còn ${deal.stock}/${deal.stockTotal} suất`;
     body.append(bar, left);
   }
   const actions = document.createElement("div");
@@ -384,11 +384,7 @@ function apply(data) {
   els.liveText.textContent = data?.ready
     ? `Mới cập nhật ${when.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
     : "Đang quét";
-  try {
-    notice(data?.deals || []);
-  } catch {
-    /* báo trình duyệt lỗi không được chặn bảng */
-  }
+  notice(data?.deals || []);
   render();
 }
 
@@ -410,10 +406,10 @@ function notice(deals) {
   primed = true;
   if (!hits.length) return;
   const first = hits[0];
-  showToast(hits.length === 1 ? `${first.priceText} · -${first.discount}% ${first.name}` : `${hits.length} món vừa chạm mốc săn`, first.url);
+  showToast(hits.length === 1 ? `${first.priceText} · -${first.discount}% ${first.name}` : `${hits.length} deal vừa chạm mốc săn`, first.url);
   if (ui.sound) beep();
   if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-    const note = new Notification("Săn giảm giá", { body: `${first.priceText} -${first.discount}% ${first.name}` });
+    const note = new Notification("Săn sale", { body: `${first.priceText} -${first.discount}% ${first.name}` });
     note.onclick = () => window.open(first.url, "_blank", "noopener");
   }
 }
@@ -536,7 +532,7 @@ phoneCopy?.addEventListener("click", async () => {
     await navigator.clipboard.writeText(phoneBookmark);
     phoneCopy.textContent = "Đã chép";
   } catch {
-    phoneCopy.textContent = "Giữ nút Săn giảm giá để lưu";
+    phoneCopy.textContent = "Giữ nút Săn sale để lưu";
   }
 });
 
@@ -554,32 +550,14 @@ async function takePhoneHash() {
   });
 }
 
-async function pullState() {
-  try {
-    const response = await fetch("/api/state", { cache: "no-store" });
-    if (!response.ok) return;
-    apply(await response.json());
-  } catch {
-    els.live.classList.remove("on");
-    els.liveText.textContent = "Mất kết nối, đang nối lại";
-  }
-}
-
 function connectStream() {
-  pullState();
-  setInterval(pullState, 5000);
   const source = new EventSource("/api/stream");
   source.addEventListener("snapshot", (event) => {
-    try {
-      apply(JSON.parse(event.data));
-    } catch {
-      pullState();
-    }
+    apply(JSON.parse(event.data));
   });
   source.onerror = () => {
     els.live.classList.remove("on");
     els.liveText.textContent = "Mất kết nối, đang nối lại";
-    pullState();
   };
 }
 

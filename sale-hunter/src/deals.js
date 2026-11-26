@@ -70,7 +70,7 @@ export function normalizeSession(raw, nowSec) {
 export function rangeLabel(startSec, endSec) {
   const a = clock(startSec);
   const b = clock(endSec);
-  if (!a || !b) return "Giờ vàng";
+  if (!a || !b) return "Flash sale";
   return `${a}–${b}`;
 }
 

@@ -3,7 +3,7 @@ import test from "node:test";
 import { cheapDeals, halfOffDeals, huntTier, isDeepSale, isHuntDeal, isLowStock, lowStockDeals, matchFilter, normalizeShopeeItem, shelfDeals, sortDeals } from "../src/deals.js";
 import { discountPercent, formatVnd, isOneDong, shopeeUrl, vndFromMicro } from "../src/money.js";
 import { createRadar } from "../src/radar.js";
-import { acceptPhoneDeals, boardTikTok, catalogMessage, collectProducts, keepTikTokCatalog, loadTikTok, parseTikTokPayload, preferPhoneCatalog, regionFromRouter, shopFromRouter } from "../src/tiktok.js";
+import { acceptPhoneDeals, catalogMessage, collectProducts, keepTikTokCatalog, loadTikTok, parseTikTokPayload, preferPhoneCatalog, regionFromRouter, shopFromRouter } from "../src/tiktok.js";
 import { dealsFromCardTexts, dealsFromRouter, hunterReturnUrl, tierOfPrice } from "../src/page-deals.js";
 
 const session = { id: 1, label: "09:00–12:00", end: 1_700_000_000, ongoing: true };
@@ -154,8 +154,7 @@ test("lượt TikTok rỗng không xóa món vừa đọc", () => {
   const empty = { scanned: 0, deals: [], shelf: [], checkedAt: 2_000, region: "" };
   assert.equal(keepTikTokCatalog(previous, empty, 2_000).scanned, 8);
   assert.equal(keepTikTokCatalog(empty, previous, 2_000).scanned, 8);
-  assert.equal(keepTikTokCatalog(previous, empty, 1_000 + 11 * 60 * 1000).scanned, 8);
-  assert.equal(keepTikTokCatalog(previous, empty, 1_000 + 6 * 60 * 60 * 1000 + 1).scanned, 0);
+  assert.equal(keepTikTokCatalog(previous, empty, 1_000 + 11 * 60 * 1000).scanned, 0);
 });
 
 test("TikTok ngoài Việt Nam không bịa giá sale", () => {
@@ -164,8 +163,8 @@ test("TikTok ngoài Việt Nam không bịa giá sale", () => {
   assert.equal(shopFromRouter(page), "VN");
   const message = catalogMessage({ region: "US-TTP", shop: "VN", scanned: 0, deals: 0 });
   assert.match(message, /0 món/);
-  assert.match(message, /Việt Nam/);
-  assert.doesNotMatch(message, /US|npm run sale/);
+  assert.match(message, /VN/);
+  assert.doesNotMatch(message, /npm run sale/);
 });
 
 test("TikTok captcha không bị nhận thành deal", () => {
@@ -400,70 +399,6 @@ test("deal -70% trên trang hàng 1 đ vào cột Từ 70%", () => {
   assert.equal(accepted.deals.filter((deal) => deal.discount >= 70).length, 2);
 });
 
-test("% giảm TikTok lấy từ hai mức giá, không tin nhãn lệch", () => {
-  const parsed = parseTikTokPayload({
-    products: [
-      {
-        id: "1729000201",
-        title: "Túi 1.000đ",
-        price: 1000,
-        originalPrice: 2000,
-        currency: "VND",
-        discount: "-99%",
-      },
-      {
-        id: "1729000202",
-        title: "Lò 1.999đ",
-        product_price_info: {
-          currency_name: "VND",
-          sale_price_decimal: "1999",
-          raw_origin_price_decimal: "50000",
-          discount_format: "-70%",
-        },
-      },
-      {
-        id: "1729000203",
-        title: "Nồi không giá gốc",
-        product_price_info: { currency_name: "VND", sale_price_decimal: "6086", discount_format: "-84%" },
-      },
-      {
-        id: "1729000204",
-        title: "Điện trở không giảm",
-        product_price_info: { currency_name: "VND", sale_price_decimal: "19000" },
-      },
-    ],
-  });
-  const byName = new Map(parsed.deals.map((deal) => [deal.name, deal]));
-  assert.equal(byName.get("Túi 1.000đ").discount, 50);
-  assert.equal(byName.get("Túi 1.000đ").oneDong, true);
-  assert.equal(huntTier(byName.get("Túi 1.000đ")), "1d");
-  assert.equal(byName.get("Lò 1.999đ").priceVnd, 1999);
-  assert.equal(byName.get("Lò 1.999đ").discount, 96);
-  assert.equal(huntTier(byName.get("Lò 1.999đ")), "90");
-  assert.equal(byName.get("Nồi không giá gốc").discount, 84);
-  assert.equal(huntTier(byName.get("Nồi không giá gốc")), "70");
-  const board = boardTikTok(parsed.deals);
-  const names = [...board.deals, ...board.shelf].map((deal) => deal.name);
-  assert.equal(names.includes("Điện trở không giảm"), false);
-  assert.deepEqual(names.sort(), ["Lò 1.999đ", "Nồi không giá gốc", "Túi 1.000đ"]);
-});
-
-test("lượt TikTok thiếu món không xóa deal vừa hiện", () => {
-  const link = (id) => `https://shop.tiktok.com/vn/pdp/${id}`;
-  const one = { id: "tiktok:1", platform: "tiktok", url: link(1), priceVnd: 1000, discount: 90, oneDong: true, soldOut: false, saveVnd: 9000 };
-  const mild = { id: "tiktok:2", platform: "tiktok", url: link(2), priceVnd: 20000, discount: 40, oneDong: false, soldOut: false, saveVnd: 8000 };
-  const hot = { id: "tiktok:3", platform: "tiktok", url: link(3), priceVnd: 8000, discount: 75, oneDong: false, soldOut: false, saveVnd: 24000 };
-  const previous = { scanned: 2, deals: [one], shelf: [mild], checkedAt: 1_000, region: "US-TTP", shop: "VN" };
-  const partial = { ok: true, scanned: 1, deals: [hot], shelf: [], checkedAt: 5_000, region: "US-TTP", shop: "VN" };
-  const merged = keepTikTokCatalog(previous, partial, 5_000);
-  assert.deepEqual(
-    [...merged.deals, ...merged.shelf].map((deal) => deal.id).sort(),
-    ["tiktok:1", "tiktok:2", "tiktok:3"],
-  );
-  const updated = keepTikTokCatalog(merged, { ...partial, deals: [{ ...one, priceVnd: 35, discount: 99 }] }, 6_000);
-  assert.equal(updated.deals.find((deal) => deal.id === "tiktok:1").priceVnd, 35);
-});
-
 test("TikTok đọc giá sale khi real_price là object", () => {
   const parsed = parseTikTokPayload({
     data: {
@@ -525,9 +460,6 @@ test("TikTok edge US-TTP vẫn hiện đủ món và giữ sau lượt rỗng", 
   const words = [];
   const original = globalThis.fetch;
   globalThis.fetch = async (url, options = {}) => {
-    assert.match(options.headers.Cookie, /store-country-code=vn/);
-    assert.match(options.headers.Cookie, /tt-target-idc=alisg/);
-    assert.equal(options.headers["x-tt-store-region"], "vn");
     const target = String(url);
     if (target.includes("product_list")) {
       const body = JSON.parse(options.body);
@@ -550,14 +482,12 @@ test("TikTok edge US-TTP vẫn hiện đủ món và giữ sau lượt rỗng", 
     const live = await loadTikTok();
     assert.equal(live.region, "US-TTP");
     assert.equal(live.shop, "VN");
-    assert.deepEqual(words, ["hàng 1 đ", "1 đồng", "1.000đ", "1k", "giảm 90%", "giảm 70%", "flash sale"]);
+    assert.deepEqual(words, ["hàng 1 đ", "1.000đ", "1k", "giảm 70%", "flash sale"]);
     assert.equal(live.scanned, 9);
     const shown = [...live.deals, ...live.shelf];
-    assert.equal(shown.length, 8);
-    assert.equal(shown.some((deal) => deal.name === "Món chưa có giá"), false);
-    assert.match(live.message, /8 món/);
-    assert.match(live.message, /Việt Nam/);
-    assert.doesNotMatch(live.message, /US|deal|Edge|npm run sale/);
+    assert.equal(shown.length, 9);
+    assert.match(live.message, /9 deal/);
+    assert.doesNotMatch(live.message, /npm run sale/);
     const byName = new Map(shown.map((deal) => [deal.name, deal]));
     assert.equal(byName.get("Túi 626").priceVnd, 626);
     assert.equal(byName.get("Túi 626").oneDong, true);
@@ -575,16 +505,18 @@ test("TikTok edge US-TTP vẫn hiện đủ món và giữ sau lượt rỗng", 
     assert.equal(byName.get("Ly 45").discount, 45);
     assert.equal(byName.get("Kẹp 50").priceVnd, 20000);
     assert.equal(byName.get("Kẹp 50").discount, 50);
+    assert.equal(byName.get("Món chưa có giá").priceVnd, 0);
+    assert.equal(byName.get("Món chưa có giá").priceText, "Chưa hiện giá");
     for (const deal of shown) assert.match(deal.url, /^https:\/\/shop\.tiktok\.com\/vn\//);
     const columns = { "1d": 0, "90": 0, "70": 0, "50": 0, near: 0 };
     for (const deal of shown) columns[boardColumn(deal)] += 1;
-    assert.deepEqual(columns, { "1d": 2, "90": 0, "70": 3, "50": 2, near: 1 });
+    assert.deepEqual(columns, { "1d": 2, "90": 0, "70": 3, "50": 2, near: 2 });
     const kept = keepTikTokCatalog(
       { ...live, checkedAt: 5_000 },
       { ok: true, deals: [], shelf: [], scanned: 0, received: 0, region: "US-TTP", shop: "VN", checkedAt: 20_000 },
       20_000,
     );
-    assert.equal(kept.deals.length + kept.shelf.length, 8);
+    assert.equal(kept.deals.length + kept.shelf.length, 9);
     assert.equal(kept.deals.find((deal) => deal.name === "Khăn 74").priceVnd, 17999);
   } finally {
     globalThis.fetch = original;
