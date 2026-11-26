@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { matchFilter, normalizeShopeeItem, sortDeals } from "../src/deals.js";
+import { isHuntDeal, matchFilter, normalizeShopeeItem, sortDeals } from "../src/deals.js";
 import { discountPercent, formatVnd, isOneDong, shopeeUrl, vndFromMicro } from "../src/money.js";
 import { createRadar } from "../src/radar.js";
 import { parseTikTokPayload } from "../src/tiktok.js";
@@ -63,6 +63,21 @@ test("hết suất và còn ít suất", () => {
   assert.equal(matchFilter(gone, "instock"), false);
 });
 
+test("bảng chỉ giữ 1đ hoặc từ 90%", () => {
+  const mild = normalizeShopeeItem(item(), session);
+  const deep = normalizeShopeeItem(
+    item({ itemid: 8, raw_discount: 91, price: 200_000_000_000, price_before_discount: 2_200_000_000_000 }),
+    session,
+  );
+  const one = normalizeShopeeItem(
+    item({ itemid: 9, price: 100_000, raw_discount: 99, price_before_discount: 5_000_000 }),
+    session,
+  );
+  assert.equal(isHuntDeal(mild), false);
+  assert.equal(isHuntDeal(deep), true);
+  assert.equal(isHuntDeal(one), true);
+});
+
 test("lọc 90% không nhận deal 63%", () => {
   const mild = normalizeShopeeItem(item(), session);
   const deep = normalizeShopeeItem(
@@ -102,7 +117,20 @@ test("TikTok captcha không bị nhận thành deal", () => {
   const blocked = parseTikTokPayload({ code: 10000 });
   assert.equal(blocked.ok, false);
   assert.deepEqual(blocked.deals, []);
-  assert.match(blocked.openUrl, /^https:\/\/www\.tiktok\.com\/search\?q=/);
+  assert.match(blocked.openUrl, /^https:\/\/shop\.tiktok\.com\/vn\//);
+});
+
+test("TikTok bỏ giá USD và không dùng link ngoài Việt Nam", () => {
+  const parsed = parseTikTokPayload({
+    products: [
+      { id: "1", title: "Giá Mỹ", price: 1, currency: "USD", url: "https://shop.tiktok.com/us/pdp/1" },
+      { id: "2", title: "Áo 50%", price: 50000, originalPrice: 100000, url: "https://shop.tiktok.com/us/pdp/2" },
+    ],
+  });
+  assert.equal(parsed.deals.length, 1);
+  assert.equal(parsed.deals[0].itemId, "2");
+  assert.equal(parsed.deals[0].url, "https://shop.tiktok.com/vn/pdp/2");
+  assert.equal(isHuntDeal(parsed.deals[0]), false);
 });
 
 test("TikTok có giá 1đ thì ra link mua", () => {

@@ -1,4 +1,4 @@
-import { normalizeSession, normalizeShopeeItem } from "./deals.js";
+import { isHuntDeal, normalizeSession, normalizeShopeeItem } from "./deals.js";
 
 const ORIGIN = "https://shopee.vn";
 
@@ -34,7 +34,7 @@ export async function loadShopee(nowSec = Math.floor(Date.now() / 1000)) {
   const sessions = (sessionsBody?.data?.sessions || []).map((raw) => normalizeSession(raw, nowSec));
   const ongoing = sessions.find((session) => session.ongoing) || sessions[0];
   if (!ongoing) {
-    return { sessions: [], deals: [], watched: "Chưa có khung flash sale" };
+    return { sessions: [], deals: [], scanned: 0, watched: "Chưa có khung flash sale" };
   }
   const itemsBody = await getJson(
     `/api/v4/flash_sale/flash_sale_get_items?limit=50&offset=0&promotionid=${encodeURIComponent(ongoing.id)}&categoryid=0&sort_soldout=false&need_personalize=false&with_dp_items=true&tracker_info_version=1`,
@@ -48,9 +48,11 @@ export async function loadShopee(nowSec = Math.floor(Date.now() / 1000)) {
     seen.add(raw.itemid);
     deals.push(deal);
   }
+  const hunts = deals.filter(isHuntDeal);
   return {
     sessions,
-    deals,
+    deals: hunts,
+    scanned: deals.length,
     watched: `Shopee Việt Nam · ${ongoing.label}`,
   };
 }

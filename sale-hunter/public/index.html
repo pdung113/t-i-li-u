@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Săn sale · Shopee Việt Nam</title>
+  <title>Săn 1đ và -90%</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;700;800&display=swap" rel="stylesheet">
@@ -12,7 +12,7 @@
 <body>
   <header class="top">
     <div class="brand">
-      <p class="mark">Shopee Việt Nam</p>
+      <p class="mark">Việt Nam · chỉ 1đ và -90%</p>
       <h1>Săn sale</h1>
     </div>
     <div class="live" id="live">
@@ -22,28 +22,33 @@
     <time id="clock"></time>
   </header>
 
-  <section class="status" id="status"></section>
-  <section class="sessions" id="sessions"></section>
+  <p class="hunt" id="hunt"></p>
 
   <section class="toolbar">
-    <div class="filters" id="filters"></div>
     <label class="search">
-      <span>Tìm trong khung</span>
+      <span>Tìm trong deal 1đ / -90%</span>
       <input id="q" type="search" placeholder="sữa, ốp, cà phê…" autocomplete="off">
     </label>
-    <label class="floor">
-      <span>Kêu từ</span>
-      <input id="floor" type="number" min="50" max="99" value="90">
-      <span>%</span>
-    </label>
+    <p class="sorts" id="sorts"></p>
     <button type="button" id="sound" class="toggle">Bật tiếng</button>
     <button type="button" id="notify" class="toggle">Báo trình duyệt</button>
   </section>
 
-  <p class="sorts" id="sorts"></p>
-  <p class="hunt" id="hunt"></p>
-  <main id="grid" class="grid"></main>
-  <p class="empty" id="empty" hidden></p>
+  <div class="boards">
+    <section class="board">
+      <h2>Shopee</h2>
+      <p class="meta-line" id="shopee-meta">Đang quét flash sale Việt Nam…</p>
+      <div class="sessions" id="sessions"></div>
+      <div id="grid-shopee" class="grid"></div>
+      <p class="empty" id="empty-shopee"></p>
+    </section>
+    <section class="board">
+      <h2>TikTok Shop</h2>
+      <p class="meta-line" id="tiktok-meta">Đang quét TikTok Shop Việt Nam…</p>
+      <div id="grid-tiktok" class="grid"></div>
+      <p class="empty" id="empty-tiktok"></p>
+    </section>
+  </div>
 
   <div class="toast" id="toast" hidden></div>
   <script type="module" src="/app.js"></script>

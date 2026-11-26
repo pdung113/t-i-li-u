@@ -29,6 +29,8 @@ let state = {
   watched: "Đang quét Shopee…",
   error: "",
   sessions: [],
+  scanned: 0,
+  shopeeDeals: [],
   deals: [],
   alerts: [],
   tiktok,
@@ -45,12 +47,19 @@ function snapshot() {
     sessions: state.sessions,
     deals: state.deals,
     alerts: state.alerts,
+    shopee: {
+      watched: state.watched,
+      scanned: state.scanned,
+      deals: state.shopeeDeals,
+    },
     tiktok: {
       ok: tiktok.ok,
       message: tiktok.message,
       openUrl: tiktok.openUrl,
       checkedAt: tiktok.checkedAt,
+      scanned: tiktok.scanned || 0,
       count: tiktok.deals?.length || 0,
+      deals: tiktok.deals || [],
     },
   };
 }
@@ -82,9 +91,15 @@ async function poll() {
   try {
     do {
       pollAgain = false;
-      try {
-        const shopee = await loadShopee();
-        const deals = sortDeals([...shopee.deals, ...(tiktok.deals || [])], "discount");
+      const [shopeeResult, tiktokResult] = await Promise.allSettled([loadShopee(), loadTikTok()]);
+      if (tiktokResult.status === "fulfilled") {
+        tiktok = { ...tiktokResult.value, checkedAt: Date.now() };
+      }
+      if (shopeeResult.status === "fulfilled") {
+        const shopee = shopeeResult.value;
+        const shopeeDeals = sortDeals(shopee.deals || [], "discount");
+        const tiktokDeals = sortDeals(tiktok.deals || [], "discount");
+        const deals = [...shopeeDeals, ...tiktokDeals];
         const alerts = radar.take(deals);
         state = {
           ...state,
@@ -93,12 +108,14 @@ async function poll() {
           watched: shopee.watched,
           error: "",
           sessions: shopee.sessions,
+          scanned: shopee.scanned || 0,
+          shopeeDeals,
           deals,
           alerts,
         };
         publish(alerts);
-      } catch (error) {
-        state.error = error.message || "Không đọc được Shopee";
+      } else {
+        state.error = shopeeResult.reason?.message || "Không đọc được Shopee";
         state.updatedAt = Date.now();
         publish([]);
       }
@@ -106,10 +123,6 @@ async function poll() {
   } finally {
     polling = false;
   }
-}
-
-async function pollTikTok() {
-  tiktok = { ...(await loadTikTok()), checkedAt: Date.now() };
 }
 
 const TYPES = {
@@ -162,13 +175,8 @@ const server = http.createServer((req, res) => {
 
 export function start() {
   poll();
-  pollTikTok().then(() => poll());
   const timer = setInterval(poll, pollMs);
-  const tiktokTimer = setInterval(() => {
-    pollTikTok().then(() => poll());
-  }, 60_000);
   timer.unref?.();
-  tiktokTimer.unref?.();
   return new Promise((resolve) => {
     server.listen(port, "0.0.0.0", () => resolve(server));
   });

@@ -84,6 +84,10 @@ function clock(sec) {
   }).format(new Date(sec * 1000));
 }
 
+export function isHuntDeal(deal) {
+  return Boolean(deal) && (deal.oneDong || deal.discount >= 90);
+}
+
 export function matchFilter(deal, filter) {
   switch (filter) {
     case "1d":
