@@ -102,6 +102,20 @@ test("cột tách 1đ, từ 90% và từ 70%", () => {
   assert.deepEqual(shelf.map((deal) => deal.itemId), [mild.itemId]);
 });
 
+test("cột sâu nhất xếp món hời nhiều tiền lên trước", () => {
+  const coffee = normalizeShopeeItem(item(), session);
+  const machine = normalizeShopeeItem(item({
+    itemid: 2,
+    name: "Máy",
+    price: 332_900_000_000,
+    price_before_discount: 700_000_000_000,
+    raw_discount: 52,
+  }), session);
+  const shelf = shelfDeals([coffee, machine]);
+  assert.equal(shelf[0].itemId, "2");
+  assert.ok(shelf[0].saveVnd > coffee.saveVnd);
+});
+
 test("lọc 90% không nhận deal 63%", () => {
   const mild = normalizeShopeeItem(item(), session);
   const deep = normalizeShopeeItem(

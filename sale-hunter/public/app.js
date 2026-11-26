@@ -97,7 +97,9 @@ function visibleDeals(deals) {
 
 function visibleShelf(deals) {
   const q = els.q.value.trim().toLowerCase();
-  return sortDeals((deals || []).filter((deal) => allowed(deal) && !tierOf(deal) && deal.priceVnd > 0 && (!q || deal.name.toLowerCase().includes(q))));
+  const list = (deals || []).filter((deal) => allowed(deal) && !tierOf(deal) && deal.priceVnd > 0 && !deal.soldOut && (!q || deal.name.toLowerCase().includes(q)));
+  list.sort((a, b) => (b.saveVnd || 0) - (a.saveVnd || 0) || b.discount - a.discount);
+  return list;
 }
 
 function renderStatus() {
@@ -184,12 +186,12 @@ function renderGrid() {
   if (!snapshot?.ready) {
     els.hunt.textContent = "Đang quét Shopee và TikTok. Cột ≤1.200đ nhận giá từ 1đ đến 1.200đ. TikTok có thêm cột Giảm sâu từ 50%.";
   } else if (hits.length) {
-    els.hunt.textContent = `${hits.length} deal đúng mốc. Cột Sâu nhất là deal chưa tới 70%. Bấm Mua ngay.`;
+    els.hunt.textContent = `${hits.length} deal đúng mốc. Cột Sâu nhất xếp theo tiền hời. Bấm Mua ngay.`;
   } else if (shown) {
     const tiktokEmpty = snapshot?.tiktok?.ok && !(snapshot.tiktok.scanned > 0);
     els.hunt.textContent = tiktokEmpty
-      ? "Mốc ≤1.200đ không xóa deal TikTok. Web TikTok gửi 0 sản phẩm, nên cột đó không có món để hiện."
-      : "Chưa có deal từ 1.200đ trở xuống, -90% hay -70%. Cột Sâu nhất đang có deal để mua, bấm Mua ngay.";
+      ? "Cột Sâu nhất xếp theo tiền hời. TikTok vẫn 0 món vì máy chủ gọi web không ở mạng Việt Nam."
+      : "Chưa có deal từ 1.200đ trở xuống, -90% hay -70%. Cột Sâu nhất xếp theo tiền hời, bấm Mua ngay.";
   } else {
     els.hunt.textContent = "Chưa đọc được deal nào. Vẫn quét liên tục.";
   }

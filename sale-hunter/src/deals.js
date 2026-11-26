@@ -100,10 +100,10 @@ export function isDeepSale(deal) {
   return deal?.platform === "tiktok" && deal.discount >= 50 && !isHuntDeal(deal);
 }
 
-export function shelfDeals(deals, limit = 8) {
+export function shelfDeals(deals, limit = 16) {
   return [...(deals || [])]
-    .filter((deal) => deal && !isHuntDeal(deal) && !isDeepSale(deal) && deal.priceVnd > 0)
-    .sort((a, b) => Number(a.soldOut) - Number(b.soldOut) || b.discount - a.discount || b.saveVnd - a.saveVnd)
+    .filter((deal) => deal && !isHuntDeal(deal) && !isDeepSale(deal) && deal.priceVnd > 0 && !deal.soldOut)
+    .sort((a, b) => (b.saveVnd || 0) - (a.saveVnd || 0) || b.discount - a.discount)
     .slice(0, limit);
 }
 
