@@ -82,6 +82,7 @@ h1 { margin: 0; font-size: 40px; line-height: 0.95; font-weight: 800; }
   border-radius: 16px;
   padding: 10px;
   min-width: 0;
+  container-type: inline-size;
 }
 .col h3 {
   margin: 0 0 8px;
@@ -167,6 +168,9 @@ h1 { margin: 0; font-size: 40px; line-height: 0.95; font-weight: 800; }
   grid-template-columns: 1fr;
   gap: 8px;
 }
+@container (min-width: 560px) {
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .col.scroll .grid {
   max-height: 68vh;
   overflow-y: auto;
@@ -193,13 +197,22 @@ h1 { margin: 0; font-size: 40px; line-height: 0.95; font-weight: 800; }
 .card.low { border-color: #e07a2f; }
 .card.sold { opacity: 0.62; }
 .photo {
-  width: 52px;
-  height: 52px;
-  flex: 0 0 52px;
+  width: 96px;
+  height: 96px;
+  flex: 0 0 96px;
   margin: 8px 0 8px 8px;
-  border-radius: 8px;
+  border-radius: 10px;
   background: #120e0c center/cover no-repeat;
   position: relative;
+}
+@container (min-width: 560px) {
+  .photo { width: 156px; height: 156px; flex-basis: 156px; }
+  .name {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
 }
 .badges {
   position: absolute;
