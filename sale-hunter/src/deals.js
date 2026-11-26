@@ -84,8 +84,16 @@ function clock(sec) {
   }).format(new Date(sec * 1000));
 }
 
+export function huntTier(deal) {
+  if (!deal) return "";
+  if (deal.oneDong) return "1d";
+  if (deal.discount >= 90) return "90";
+  if (deal.discount >= 70) return "70";
+  return "";
+}
+
 export function isHuntDeal(deal) {
-  return Boolean(deal) && (deal.oneDong || deal.discount >= 90);
+  return Boolean(huntTier(deal));
 }
 
 export function matchFilter(deal, filter) {

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Săn 1đ và -90%</title>
+  <title>Săn 1đ, -90% và -70%</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;700;800&display=swap" rel="stylesheet">
@@ -12,7 +12,7 @@
 <body>
   <header class="top">
     <div class="brand">
-      <p class="mark">Việt Nam · chỉ 1đ và -90%</p>
+      <p class="mark">Việt Nam · 1đ · -90% · -70%</p>
       <h1>Săn sale</h1>
     </div>
     <div class="live" id="live">
@@ -26,7 +26,7 @@
 
   <section class="toolbar">
     <label class="search">
-      <span>Tìm trong deal 1đ / -90%</span>
+      <span>Tìm trong cột 1đ, -90%, -70%</span>
       <input id="q" type="search" placeholder="sữa, ốp, cà phê…" autocomplete="off">
     </label>
     <p class="sorts" id="sorts"></p>
@@ -39,14 +39,20 @@
       <h2>Shopee</h2>
       <p class="meta-line" id="shopee-meta">Đang quét flash sale Việt Nam…</p>
       <div class="sessions" id="sessions"></div>
-      <div id="grid-shopee" class="grid"></div>
-      <p class="empty" id="empty-shopee"></p>
+      <div class="cols">
+        <div class="col"><h3>1đ <span id="shopee-1d-count">0</span></h3><div id="shopee-1d" class="grid"></div><p class="empty" id="shopee-1d-empty"></p></div>
+        <div class="col"><h3>Từ 90% <span id="shopee-90-count">0</span></h3><div id="shopee-90" class="grid"></div><p class="empty" id="shopee-90-empty"></p></div>
+        <div class="col"><h3>Từ 70% <span id="shopee-70-count">0</span></h3><div id="shopee-70" class="grid"></div><p class="empty" id="shopee-70-empty"></p></div>
+      </div>
     </section>
     <section class="board">
       <h2>TikTok Shop</h2>
       <p class="meta-line" id="tiktok-meta">Đang quét TikTok Shop Việt Nam…</p>
-      <div id="grid-tiktok" class="grid"></div>
-      <p class="empty" id="empty-tiktok"></p>
+      <div class="cols">
+        <div class="col"><h3>1đ <span id="tiktok-1d-count">0</span></h3><div id="tiktok-1d" class="grid"></div><p class="empty" id="tiktok-1d-empty"></p></div>
+        <div class="col"><h3>Từ 90% <span id="tiktok-90-count">0</span></h3><div id="tiktok-90" class="grid"></div><p class="empty" id="tiktok-90-empty"></p></div>
+        <div class="col"><h3>Từ 70% <span id="tiktok-70-count">0</span></h3><div id="tiktok-70" class="grid"></div><p class="empty" id="tiktok-70-empty"></p></div>
+      </div>
     </section>
   </div>
 

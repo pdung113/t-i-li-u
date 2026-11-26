@@ -30,6 +30,7 @@ let state = {
   error: "",
   sessions: [],
   scanned: 0,
+  deepest: 0,
   shopeeDeals: [],
   deals: [],
   alerts: [],
@@ -50,6 +51,7 @@ function snapshot() {
     shopee: {
       watched: state.watched,
       scanned: state.scanned,
+      deepest: state.deepest,
       deals: state.shopeeDeals,
     },
     tiktok: {
@@ -58,6 +60,7 @@ function snapshot() {
       openUrl: tiktok.openUrl,
       checkedAt: tiktok.checkedAt,
       scanned: tiktok.scanned || 0,
+      deepest: tiktok.deepest || 0,
       count: tiktok.deals?.length || 0,
       deals: tiktok.deals || [],
     },
@@ -109,6 +112,7 @@ async function poll() {
           error: "",
           sessions: shopee.sessions,
           scanned: shopee.scanned || 0,
+          deepest: shopee.deepest || 0,
           shopeeDeals,
           deals,
           alerts,

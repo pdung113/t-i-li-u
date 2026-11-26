@@ -114,13 +114,15 @@ export async function loadTikTok() {
   const seen = new Set();
   const deals = [];
   let scanned = 0;
+  let deepest = 0;
   try {
     for (const word of WORDS) {
       const body = await searchVietnam(word);
       const parsed = parseTikTokPayload(body);
-      if (!parsed.ok && body?.code === 10000) return { ...parsed, scanned };
+      if (!parsed.ok && body?.code === 10000) return { ...parsed, scanned, deepest };
       for (const deal of parsed.deals) {
         scanned += 1;
+        deepest = Math.max(deepest, deal.discount || 0);
         if (seen.has(deal.id) || !isHuntDeal(deal)) continue;
         if (!deal.url.startsWith("https://shop.tiktok.com/vn/")) continue;
         seen.add(deal.id);
@@ -128,15 +130,17 @@ export async function loadTikTok() {
       }
     }
   } catch {
-    return { ...blocked("Không kết nối được TikTok Shop Việt Nam lúc này."), scanned };
+    return { ...blocked("Không kết nối được TikTok Shop Việt Nam lúc này."), scanned, deepest };
   }
+  const depth = deepest ? ` Sâu nhất đã thấy -${deepest}%.` : "";
   return {
     ok: true,
     deals,
     scanned,
+    deepest,
     message: deals.length
       ? `TikTok Shop Việt Nam · ${deals.length} deal`
-      : "TikTok Shop Việt Nam · chưa có 1đ hoặc -90%",
+      : `TikTok Shop Việt Nam · chưa có 1đ, -90% hay -70%.${depth}`,
     openUrl: SEARCH_URL,
   };
 }

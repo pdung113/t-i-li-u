@@ -14,10 +14,6 @@ const els = {
   hunt: document.querySelector("#hunt"),
   shopeeMeta: document.querySelector("#shopee-meta"),
   tiktokMeta: document.querySelector("#tiktok-meta"),
-  gridShopee: document.querySelector("#grid-shopee"),
-  gridTiktok: document.querySelector("#grid-tiktok"),
-  emptyShopee: document.querySelector("#empty-shopee"),
-  emptyTiktok: document.querySelector("#empty-tiktok"),
   toast: document.querySelector("#toast"),
   q: document.querySelector("#q"),
   sound: document.querySelector("#sound"),
@@ -36,8 +32,22 @@ let primed = false;
 const known = new Map();
 let audioCtx = null;
 
+const TIERS = [
+  ["1d", "1đ"],
+  ["90", "Từ 90%"],
+  ["70", "Từ 70%"],
+];
+
+function tierOf(deal) {
+  if (!deal) return "";
+  if (deal.oneDong) return "1d";
+  if (deal.discount >= 90) return "90";
+  if (deal.discount >= 70) return "70";
+  return "";
+}
+
 function isHunt(deal) {
-  if (!deal || !(deal.oneDong || deal.discount >= 90) || !deal.url) return false;
+  if (!deal || !tierOf(deal) || !deal.url) return false;
   try {
     const parsed = new URL(deal.url);
     if (parsed.protocol !== "https:") return false;
@@ -89,7 +99,8 @@ function renderStatus() {
   } else if (shopeeDeals.length) {
     els.shopeeMeta.textContent = `${snapshot.shopee?.watched || "Shopee Việt Nam"} · ${shopeeDeals.length} deal · quét mỗi ${every}s`;
   } else {
-    els.shopeeMeta.textContent = `${snapshot.shopee?.watched || "Shopee Việt Nam"} · đã xem ${snapshot.shopee?.scanned || 0} món, chưa có 1đ hay -90% · quét mỗi ${every}s`;
+    const deep = snapshot.shopee?.deepest ? ` Sâu nhất đã thấy -${snapshot.shopee.deepest}%.` : "";
+    els.shopeeMeta.textContent = `${snapshot.shopee?.watched || "Shopee Việt Nam"} · đã xem ${snapshot.shopee?.scanned || 0} món, chưa có 1đ, -90% hay -70%.${deep} Quét mỗi ${every}s`;
   }
   const tiktok = snapshot?.tiktok;
   els.tiktokMeta.replaceChildren();
@@ -101,7 +112,7 @@ function renderStatus() {
   } else if (tiktokDeals.length) {
     els.tiktokMeta.textContent = `${tiktok.message} · quét mỗi ${every}s`;
   } else {
-    els.tiktokMeta.append(document.createTextNode(`Đã xem ${tiktok.scanned || 0} món, chưa có 1đ hay -90%. `));
+    els.tiktokMeta.append(document.createTextNode(`${tiktok.message || `Đã xem ${tiktok.scanned || 0} món, chưa có 1đ, -90% hay -70%.`} `));
     els.tiktokMeta.append(shopLink(tiktok.openUrl, "Mở TikTok"));
   }
 }
@@ -153,26 +164,30 @@ function renderControls() {
 function renderGrid() {
   const shopee = visibleDeals(snapshot?.shopee?.deals);
   const tiktok = visibleDeals(snapshot?.tiktok?.deals);
-  fillGrid(els.gridShopee, shopee);
-  fillGrid(els.gridTiktok, tiktok);
+  renderColumns("shopee", shopee);
+  renderColumns("tiktok", tiktok);
   const hits = [...shopee, ...tiktok].filter((deal) => !deal.soldOut);
   els.hunt.className = "hunt" + (hits.length ? " hit" : "");
   if (!snapshot?.ready) {
-    els.hunt.textContent = "Đang quét Shopee và TikTok. Chỉ hiện deal 1đ hoặc giảm từ 90%.";
-    els.emptyShopee.textContent = "";
-    els.emptyTiktok.textContent = "";
+    els.hunt.textContent = "Đang quét Shopee và TikTok. Mỗi sàn có ba cột: 1đ, từ 90%, từ 70%.";
   } else if (hits.length) {
-    els.hunt.textContent = `${hits.length} deal đúng mốc. Bấm Mua ngay.`;
+    els.hunt.textContent = `${hits.length} deal đang nằm đúng cột. Bấm Mua ngay.`;
   } else {
-    els.hunt.textContent = "Chưa có deal 1đ hay -90% trên cả hai sàn. Vẫn quét liên tục, có là hiện và kêu.";
+    els.hunt.textContent = "Chưa có deal 1đ, -90% hay -70% trên cả hai sàn. Vẫn quét liên tục, có là vào đúng cột và kêu.";
   }
-  els.emptyShopee.textContent = snapshot?.ready && shopee.length === 0
-    ? "Shopee Việt Nam chưa có deal 1đ hoặc giảm từ 90% trong khung này."
-    : "";
-  els.emptyTiktok.textContent = snapshot?.ready && tiktok.length === 0
-    ? "TikTok Shop Việt Nam chưa có deal 1đ hoặc giảm từ 90%."
-    : "";
-  document.title = hits.length ? `(${hits.length}) Săn 1đ · -90%` : "Săn 1đ và -90%";
+  document.title = hits.length ? `(${hits.length}) Săn 1đ · -90% · -70%` : "Săn 1đ, -90% và -70%";
+}
+
+function renderColumns(prefix, deals) {
+  for (const [id] of TIERS) {
+    const list = deals.filter((deal) => tierOf(deal) === id);
+    const count = document.querySelector(`#${prefix}-${id}-count`);
+    const empty = document.querySelector(`#${prefix}-${id}-empty`);
+    const grid = document.querySelector(`#${prefix}-${id}`);
+    if (count) count.textContent = String(list.length);
+    if (empty) empty.textContent = snapshot?.ready && list.length === 0 ? "Chưa có" : "";
+    if (grid) fillGrid(grid, list);
+  }
 }
 
 function fillGrid(grid, deals) {
@@ -287,7 +302,7 @@ function apply(data) {
 }
 
 function notice(deals) {
-  const floor = 90;
+  const floor = 70;
   const hits = [];
   for (const deal of deals) {
     const prev = known.get(deal.id);
@@ -296,7 +311,7 @@ function notice(deals) {
     if (primed && hot && !wasHot) hits.push(deal);
     known.set(deal.id, { oneDong: deal.oneDong, discount: deal.discount });
   }
-  if (!primed && deals.length) primed = true;
+  primed = true;
   if (!hits.length) return;
   const first = hits[0];
   showToast(hits.length === 1 ? `${first.priceText} · -${first.discount}% ${first.name}` : `${hits.length} deal vừa chạm mốc săn`, first.url);

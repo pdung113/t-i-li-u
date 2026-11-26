@@ -49,10 +49,12 @@ export async function loadShopee(nowSec = Math.floor(Date.now() / 1000)) {
     deals.push(deal);
   }
   const hunts = deals.filter(isHuntDeal);
+  const deepest = deals.reduce((max, deal) => Math.max(max, deal.discount || 0), 0);
   return {
     sessions,
     deals: hunts,
     scanned: deals.length,
+    deepest,
     watched: `Shopee Việt Nam · ${ongoing.label}`,
   };
 }

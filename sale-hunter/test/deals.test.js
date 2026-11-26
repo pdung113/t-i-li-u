@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isHuntDeal, matchFilter, normalizeShopeeItem, sortDeals } from "../src/deals.js";
+import { huntTier, isHuntDeal, matchFilter, normalizeShopeeItem, sortDeals } from "../src/deals.js";
 import { discountPercent, formatVnd, isOneDong, shopeeUrl, vndFromMicro } from "../src/money.js";
 import { createRadar } from "../src/radar.js";
 import { parseTikTokPayload } from "../src/tiktok.js";
@@ -63,8 +63,12 @@ test("hết suất và còn ít suất", () => {
   assert.equal(matchFilter(gone, "instock"), false);
 });
 
-test("bảng chỉ giữ 1đ hoặc từ 90%", () => {
+test("cột tách 1đ, từ 90% và từ 70%", () => {
   const mild = normalizeShopeeItem(item(), session);
+  const mid = normalizeShopeeItem(
+    item({ itemid: 7, raw_discount: 75, price: 250_000_000_000, price_before_discount: 1_000_000_000_000 }),
+    session,
+  );
   const deep = normalizeShopeeItem(
     item({ itemid: 8, raw_discount: 91, price: 200_000_000_000, price_before_discount: 2_200_000_000_000 }),
     session,
@@ -73,9 +77,12 @@ test("bảng chỉ giữ 1đ hoặc từ 90%", () => {
     item({ itemid: 9, price: 100_000, raw_discount: 99, price_before_discount: 5_000_000 }),
     session,
   );
+  assert.equal(huntTier(mild), "");
+  assert.equal(huntTier(mid), "70");
+  assert.equal(huntTier(deep), "90");
+  assert.equal(huntTier(one), "1d");
   assert.equal(isHuntDeal(mild), false);
-  assert.equal(isHuntDeal(deep), true);
-  assert.equal(isHuntDeal(one), true);
+  assert.equal(isHuntDeal(mid), true);
 });
 
 test("lọc 90% không nhận deal 63%", () => {
