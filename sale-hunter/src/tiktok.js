@@ -1,8 +1,8 @@
-import { isDeepSale, isHuntDeal, shelfDeals } from "./deals.js";
+import { isDeepSale, isHuntDeal } from "./deals.js";
 import { formatVnd, isOneDong } from "./money.js";
 
 const SEARCH_URL = "https://shop.tiktok.com/vn/s?q=h%C3%A0ng%201%20%C4%91";
-const WORDS = ["hàng 1 đ", "1.000đ", "1k", "giảm 70%", "flash sale"];
+const WORDS = ["hàng 1 đ", "1 đồng", "1.000đ", "1k", "giảm 90%", "giảm 70%", "flash sale"];
 
 function blocked(message) {
   return {
@@ -119,11 +119,9 @@ export function parseTikTokPayload(body) {
       ],
       currency,
     );
-    const labeled = Number(String(info.discount_format || raw.discount || "").replace(/[^\d.]/g, ""));
-    const discount = Math.max(
-      0,
-      Math.min(99, Math.round(labeled || (wasVnd > priceVnd && priceVnd > 0 ? (1 - priceVnd / wasVnd) * 100 : 0))),
-    );
+    const fromPrices = wasVnd > priceVnd && priceVnd > 0 ? Math.round((1 - priceVnd / wasVnd) * 100) : 0;
+    const labeled = Number(String(info.discount_format || info.discount_decimal || raw.discount || "").replace(/[^\d.]/g, ""));
+    const discount = Math.max(0, Math.min(99, fromPrices || (Number.isFinite(labeled) ? Math.round(labeled) : 0)));
     const oneDong = isOneDong(priceVnd);
     const hasStock = raw.stock != null && raw.stock !== "";
     const stock = hasStock ? Math.max(0, Number(raw.stock) || 0) : 0;
@@ -333,11 +331,7 @@ export async function loadTikTok() {
   } catch {
     return { ...blocked("Không kết nối được TikTok Shop Việt Nam lúc này."), scanned, deepest, region, shop, received, pageStatus, apiStatus, shelf: [] };
   }
-  const deals = found.filter((deal) => isHuntDeal(deal) || isDeepSale(deal));
-  const pricedShelf = shelfDeals(found);
-  const placed = new Set([...deals, ...pricedShelf].map((deal) => deal.id));
-  const rest = found.filter((deal) => !deal.soldOut && deal.name && !placed.has(deal.id));
-  const shelf = [...pricedShelf, ...rest].slice(0, 16);
+  const { deals, shelf } = boardTikTok(found);
   return {
     ok: true,
     deals,
@@ -403,7 +397,7 @@ async function fetchShop(url, options) {
     const next = response.headers.get("location");
     if (!next) return response;
     const resolved = new URL(next, current);
-    if (resolved.hostname !== "shop.tiktok.com") return response;
+    if (resolved.hostname !== "shop.tiktok.com" || !resolved.pathname.startsWith("/vn")) return response;
     current = resolved.href;
   }
   return null;
@@ -496,12 +490,12 @@ export function acceptPhoneDeals(raw) {
     seen.add(deal.id);
     found.push(deal);
   }
-  const deals = found.filter((deal) => isHuntDeal(deal) || isDeepSale(deal));
+  const { deals, shelf } = boardTikTok(found);
   const deepest = found.reduce((max, deal) => Math.max(max, deal.discount || 0), 0);
   return {
     ok: found.length > 0,
     deals,
-    shelf: shelfDeals(found),
+    shelf,
     scanned: found.length,
     deepest,
     source: "phone",
@@ -512,11 +506,47 @@ export function acceptPhoneDeals(raw) {
   };
 }
 
+export function boardTikTok(found) {
+  const list = (found || []).filter((deal) => deal && !deal.soldOut && String(deal.url || "").startsWith("https://shop.tiktok.com/vn/"));
+  const deals = list.filter((deal) => isHuntDeal(deal) || isDeepSale(deal));
+  const shelf = list
+    .filter((deal) => deal.priceVnd > 0 && deal.discount > 0 && !isHuntDeal(deal) && !isDeepSale(deal))
+    .sort((a, b) => b.discount - a.discount || (b.saveVnd || 0) - (a.saveVnd || 0))
+    .slice(0, 24);
+  return { deals, shelf };
+}
+
 export function keepTikTokCatalog(previous, next, now = Date.now()) {
   const has = (value) => (value?.scanned || 0) > 0 || (value?.deals || []).length > 0 || (value?.shelf || []).length > 0;
-  if (has(next)) return next;
-  if (has(previous) && now - (previous.checkedAt || 0) < 10 * 60 * 1000) return previous;
-  return next;
+  const fresh = previous && now - (previous.checkedAt || 0) < 10 * 60 * 1000;
+  if (!has(next)) {
+    if (has(previous) && fresh) return previous;
+    return next;
+  }
+  if (!has(previous) || !fresh) return next;
+  const byId = new Map();
+  for (const deal of [...(previous.deals || []), ...(previous.shelf || [])]) byId.set(deal.id, deal);
+  for (const deal of [...(next.deals || []), ...(next.shelf || [])]) byId.set(deal.id, deal);
+  const { deals, shelf } = boardTikTok([...byId.values()]);
+  if (deals.length + shelf.length === 0) return previous;
+  const scanned = deals.length + shelf.length;
+  const deepest = [...deals, ...shelf].reduce((max, deal) => Math.max(max, deal.discount || 0), 0);
+  return {
+    ...next,
+    ok: true,
+    deals,
+    shelf,
+    scanned,
+    deepest,
+    checkedAt: now,
+    message: catalogMessage({
+      region: next.region || previous.region,
+      shop: next.shop || previous.shop,
+      scanned,
+      deals: scanned,
+      deepest,
+    }),
+  };
 }
 
 export function preferPhoneCatalog(serverResult, phoneResult, now = Date.now()) {
