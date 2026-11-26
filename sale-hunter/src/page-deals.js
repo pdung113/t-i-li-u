@@ -97,7 +97,7 @@ function toDeal(raw) {
   const wasVnd = vndAmount(info.raw_origin_price_decimal ?? info.raw_origin_price_format ?? raw.originalPrice, currency);
   const labeled = Number(String(info.discount_format || raw.discount || "").replace(/[^\d.]/g, ""));
   const discount = Math.max(0, Math.min(99, Math.round(labeled || (wasVnd > priceVnd && priceVnd > 0 ? (1 - priceVnd / wasVnd) * 100 : 0))));
-  const url = vietnamUrl(raw.url || raw.seo_url?.canonical_url, itemId);
+  const url = vietnamUrl(raw.url || raw.seo_url?.canonical_url, itemId, name);
   if (!url) return null;
   return { name, priceVnd, wasVnd: wasVnd > priceVnd ? wasVnd : 0, discount, url, saveVnd: wasVnd > priceVnd ? wasVnd - priceVnd : 0 };
 }
@@ -122,15 +122,16 @@ function vndAmount(value, currency) {
   return Number.isFinite(n) ? Math.round(n) : 0;
 }
 
-function vietnamUrl(value, itemId) {
-  const fallback = `https://shop.tiktok.com/vn/pdp/${itemId}`;
+function vietnamUrl(value, itemId, name) {
+  const search = `https://shop.tiktok.com/vn/s?q=${encodeURIComponent(String(name || itemId || "").replace(/\s+/g, " ").trim().slice(0, 80))}`;
   try {
     const parsed = new URL(String(value || ""));
-    if (parsed.protocol !== "https:" || parsed.hostname !== "shop.tiktok.com") return fallback;
+    if (parsed.protocol !== "https:" || parsed.hostname !== "shop.tiktok.com") return search;
     if (!parsed.pathname.startsWith("/vn/")) return "";
+    if (new RegExp(`^/vn/pdp/${itemId}/?$`).test(parsed.pathname)) return search;
     return parsed.href;
   } catch {
-    return fallback;
+    return search;
   }
 }
 

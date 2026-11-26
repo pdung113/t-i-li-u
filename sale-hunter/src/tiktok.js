@@ -147,7 +147,7 @@ export function parseTikTokPayload(body) {
       oneDong,
       deep: discount >= 90,
       image: imageUrl(raw),
-      url: vietnamUrl(raw.url || raw.seo_url?.canonical_url, itemId),
+      url: vietnamUrl(raw.url || raw.seo_url?.canonical_url, itemId, name),
       rating: Number(raw.rate_info?.score) || 0,
       soldCount: Number(raw.sold || raw.sold_info?.sold_count) || 0,
       official: false,
@@ -164,17 +164,21 @@ export function parseTikTokPayload(body) {
   return { ok: true, deals, message: `TikTok Shop: ${deals.length} món`, openUrl: SEARCH_URL };
 }
 
-function vietnamUrl(value, itemId) {
-  const fallback = `https://shop.tiktok.com/vn/pdp/${itemId}`;
+function vietnamUrl(value, itemId, name) {
+  const search = vietnamSearchUrl(name || itemId);
   try {
     const parsed = new URL(String(value || ""));
-    if (parsed.protocol === "https:" && parsed.hostname === "shop.tiktok.com" && parsed.pathname.startsWith("/vn/")) {
-      return parsed.href;
-    }
+    if (parsed.protocol !== "https:" || parsed.hostname !== "shop.tiktok.com" || !parsed.pathname.startsWith("/vn/")) return search;
+    if (new RegExp(`^/vn/pdp/${itemId}/?$`).test(parsed.pathname)) return search;
+    return parsed.href;
   } catch {
-    return fallback;
+    return search;
   }
-  return fallback;
+}
+
+function vietnamSearchUrl(query) {
+  const text = String(query || "").replace(/\s+/g, " ").trim().slice(0, 80);
+  return `https://shop.tiktok.com/vn/s?q=${encodeURIComponent(text)}`;
 }
 
 function imageUrl(raw) {

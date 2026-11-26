@@ -183,7 +183,7 @@ test("TikTok bỏ giá USD và không dùng link ngoài Việt Nam", () => {
   });
   assert.equal(parsed.deals.length, 1);
   assert.equal(parsed.deals[0].itemId, "2");
-  assert.equal(parsed.deals[0].url, "https://shop.tiktok.com/vn/pdp/2");
+  assert.equal(parsed.deals[0].url, "https://shop.tiktok.com/vn/s?q=%C3%81o%2050%25");
   assert.equal(isHuntDeal(parsed.deals[0]), false);
 });
 
@@ -194,7 +194,7 @@ test("TikTok có giá 1đ thì ra link mua", () => {
   assert.equal(parsed.ok, true);
   assert.equal(parsed.deals[0].oneDong, true);
   assert.equal(parsed.deals[0].deep, true);
-  assert.equal(parsed.deals[0].url, "https://shop.tiktok.com/vn/pdp/1729605786167118289");
+  assert.equal(parsed.deals[0].url, "https://shop.tiktok.com/vn/s?q=%E1%BB%90p%201%C4%91");
 });
 
 test("TikTok đọc giá sale trong packed_product", () => {
@@ -215,7 +215,7 @@ test("TikTok đọc giá sale trong packed_product", () => {
   assert.equal(parsed.deals[0].priceVnd, 17999);
   assert.equal(parsed.deals[0].discount, 74);
   assert.equal(huntTier(parsed.deals[0]), "70");
-  assert.equal(parsed.deals[0].url, "https://shop.tiktok.com/vn/pdp/1729000002");
+  assert.equal(parsed.deals[0].url, "https://shop.tiktok.com/vn/s?q=Kh%C4%83n%20gi%E1%BA%A5y");
 });
 
 test("TikTok đọc giá 1.000đ trên trang tìm hàng 1 đ", () => {
@@ -421,7 +421,7 @@ test("TikTok đọc giá sale khi real_price là object", () => {
   assert.equal(parsed.deals[0].priceText, "17.999đ");
   assert.equal(parsed.deals[0].discount, 74);
   assert.equal(huntTier(parsed.deals[0]), "70");
-  assert.equal(parsed.deals[0].url, "https://shop.tiktok.com/vn/pdp/1729000099");
+  assert.equal(parsed.deals[0].url, "https://shop.tiktok.com/vn/s?q=Kh%C4%83n%20gi%E1%BA%A5y");
 });
 
 test("TikTok edge US-TTP vẫn hiện đủ món và giữ sau lượt rỗng", async () => {
