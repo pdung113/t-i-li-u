@@ -1,4 +1,4 @@
-import { isDeepSale, isHuntDeal } from "./deals.js";
+import { isDeepSale, isHuntDeal, isLowStock } from "./deals.js";
 
 export function createRadar() {
   const seen = new Map();
@@ -8,7 +8,7 @@ export function createRadar() {
       const alerts = [];
       if (!ready) {
         for (const deal of deals) {
-          seen.set(deal.id, { discount: deal.discount, oneDong: deal.oneDong, seenAt: now });
+          seen.set(deal.id, { discount: deal.discount, oneDong: deal.oneDong, low: isLowStock(deal), seenAt: now });
           deal.isNew = false;
           deal.firstSeenAt = now;
         }
@@ -18,11 +18,12 @@ export function createRadar() {
       for (const deal of deals) {
         const prev = seen.get(deal.id);
         const hunt = isHuntDeal(deal) || isDeepSale(deal);
-        const wasHunt = prev ? prev.oneDong || prev.discount >= 70 || (deal.platform === "tiktok" && prev.discount >= 50) : false;
+        const low = isLowStock(deal);
+        const wasHunt = prev ? prev.oneDong || prev.discount >= 90 || (deal.platform !== "shopee" && prev.discount >= 70) || (deal.platform === "tiktok" && prev.discount >= 50) : false;
         deal.isNew = !prev;
         deal.firstSeenAt = prev?.seenAt || now;
-        if (hunt && !wasHunt && !deal.soldOut) alerts.push(deal);
-        seen.set(deal.id, { discount: deal.discount, oneDong: deal.oneDong, seenAt: deal.firstSeenAt });
+        if (((hunt && !wasHunt) || (low && !prev?.low)) && !deal.soldOut) alerts.push(deal);
+        seen.set(deal.id, { discount: deal.discount, oneDong: deal.oneDong, low, seenAt: deal.firstSeenAt });
       }
       if (seen.size > 4000) {
         const keep = new Set(deals.map((deal) => deal.id));

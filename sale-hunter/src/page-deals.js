@@ -9,6 +9,21 @@ export function dealsFromRouter(data) {
   return deals;
 }
 
+export function hunterReturnUrl(origin, deals) {
+  const packed = (deals || []).slice(0, 40).map((deal) => [
+    String(deal.name || "").slice(0, 80),
+    deal.priceVnd,
+    deal.wasVnd,
+    deal.discount,
+    deal.url,
+  ]);
+  const bytes = new TextEncoder().encode(JSON.stringify(packed));
+  let bin = "";
+  for (const byte of bytes) bin += String.fromCharCode(byte);
+  const token = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return `${String(origin || "").replace(/\/$/, "")}/#tiktok=${token}`;
+}
+
 export function tierOfPrice(deal) {
   if (deal.priceVnd > 0 && deal.priceVnd <= 1200) return "≤1.200đ";
   if (deal.discount >= 90) return "Từ 90%";
@@ -80,7 +95,7 @@ function vietnamUrl(value, itemId) {
   }
 }
 
-export function startPhoneScan() {
+export function startPhoneScan(origin) {
   const host = location.hostname;
   const onVietnamShop = host === "shop.tiktok.com" && location.pathname.startsWith("/vn/");
   const node = document.getElementById("__MODERN_ROUTER_DATA__");
@@ -91,6 +106,10 @@ export function startPhoneScan() {
     } catch {
       deals = [];
     }
+  }
+  if (onVietnamShop && deals.length && origin) {
+    location.assign(hunterReturnUrl(origin, deals));
+    return;
   }
   renderPanel(onVietnamShop, deals);
 }

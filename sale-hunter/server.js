@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -5,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { sortDeals } from "./src/deals.js";
 import { createRadar } from "./src/radar.js";
 import { loadShopee } from "./src/shopee.js";
-import { TIKTOK_SEARCH_URL, loadTikTok } from "./src/tiktok.js";
+import { TIKTOK_SEARCH_URL, acceptPhoneDeals, loadTikTok, preferPhoneCatalog } from "./src/tiktok.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -14,6 +15,8 @@ const pollMs = Number(process.env.POLL_MS) || 15_000;
 
 const radar = createRadar();
 const clients = new Set();
+const phoneKey = crypto.randomBytes(16).toString("hex");
+let phoneCatalog = null;
 let tiktok = {
   ok: false,
   deals: [],
@@ -32,10 +35,10 @@ let state = {
   scanned: 0,
   deepest: 0,
   shopeeDeals: [],
+  shopeeLow: [],
   shopeeShelf: [],
   deals: [],
   alerts: [],
-  tiktok,
 };
 
 function snapshot() {
@@ -54,6 +57,7 @@ function snapshot() {
       scanned: state.scanned,
       deepest: state.deepest,
       deals: state.shopeeDeals,
+      low: state.shopeeLow || [],
       shelf: state.shopeeShelf,
     },
     tiktok: {
@@ -63,10 +67,12 @@ function snapshot() {
       checkedAt: tiktok.checkedAt,
       scanned: tiktok.scanned || 0,
       deepest: tiktok.deepest || 0,
+      source: tiktok.source || "",
       count: tiktok.deals?.length || 0,
       deals: tiktok.deals || [],
       shelf: tiktok.shelf || [],
     },
+    phoneKey,
   };
 }
 
@@ -99,13 +105,14 @@ async function poll() {
       pollAgain = false;
       const [shopeeResult, tiktokResult] = await Promise.allSettled([loadShopee(), loadTikTok()]);
       if (tiktokResult.status === "fulfilled") {
-        tiktok = { ...tiktokResult.value, checkedAt: Date.now() };
+        tiktok = preferPhoneCatalog({ ...tiktokResult.value, checkedAt: Date.now() }, phoneCatalog);
       }
       if (shopeeResult.status === "fulfilled") {
         const shopee = shopeeResult.value;
         const shopeeDeals = sortDeals(shopee.deals || [], "discount");
+        const shopeeLow = shopee.low || [];
         const tiktokDeals = sortDeals(tiktok.deals || [], "discount");
-        const deals = [...shopeeDeals, ...tiktokDeals];
+        const deals = [...shopeeDeals, ...shopeeLow, ...tiktokDeals];
         const alerts = radar.take(deals);
         state = {
           ...state,
@@ -117,6 +124,7 @@ async function poll() {
           scanned: shopee.scanned || 0,
           deepest: shopee.deepest || 0,
           shopeeDeals,
+          shopeeLow,
           shopeeShelf: shopee.shelf || [],
           deals,
           alerts,
@@ -150,7 +158,38 @@ function readPublic(urlPath) {
   return file;
 }
 
-const server = http.createServer((req, res) => {
+function applyPhoneDeals(raw) {
+  const accepted = acceptPhoneDeals(raw);
+  if (!accepted.scanned) return accepted;
+  phoneCatalog = { ...accepted, checkedAt: Date.now() };
+  tiktok = phoneCatalog;
+  const tiktokDeals = sortDeals(tiktok.deals || [], "discount");
+  const deals = [...state.shopeeDeals, ...(state.shopeeLow || []), ...tiktokDeals];
+  const alerts = radar.take(deals);
+  state = { ...state, ready: true, updatedAt: Date.now(), deals, alerts };
+  publish(alerts);
+  return accepted;
+}
+
+function readBody(req, limit = 100_000) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(new Error("payload"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   if (url.pathname === "/api/state") {
     res.writeHead(200, {
@@ -171,13 +210,29 @@ const server = http.createServer((req, res) => {
     req.on("close", () => clients.delete(res));
     return;
   }
+  if (url.pathname === "/api/phone-deals" && req.method === "POST") {
+    if (req.headers["x-sale-key"] !== phoneKey) {
+      res.writeHead(403, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+      res.end('{"ok":false}');
+      return;
+    }
+    try {
+      const accepted = applyPhoneDeals(await readBody(req));
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ ok: accepted.ok, scanned: accepted.scanned }));
+    } catch {
+      res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+      res.end('{"ok":false}');
+    }
+    return;
+  }
   if (url.pathname === "/phone-scan.js") {
     const source = fs.readFileSync(path.join(root, "src/page-deals.js"), "utf8").replace(/^export /gm, "");
     res.writeHead(200, {
       "Content-Type": "text/javascript; charset=utf-8",
       "Cache-Control": "no-store",
     });
-    res.end(`${source}\nstartPhoneScan();\n`);
+    res.end(source);
     return;
   }
   const file = readPublic(url.pathname);

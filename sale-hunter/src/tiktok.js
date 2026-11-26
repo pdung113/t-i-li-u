@@ -166,7 +166,7 @@ export async function loadTikTok() {
       ? `TikTok Shop Việt Nam · ${deals.length} deal`
       : scanned
         ? `TikTok Shop Việt Nam · đã xem ${scanned} món, chưa có món từ 1.200đ trở xuống, -90%, -70% hay giảm sâu từ 50%.${depth}`
-        : "Cùng link hàng 1 đ trên điện thoại có deal. Máy chủ này nhận 0 sản phẩm từ TikTok.",
+        : "TikTok không gửi sản phẩm cho máy chủ này. Mở hàng 1 đ trên điện thoại rồi bấm dấu trang Săn sale.",
     openUrl: SEARCH_URL,
   };
 }
@@ -250,6 +250,105 @@ async function postProductList(word) {
   const text = await response.text();
   if (/captcha|Security Check/i.test(text)) return { code: 10000 };
   return JSON.parse(text);
+}
+
+export function acceptPhoneDeals(raw) {
+  const list = unpackPhone(raw);
+  const found = [];
+  const seen = new Set();
+  for (const item of list.slice(0, 40)) {
+    const deal = phoneDeal(item);
+    if (!deal || seen.has(deal.id)) continue;
+    seen.add(deal.id);
+    found.push(deal);
+  }
+  const deals = found.filter((deal) => isHuntDeal(deal) || isDeepSale(deal));
+  const deepest = found.reduce((max, deal) => Math.max(max, deal.discount || 0), 0);
+  return {
+    ok: found.length > 0,
+    deals,
+    shelf: shelfDeals(found),
+    scanned: found.length,
+    deepest,
+    source: "phone",
+    message: found.length
+      ? `TikTok Shop Việt Nam · ${found.length} món từ trang trên điện thoại`
+      : "Trang TikTok chưa gửi được món nào về bảng.",
+    openUrl: SEARCH_URL,
+  };
+}
+
+export function preferPhoneCatalog(serverResult, phoneResult, now = Date.now()) {
+  const serverHas = (serverResult?.scanned || 0) > 0 || (serverResult?.deals || []).length > 0 || (serverResult?.shelf || []).length > 0;
+  const fresh = phoneResult && now - (phoneResult.checkedAt || 0) < 30 * 60 * 1000 && (phoneResult.scanned || 0) > 0;
+  if (serverHas || !fresh) return serverResult;
+  return { ...phoneResult, ok: true };
+}
+
+function unpackPhone(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  try {
+    const pad = raw.trim().replace(/-/g, "+").replace(/_/g, "/");
+    const parsed = JSON.parse(Buffer.from(pad, "base64").toString("utf8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function phoneDeal(item) {
+  const row = Array.isArray(item)
+    ? { name: item[0], priceVnd: item[1], wasVnd: item[2], discount: item[3], url: item[4] }
+    : item;
+  if (!row || typeof row !== "object") return null;
+  const name = String(row.name || "").replace(/\s+/g, " ").trim().slice(0, 180);
+  const url = vietnamShopUrl(row.url);
+  const itemId = String(url.match(/(\d+)(?!.*\d)/)?.[1] || "");
+  const priceVnd = Math.round(Number(row.priceVnd) || 0);
+  if (!name || !url || !itemId || priceVnd <= 0 || priceVnd > 500_000_000) return null;
+  const wasVnd = Math.round(Number(row.wasVnd) || 0);
+  const fromPrice = wasVnd > priceVnd ? Math.round((1 - priceVnd / wasVnd) * 100) : 0;
+  const discount = Math.max(0, Math.min(99, Math.round(Number(row.discount) || fromPrice || 0)));
+  return {
+    id: `tiktok:${itemId}`,
+    platform: "tiktok",
+    shopId: "",
+    itemId,
+    name,
+    priceVnd,
+    wasVnd: wasVnd > priceVnd ? wasVnd : 0,
+    saveVnd: wasVnd > priceVnd ? wasVnd - priceVnd : 0,
+    discount,
+    stock: 0,
+    stockTotal: 0,
+    sold: 0,
+    soldOut: false,
+    oneDong: isOneDong(priceVnd),
+    deep: discount >= 90,
+    image: "",
+    url,
+    rating: 0,
+    soldCount: 0,
+    official: false,
+    sessionId: null,
+    sessionLabel: "TikTok Shop Việt Nam",
+    sessionEnd: 0,
+    sessionOngoing: true,
+    priceText: formatVnd(priceVnd),
+    wasText: wasVnd > priceVnd ? formatVnd(wasVnd) : "",
+    saveText: wasVnd > priceVnd ? formatVnd(wasVnd - priceVnd) : "",
+  };
+}
+
+function vietnamShopUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    if (parsed.protocol !== "https:" || parsed.hostname !== "shop.tiktok.com" || !parsed.pathname.startsWith("/vn/")) return "";
+    return parsed.href;
+  } catch {
+    return "";
+  }
 }
 
 export const TIKTOK_SEARCH_URL = SEARCH_URL;

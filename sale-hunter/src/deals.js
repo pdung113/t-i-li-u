@@ -84,11 +84,24 @@ function clock(sec) {
   }).format(new Date(sec * 1000));
 }
 
+export function isLowStock(deal) {
+  if (!deal || deal.soldOut || deal.platform === "tiktok") return false;
+  const total = Number(deal.stockTotal) || 0;
+  const left = Number(deal.stock) || 0;
+  return total > 0 && left > 0 && left / total <= 0.3;
+}
+
+export function lowStockDeals(deals) {
+  return [...(deals || [])]
+    .filter((deal) => isLowStock(deal) && !deal.oneDong && deal.discount < 90)
+    .sort((a, b) => a.stock / a.stockTotal - b.stock / b.stockTotal || a.stock - b.stock || String(a.itemId).localeCompare(String(b.itemId)));
+}
+
 export function huntTier(deal) {
   if (!deal) return "";
   if (deal.oneDong) return "1d";
   if (deal.discount >= 90) return "90";
-  if (deal.discount >= 70) return "70";
+  if (deal.platform !== "shopee" && deal.discount >= 70) return "70";
   return "";
 }
 
@@ -102,7 +115,7 @@ export function isDeepSale(deal) {
 
 export function shelfDeals(deals, limit = 16) {
   return [...(deals || [])]
-    .filter((deal) => deal && !isHuntDeal(deal) && !isDeepSale(deal) && deal.priceVnd > 0 && !deal.soldOut)
+    .filter((deal) => deal && !isHuntDeal(deal) && !isDeepSale(deal) && !isLowStock(deal) && deal.priceVnd > 0 && !deal.soldOut)
     .sort((a, b) => (b.saveVnd || 0) - (a.saveVnd || 0) || b.discount - a.discount)
     .slice(0, limit);
 }
