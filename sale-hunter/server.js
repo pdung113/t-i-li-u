@@ -110,7 +110,11 @@ async function poll() {
       pollAgain = false;
       const [shopeeResult, tiktokResult] = await Promise.allSettled([loadShopee(), loadTikTok()]);
       if (tiktokResult.status === "fulfilled") {
-        tiktok = preferPhoneCatalog({ ...tiktokResult.value, checkedAt: Date.now() }, phoneCatalog);
+        const next = preferPhoneCatalog({ ...tiktokResult.value, checkedAt: Date.now() }, phoneCatalog);
+        if (next.region !== tiktok.region || (next.scanned || 0) !== (tiktok.scanned || 0)) {
+          console.log(`TikTok: vùng ${next.region || "không rõ"} · ${next.scanned || 0} món`);
+        }
+        tiktok = next;
       }
       if (shopeeResult.status === "fulfilled") {
         const shopee = shopeeResult.value;

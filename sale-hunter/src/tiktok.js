@@ -146,7 +146,7 @@ export function catalogMessage({ region = "", scanned = 0, deals = 0, deepest = 
     const where = region ? ` Máy này đang bị gắn vùng ${region}.` : "";
     return `TikTok chỉ gửi giá 1đ, 1k và deal giảm sâu cho máy đang ở Việt Nam.${where} Trên máy đó chạy npm run sale rồi mở http://127.0.0.1:8787.`;
   }
-  return "TikTok không gửi sản phẩm cho máy này. Chạy lại npm run sale trên máy Việt Nam.";
+  return "TikTok chưa trả sản phẩm ở lượt này. Bảng vẫn quét lại mỗi 15 giây.";
 }
 
 export async function loadTikTok() {

@@ -129,7 +129,11 @@ function visibleLow(deals) {
 
 function visibleShelf(deals) {
   const q = els.q.value.trim().toLowerCase();
-  const list = (deals || []).filter((deal) => allowed(deal) && !tierOf(deal) && !stockLow(deal) && deal.discount < 50 && !(deal.priceVnd > 0 && deal.priceVnd <= 50_000) && deal.priceVnd > 0 && !deal.soldOut && (!q || deal.name.toLowerCase().includes(q)));
+  const list = (deals || []).filter((deal) => {
+    if (!allowed(deal) || tierOf(deal) || stockLow(deal) || !(deal.priceVnd > 0) || deal.soldOut) return false;
+    if (deal.platform !== "tiktok" && (deal.discount >= 50 || deal.priceVnd <= 50_000)) return false;
+    return !q || deal.name.toLowerCase().includes(q);
+  });
   list.sort((a, b) => (b.saveVnd || 0) - (a.saveVnd || 0) || b.discount - a.discount);
   return ui.sort ? sortDeals(list) : list;
 }
