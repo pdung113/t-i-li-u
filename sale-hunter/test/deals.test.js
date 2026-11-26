@@ -163,8 +163,8 @@ test("TikTok ngoài Việt Nam không bịa giá sale", () => {
   assert.equal(shopFromRouter(page), "VN");
   const message = catalogMessage({ region: "US-TTP", shop: "VN", scanned: 0, deals: 0 });
   assert.match(message, /0 món/);
-  assert.match(message, /VN/);
-  assert.doesNotMatch(message, /npm run sale/);
+  assert.match(message, /Việt Nam/);
+  assert.doesNotMatch(message, /US|npm run sale/);
 });
 
 test("TikTok captcha không bị nhận thành deal", () => {
@@ -461,7 +461,7 @@ test("TikTok edge US-TTP vẫn hiện đủ món và giữ sau lượt rỗng", 
   const original = globalThis.fetch;
   globalThis.fetch = async (url, options = {}) => {
     assert.match(options.headers.Cookie, /store-country-code=vn/);
-    assert.match(options.headers.Cookie, /tt-target-idc=sg1/);
+    assert.match(options.headers.Cookie, /tt-target-idc=(sg1|my|alisg)/);
     assert.equal(options.headers["x-tt-store-region"], "vn");
     const target = String(url);
     if (target.includes("product_list")) {
@@ -485,7 +485,7 @@ test("TikTok edge US-TTP vẫn hiện đủ món và giữ sau lượt rỗng", 
     const live = await loadTikTok();
     assert.equal(live.region, "US-TTP");
     assert.equal(live.shop, "VN");
-    assert.deepEqual(words, ["hàng 1 đ", "1.000đ", "1k", "giảm 70%", "flash sale"]);
+    assert.deepEqual([...new Set(words)], ["hàng 1 đ", "1.000đ", "1k", "giảm 70%", "flash sale"]);
     assert.equal(live.scanned, 9);
     const shown = [...live.deals, ...live.shelf];
     assert.equal(shown.length, 9);

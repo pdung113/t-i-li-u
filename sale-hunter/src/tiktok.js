@@ -3,6 +3,8 @@ import { formatVnd, isOneDong } from "./money.js";
 
 const SEARCH_URL = "https://shop.tiktok.com/vn/s?q=h%C3%A0ng%201%20%C4%91";
 const WORDS = ["hàng 1 đ", "1.000đ", "1k", "giảm 70%", "flash sale"];
+const CLUSTERS = ["sg1", "my", "alisg"];
+let cluster = CLUSTERS[0];
 
 function blocked(message) {
   return {
@@ -294,9 +296,7 @@ export function catalogMessage({ region = "", shop = "", scanned = 0, deals = 0,
     const depth = deepest ? ` Sâu nhất đã thấy -${deepest}%.` : "";
     return `TikTok Shop Việt Nam · đã xem ${scanned} món, chưa có món từ 1.200đ trở xuống, -90%, -70% hay giảm sâu từ 50%.${depth}`;
   }
-  const where = shop ? ` Shop ${shop}.` : "";
-  const edge = region ? ` Edge ${region}.` : "";
-  return `TikTok lượt này trả 0 món.${where}${edge} Bảng vẫn quét mỗi 15 giây.`;
+  return "TikTok Shop Việt Nam. Lượt này trả 0 món. Bảng vẫn quét mỗi 15 giây.";
 }
 
 export async function loadTikTok() {
@@ -318,9 +318,6 @@ export async function loadTikTok() {
       apiStatus = apiStatus || body.apiStatus || 0;
       received += body.products?.length || 0;
       const parsed = parseTikTokPayload(body);
-      if (!parsed.ok && body?.code === 10000 && found.length === 0 && word === WORDS[0]) {
-        return { ...parsed, scanned, deepest, region, shop, received, pageStatus, apiStatus, shelf: [] };
-      }
       if (!parsed.ok) continue;
       for (const deal of parsed.deals) {
         if (seen.has(deal.id) || !deal.url.startsWith("https://shop.tiktok.com/vn/")) continue;
@@ -428,11 +425,11 @@ function isProductRecord(item) {
   return Boolean(raw.product_id && (raw.title || raw.product_price_info?.sale_price_decimal));
 }
 
-function shopHeaders(word) {
+function shopHeaders(word, idc = cluster) {
   return {
     Accept: "text/html,application/json",
     "Accept-Language": "vi-VN,vi;q=0.9",
-    Cookie: "store-country-code=vn; store-country-src=uid; tt-target-idc=sg1",
+    Cookie: `store-country-code=vn; store-country-src=uid; tt-target-idc=${idc}`,
     "x-tt-store-region": "vn",
     Origin: "https://shop.tiktok.com",
     Referer: `https://shop.tiktok.com/vn/s?q=${encodeURIComponent(word)}`,
@@ -442,6 +439,20 @@ function shopHeaders(word) {
 }
 
 async function postProductList(word) {
+  const order = [cluster, ...CLUSTERS.filter((idc) => idc !== cluster)];
+  let last = { products: [], status: 0, code: 0 };
+  for (const idc of order) {
+    const result = await postProductListOn(word, idc);
+    last = result;
+    if (result.products.length) {
+      cluster = idc;
+      return result;
+    }
+  }
+  return last;
+}
+
+async function postProductListOn(word, idc) {
   const products = [];
   let offset = 0;
   let pageToken = "";
@@ -449,7 +460,7 @@ async function postProductList(word) {
   for (let page = 0; page < 3; page += 1) {
     const response = await fetch("https://shop.tiktok.com/api/shop/brandy_desktop/s/product_list?region=VN&locale=vi-VN", {
       method: "POST",
-      headers: { ...shopHeaders(word), Accept: "application/json", "Content-Type": "application/json" },
+      headers: { ...shopHeaders(word, idc), Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({
         component_info: JSON.stringify({
           component_type: "feed_list",
