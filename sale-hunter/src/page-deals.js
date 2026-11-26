@@ -168,7 +168,7 @@ function renderPanel(onVietnamShop, deals) {
   panel.id = "sale-phone-panel";
   panel.style.cssText = "position:fixed;inset:auto 8px 8px 8px;max-height:70vh;overflow:auto;z-index:2147483646;background:#1c140f;color:#fff8ee;border-radius:16px;padding:12px;font:14px/1.4 sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.45)";
   const title = document.createElement("strong");
-  title.textContent = "Săn sale";
+  title.textContent = "Săn giảm giá";
   const close = document.createElement("button");
   close.type = "button";
   close.textContent = "Đóng";
@@ -177,7 +177,7 @@ function renderPanel(onVietnamShop, deals) {
   panel.append(title, close);
   const note = document.createElement("p");
   if (!onVietnamShop) {
-    note.textContent = "Mở TikTok Shop Việt Nam trên điện thoại, tìm hàng 1 đ, rồi bấm lại dấu trang Săn sale.";
+    note.textContent = "Mở TikTok Shop Việt Nam trên điện thoại, tìm hàng 1 đ, rồi bấm lại dấu trang Săn giảm giá.";
     panel.append(note);
     const open = document.createElement("a");
     open.href = "https://shop.tiktok.com/vn/s?q=h%C3%A0ng%201%20%C4%91";

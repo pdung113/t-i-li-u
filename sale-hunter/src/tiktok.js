@@ -77,10 +77,10 @@ export function asTikTokProduct(raw) {
 export function parseTikTokPayload(body) {
   if (!body || typeof body !== "object") return blocked("TikTok không trả danh sách sản phẩm.");
   if (body.code === 10000 || body.error === 10000) {
-    return blocked("TikTok Shop đang chặn máy chủ bằng captcha, chưa đọc được deal từ 1.200đ trở xuống.");
+    return blocked("TikTok Shop đang chặn máy chủ bằng mã xác minh, chưa đọc được món từ 1.200đ trở xuống.");
   }
   const list = productList(body);
-  if (!Array.isArray(list)) return blocked("TikTok Shop chưa trả deal nào cho máy chủ này.");
+  if (!Array.isArray(list)) return blocked("TikTok Shop chưa trả món nào cho máy chủ này.");
   const deals = [];
   for (const item of list) {
     const raw = asTikTokProduct(item);
@@ -287,13 +287,13 @@ export function regionFromText(text) {
 }
 
 export function catalogMessage({ region = "", shop = "", scanned = 0, deals = 0, deepest = 0 } = {}) {
-  if (deals > 0) return `TikTok Shop Việt Nam · ${deals} deal`;
+  if (deals > 0) return `TikTok Shop Việt Nam · ${deals} món`;
   if (scanned > 0) {
     const depth = deepest ? ` Sâu nhất đã thấy -${deepest}%.` : "";
     return `TikTok Shop Việt Nam · đã xem ${scanned} món, chưa có món từ 1.200đ trở xuống, -90%, -70% hay giảm sâu từ 50%.${depth}`;
   }
-  const where = shop ? ` Shop ${shop}.` : "";
-  const edge = region ? ` Edge ${region}.` : "";
+  const where = shop ? ` Gian hàng ${shop}.` : "";
+  const edge = region ? ` Cụm ${region}.` : "";
   return `TikTok lượt này trả 0 món.${where}${edge} Bảng vẫn quét mỗi 15 giây.`;
 }
 

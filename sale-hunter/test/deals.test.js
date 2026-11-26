@@ -551,7 +551,8 @@ test("TikTok edge US-TTP vẫn hiện đủ món và giữ sau lượt rỗng", 
     const shown = [...live.deals, ...live.shelf];
     assert.equal(shown.length, 8);
     assert.equal(shown.some((deal) => deal.name === "Món chưa có giá"), false);
-    assert.match(live.message, /8 deal/);
+    assert.match(live.message, /8 món/);
+    assert.doesNotMatch(live.message, /deal|Edge/);
     assert.doesNotMatch(live.message, /npm run sale/);
     const byName = new Map(shown.map((deal) => [deal.name, deal]));
     assert.equal(byName.get("Túi 626").priceVnd, 626);
