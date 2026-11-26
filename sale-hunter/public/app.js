@@ -185,7 +185,10 @@ function renderGrid() {
   } else if (hits.length) {
     els.hunt.textContent = `${hits.length} deal đúng mốc. Cột Sâu nhất là deal chưa tới 70%. Bấm Mua ngay.`;
   } else if (shown) {
-    els.hunt.textContent = "Chưa có deal từ 1.000đ trở xuống, -90% hay -70%. Cột Sâu nhất đang có deal để mua, bấm Mua ngay.";
+    const tiktokEmpty = snapshot?.tiktok?.ok && !(snapshot.tiktok.scanned > 0);
+    els.hunt.textContent = tiktokEmpty
+      ? "Shopee chưa có món 1.000đ hay giảm từ 70%. TikTok web trả danh sách rỗng, nên deal 1.000đ trên app chưa hiện ở đây."
+      : "Chưa có deal từ 1.000đ trở xuống, -90% hay -70%. Cột Sâu nhất đang có deal để mua, bấm Mua ngay.";
   } else {
     els.hunt.textContent = "Chưa đọc được deal nào. Vẫn quét liên tục.";
   }

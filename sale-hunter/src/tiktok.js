@@ -158,7 +158,9 @@ export async function loadTikTok() {
     deepest,
     message: deals.length
       ? `TikTok Shop Việt Nam · ${deals.length} deal`
-      : `TikTok Shop Việt Nam · chưa có 1.000đ, -90% hay -70%.${depth}`,
+      : scanned
+        ? `TikTok Shop Việt Nam · đã xem ${scanned} món, chưa có 1.000đ, -90% hay -70%.${depth}`
+        : "TikTok Shop web trả lời thành công nhưng danh sách sản phẩm rỗng. App điện thoại thấy deal 1.000đ, web từ máy này không gửi sản phẩm về.",
     openUrl: SEARCH_URL,
   };
 }
