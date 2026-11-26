@@ -3,7 +3,7 @@ import test from "node:test";
 import { cheapDeals, halfOffDeals, huntTier, isDeepSale, isHuntDeal, isLowStock, lowStockDeals, matchFilter, normalizeShopeeItem, shelfDeals, sortDeals } from "../src/deals.js";
 import { discountPercent, formatVnd, isOneDong, shopeeUrl, vndFromMicro } from "../src/money.js";
 import { createRadar } from "../src/radar.js";
-import { acceptPhoneDeals, catalogMessage, collectProducts, keepTikTokCatalog, parseTikTokPayload, preferPhoneCatalog, regionFromRouter } from "../src/tiktok.js";
+import { acceptPhoneDeals, catalogMessage, collectProducts, keepTikTokCatalog, parseTikTokPayload, preferPhoneCatalog, regionFromRouter, shopFromRouter } from "../src/tiktok.js";
 import { dealsFromCardTexts, dealsFromRouter, hunterReturnUrl, tierOfPrice } from "../src/page-deals.js";
 
 const session = { id: 1, label: "09:00–12:00", end: 1_700_000_000, ongoing: true };
@@ -158,14 +158,13 @@ test("lượt TikTok rỗng không xóa món vừa đọc", () => {
 });
 
 test("TikTok ngoài Việt Nam không bịa giá sale", () => {
-  const region = regionFromRouter({
-    loaderData: { "(region)/(route_page_name)/page": { region_info: { current_v_region: "US-TTP" } } },
-  });
-  assert.equal(region, "US-TTP");
-  const message = catalogMessage({ region, scanned: 0, deals: 0 });
-  assert.match(message, /npm run sale/);
-  assert.match(message, /127\.0\.0\.1:8787/);
-  assert.doesNotMatch(message, /\d+\.\d+đ/);
+  const page = { loaderData: { "(region)/(route_page_name)/page": { region_info: { current_v_region: "US-TTP", real_region: "VN" } } } };
+  assert.equal(regionFromRouter(page), "US-TTP");
+  assert.equal(shopFromRouter(page), "VN");
+  const message = catalogMessage({ region: "US-TTP", shop: "VN", scanned: 0, deals: 0 });
+  assert.match(message, /0 món/);
+  assert.match(message, /VN/);
+  assert.doesNotMatch(message, /npm run sale/);
 });
 
 test("TikTok captcha không bị nhận thành deal", () => {

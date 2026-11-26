@@ -190,21 +190,24 @@ export function regionFromRouter(data) {
   return String(page?.region_info?.current_v_region || "");
 }
 
+export function shopFromRouter(data) {
+  const info = data?.loaderData?.["(region)/(route_page_name)/page"]?.region_info || {};
+  return String(info.real_region || info.path_region || "");
+}
+
 export function regionFromText(text) {
   return String(text || "").match(/"current_v_region":"([^"]+)"/)?.[1] || "";
 }
 
-export function catalogMessage({ region = "", scanned = 0, deals = 0, deepest = 0 } = {}) {
+export function catalogMessage({ region = "", shop = "", scanned = 0, deals = 0, deepest = 0 } = {}) {
   if (deals > 0) return `TikTok Shop Việt Nam · ${deals} deal`;
   if (scanned > 0) {
     const depth = deepest ? ` Sâu nhất đã thấy -${deepest}%.` : "";
     return `TikTok Shop Việt Nam · đã xem ${scanned} món, chưa có món từ 1.200đ trở xuống, -90%, -70% hay giảm sâu từ 50%.${depth}`;
   }
-  if (!region || /US|TTP/i.test(region)) {
-    const where = region ? ` Máy này đang bị gắn vùng ${region}.` : "";
-    return `TikTok chỉ gửi giá 1đ, 1k và deal giảm sâu cho máy đang ở Việt Nam.${where} Trên máy đó chạy npm run sale rồi mở http://127.0.0.1:8787.`;
-  }
-  return "TikTok chưa trả sản phẩm ở lượt này. Bảng vẫn quét lại mỗi 15 giây.";
+  const where = shop ? ` Shop ${shop}.` : "";
+  const edge = region ? ` Edge ${region}.` : "";
+  return `TikTok lượt này trả 0 món.${where}${edge} Bảng vẫn quét mỗi 15 giây.`;
 }
 
 export async function loadTikTok() {
@@ -213,6 +216,7 @@ export async function loadTikTok() {
   let scanned = 0;
   let deepest = 0;
   let region = "";
+  let shop = "";
   let received = 0;
   let pageStatus = 0;
   let apiStatus = 0;
@@ -220,15 +224,13 @@ export async function loadTikTok() {
     for (const word of WORDS) {
       const body = await searchVietnam(word);
       region = region || body.region || "";
+      shop = shop || body.shop || "";
       pageStatus = pageStatus || body.pageStatus || 0;
       apiStatus = apiStatus || body.apiStatus || 0;
       received += body.products?.length || 0;
       const parsed = parseTikTokPayload(body);
       if (!parsed.ok && body?.code === 10000 && found.length === 0 && word === WORDS[0]) {
-        return { ...parsed, scanned, deepest, region, received, pageStatus, apiStatus, shelf: [] };
-      }
-      if (!scanned && found.length === 0 && /US|TTP/i.test(region) && (body.products || []).length === 0) {
-        break;
+        return { ...parsed, scanned, deepest, region, shop, received, pageStatus, apiStatus, shelf: [] };
       }
       if (!parsed.ok) continue;
       for (const deal of parsed.deals) {
@@ -240,7 +242,7 @@ export async function loadTikTok() {
       }
     }
   } catch {
-    return { ...blocked("Không kết nối được TikTok Shop Việt Nam lúc này."), scanned, deepest, region, received, pageStatus, apiStatus, shelf: [] };
+    return { ...blocked("Không kết nối được TikTok Shop Việt Nam lúc này."), scanned, deepest, region, shop, received, pageStatus, apiStatus, shelf: [] };
   }
   const deals = found.filter((deal) => isHuntDeal(deal) || isDeepSale(deal));
   return {
@@ -250,10 +252,11 @@ export async function loadTikTok() {
     scanned,
     deepest,
     region,
+    shop,
     received,
     pageStatus,
     apiStatus,
-    message: catalogMessage({ region, scanned, deals: deals.length, deepest }),
+    message: catalogMessage({ region, shop, scanned, deals: deals.length, deepest }),
     openUrl: SEARCH_URL,
   };
 }
@@ -265,11 +268,12 @@ async function searchVietnam(word) {
   ]);
   const postedList = productList(posted);
   if (posted?.code === 10000 && page.products.length === 0) {
-    return { products: [], region: page.region || "", pageStatus: page.status || 0, apiStatus: posted.status || 0, code: 10000 };
+    return { products: [], region: page.region || "", shop: page.shop || "", pageStatus: page.status || 0, apiStatus: posted.status || 0, code: 10000 };
   }
   return {
     products: [...page.products, ...postedList],
     region: page.region || "",
+    shop: page.shop || "",
     pageStatus: page.status || 0,
     apiStatus: posted.status || 0,
     code: posted.code,
@@ -280,17 +284,22 @@ async function readSearchPage(word) {
   const response = await fetchShop(`https://shop.tiktok.com/vn/s?q=${encodeURIComponent(word)}`, {
     headers: shopHeaders(word),
   });
-  if (!response) return { products: [], region: "", status: 0 };
+  if (!response) return { products: [], region: "", shop: "", status: 0 };
   const text = await response.text();
   const match = text.match(/<script[^>]*id="__MODERN_ROUTER_DATA__"[^>]*>(.*?)<\/script>/s);
-  if (!match) return { products: [], region: regionFromText(text), status: response.status };
+  if (!match) return { products: [], region: regionFromText(text), shop: "", status: response.status };
   let data = {};
   try {
     data = JSON.parse(match[1]);
   } catch {
-    return { products: [], region: regionFromText(text), status: response.status };
+    return { products: [], region: regionFromText(text), shop: "", status: response.status };
   }
-  return { products: collectProducts(data), region: regionFromRouter(data) || regionFromText(text), status: response.status };
+  return {
+    products: collectProducts(data),
+    region: regionFromRouter(data) || regionFromText(text),
+    shop: shopFromRouter(data),
+    status: response.status,
+  };
 }
 
 async function fetchShop(url, options) {

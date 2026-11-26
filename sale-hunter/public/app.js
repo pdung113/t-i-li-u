@@ -227,7 +227,7 @@ function renderGrid() {
   const tiktokLive = (snapshot?.tiktok?.scanned || 0) > 0 || tiktok.length > 0 || tiktokShelf.length > 0;
   document.querySelector("#tiktok-board")?.classList.toggle("has-deals", tiktokLive);
   const gapText = document.querySelector("#tiktok-gap-text");
-  if (gapText && snapshot?.tiktok?.message && !tiktokLive) gapText.textContent = snapshot.tiktok.message;
+  if (gapText && !tiktokLive) gapText.textContent = "";
   const shown = cheap.length + half.length + shopeeLow.length + shopeeShelf.length + tiktok.filter((deal) => !deal.soldOut).length + tiktokShelf.length;
   els.hunt.className = "hunt" + (shown ? " hit" : "");
   if (!snapshot?.ready) {
