@@ -410,6 +410,13 @@ export function acceptPhoneDeals(raw) {
   };
 }
 
+export function keepTikTokCatalog(previous, next, now = Date.now()) {
+  const has = (value) => (value?.scanned || 0) > 0 || (value?.deals || []).length > 0 || (value?.shelf || []).length > 0;
+  if (has(next)) return next;
+  if (has(previous) && now - (previous.checkedAt || 0) < 10 * 60 * 1000) return previous;
+  return next;
+}
+
 export function preferPhoneCatalog(serverResult, phoneResult, now = Date.now()) {
   const serverHas = (serverResult?.scanned || 0) > 0 || (serverResult?.deals || []).length > 0 || (serverResult?.shelf || []).length > 0;
   const fresh = phoneResult && now - (phoneResult.checkedAt || 0) < 30 * 60 * 1000 && (phoneResult.scanned || 0) > 0;

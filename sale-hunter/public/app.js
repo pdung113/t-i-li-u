@@ -233,7 +233,8 @@ function renderGrid() {
   if (!snapshot?.ready) {
     els.hunt.textContent = "Đang quét flash sale Shopee. Cột trống sẽ ẩn. TikTok chỉ hiện khi có deal đọc từ trang shop.";
   } else if (shown) {
-    els.hunt.textContent = `${cheap.length} món dưới 50.000đ, ${half.length} món giảm từ 50%. Cột trống đã ẩn. Bấm Mua ngay.`;
+    const tiktokShown = tiktok.filter((deal) => !deal.soldOut).length + tiktokShelf.length;
+    els.hunt.textContent = `TikTok ${tiktokShown} món. Shopee ${cheap.length} dưới 50.000đ, ${half.length} từ 50%. Bấm Mua ngay.`;
   } else {
     els.hunt.textContent = "Chưa đọc được deal nào. Vẫn quét liên tục.";
   }

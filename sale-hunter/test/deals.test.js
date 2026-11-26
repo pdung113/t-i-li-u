@@ -3,7 +3,7 @@ import test from "node:test";
 import { cheapDeals, halfOffDeals, huntTier, isDeepSale, isHuntDeal, isLowStock, lowStockDeals, matchFilter, normalizeShopeeItem, shelfDeals, sortDeals } from "../src/deals.js";
 import { discountPercent, formatVnd, isOneDong, shopeeUrl, vndFromMicro } from "../src/money.js";
 import { createRadar } from "../src/radar.js";
-import { acceptPhoneDeals, catalogMessage, collectProducts, parseTikTokPayload, preferPhoneCatalog, regionFromRouter } from "../src/tiktok.js";
+import { acceptPhoneDeals, catalogMessage, collectProducts, keepTikTokCatalog, parseTikTokPayload, preferPhoneCatalog, regionFromRouter } from "../src/tiktok.js";
 import { dealsFromCardTexts, dealsFromRouter, hunterReturnUrl, tierOfPrice } from "../src/page-deals.js";
 
 const session = { id: 1, label: "09:00–12:00", end: 1_700_000_000, ongoing: true };
@@ -147,6 +147,14 @@ test("vòng đầu không kêu, vòng sau chỉ kêu khi chạm 1đ hoặc 90%",
   assert.equal(again[1].isNew, true);
   const quiet = radar.take(again, 3_000);
   assert.deepEqual(quiet, []);
+});
+
+test("lượt TikTok rỗng không xóa món vừa đọc", () => {
+  const previous = { scanned: 8, deals: [{ id: "tiktok:1" }], shelf: [], checkedAt: 1_000, region: "" };
+  const empty = { scanned: 0, deals: [], shelf: [], checkedAt: 2_000, region: "" };
+  assert.equal(keepTikTokCatalog(previous, empty, 2_000).scanned, 8);
+  assert.equal(keepTikTokCatalog(empty, previous, 2_000).scanned, 8);
+  assert.equal(keepTikTokCatalog(previous, empty, 1_000 + 11 * 60 * 1000).scanned, 0);
 });
 
 test("TikTok ngoài Việt Nam không bịa giá sale", () => {

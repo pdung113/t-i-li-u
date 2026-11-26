@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { sortDeals } from "./src/deals.js";
 import { createRadar } from "./src/radar.js";
 import { loadShopee } from "./src/shopee.js";
-import { TIKTOK_SEARCH_URL, acceptPhoneDeals, loadTikTok, preferPhoneCatalog } from "./src/tiktok.js";
+import { TIKTOK_SEARCH_URL, acceptPhoneDeals, keepTikTokCatalog, loadTikTok, preferPhoneCatalog } from "./src/tiktok.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -110,9 +110,14 @@ async function poll() {
       pollAgain = false;
       const [shopeeResult, tiktokResult] = await Promise.allSettled([loadShopee(), loadTikTok()]);
       if (tiktokResult.status === "fulfilled") {
-        const next = preferPhoneCatalog({ ...tiktokResult.value, checkedAt: Date.now() }, phoneCatalog);
-        if (next.region !== tiktok.region || (next.scanned || 0) !== (tiktok.scanned || 0) || (next.received || 0) !== (tiktok.received || 0)) {
-          console.log(`TikTok: vùng ${next.region || "không rõ"} · trang ${next.pageStatus || 0} · API ${next.apiStatus || 0} · nhận ${next.received || 0} · đọc ${next.scanned || 0}`);
+        const fetched = { ...tiktokResult.value, checkedAt: Date.now() };
+        const kept = keepTikTokCatalog(tiktok, fetched);
+        const next = preferPhoneCatalog(kept, phoneCatalog);
+        if ((fetched.scanned || 0) === 0 && (kept.scanned || 0) > 0) {
+          console.log(`TikTok: lượt này nhận 0, giữ ${kept.scanned} món vừa đọc`);
+        } else if (next.region !== tiktok.region || (next.scanned || 0) !== (tiktok.scanned || 0) || (next.received || 0) !== (tiktok.received || 0)) {
+          const shown = (next.deals || []).length + (next.shelf || []).length;
+          console.log(`TikTok: vùng ${next.region || "không rõ"} · trang ${next.pageStatus || 0} · API ${next.apiStatus || 0} · nhận ${next.received || 0} · đọc ${next.scanned || 0} · hiện ${shown}`);
         }
         tiktok = next;
       }
